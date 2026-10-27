@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Precision, Recall and Calibration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* Lesson-specific chart classes, all drawn from theme tokens */
+  .a-tn { fill: var(--neutral-soft); }
+  .a-fp { fill: var(--warn); fill-opacity: .32; }
+  .a-fn { fill: var(--bad); fill-opacity: .32; }
+  .a-tp { fill: var(--ok); fill-opacity: .38; }
+  .ln-legit { stroke: var(--neutral); stroke-width: 1.6; fill: none; }
+  .ln-fraud { stroke: var(--bad); stroke-width: 1.8; fill: none; }
+  .ln-thr { stroke: var(--ink); stroke-width: 1.6; }
+  .handle { fill: var(--ink); cursor: ew-resize; }
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .ln-curve { stroke: var(--accent); stroke-width: 2.2; fill: none; }
+  .ln-base { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+  .dot-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .ln-miss { stroke: var(--bad); stroke-width: 1.6; fill: none; }
+  .ln-review { stroke: var(--warn); stroke-width: 1.6; fill: none; }
+  .ln-fric { stroke: var(--neutral); stroke-width: 1.6; fill: none; }
+  .ln-total { stroke: var(--ink); stroke-width: 2.6; fill: none; }
+  .over-cap { fill: var(--bad); fill-opacity: .08; }
+  .dot-opt { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .dot-feas { fill: var(--surface); stroke: var(--accent); stroke-width: 2.4; }
+  .ln-cal { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .rug { stroke: var(--muted); stroke-width: 1.4; }
+  .desk-chart svg { touch-action: none; cursor: ew-resize; }
+
+  .cm { display: grid; grid-template-columns: auto repeat(2, minmax(0, 1fr)); gap: 6px; font-size: 13px; max-width: 520px; }
+  .cm .h { color: var(--muted); font-size: 12px; align-self: end; padding: 0 4px 2px; }
+  .cm .rh { color: var(--muted); font-size: 12px; align-self: center; padding-right: 6px; }
+  .cm .cell { padding: 10px 12px; border-radius: 8px; display: grid; gap: 2px; }
+  .cm .cell b { font-family: var(--font-display); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cm .cell span { font-size: 12px; color: var(--muted); }
+  .cm .tp { background: var(--ok-soft); } .cm .tp b { color: var(--ok); }
+  .cm .fn { background: var(--bad-soft); } .cm .fn b { color: var(--bad); }
+  .cm .fp { background: var(--warn-soft); } .cm .fp b { color: var(--warn); }
+  .cm .tn { background: var(--sunk); }
+  .desk-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .capbar { height: 10px; border-radius: 99px; background: var(--sunk); overflow: hidden; margin-top: 6px; }
+  .capbar i { display: block; height: 100%; background: var(--ok); transition: width .2s; }
+  .capbar.over i { background: var(--bad); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .calib-grid { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 760px) { .desk-grid, .calib-grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F7 · Evaluation and reliability</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F7.1 – F7.4</span>
+        <span class="pill d">Day one</span>
+        <span class="star">★ Priority</span>
+        <span>About 35 minutes</span>
+      </div>
+      <h1>Precision, Recall, Thresholds and Calibration</h1>
+      <p class="dek">How a fraud model's scores turn into decisions, why rare events fool nearly everyone, and how to pick the line that sends a transaction to review.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model only ranks transactions by risk. Where you draw the line, and whether its probabilities can be trusted, are separate decisions, and that's where most of the money is won or lost.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Picture the card fraud desk at a mid-sized Gulf bank. About <strong>200,000 card transactions</strong> come through each day. A model gives each one a risk score from 0 to 1,000, much like the fraud scores card issuers already use. Twelve analysts can each review about 60 cases a day, so the desk can handle roughly <strong>720 alerts</strong>.</p>
+        <p>The model doesn't decide anything. It sorts. Every transaction gets a score, and genuine transactions mostly score low while fraud mostly scores high. But the two groups overlap. Some fraud looks ordinary, and some genuine customers behave strangely: a first trip to London, a large gold purchase before Eid, a new phone.</p>
+        <p>Someone has to choose a <strong>threshold</strong>: everything above it is flagged for review, and everything below goes through. That single number decides how much fraud you catch, how many genuine customers get blocked, and whether the analysts drown.</p>
+      </div>
+
+      <figure class="figure" id="fig-desk">
+        <div class="fig-head"><span class="fig-title">The fraud desk</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> drag the threshold line, or use the sliders. Then switch to <b>real volumes</b> and watch the fraud hump nearly vanish. That's what 0.2% looks like.</p>
+        <div class="btns" role="group" aria-label="Chart scale">
+          <button class="btn" type="button" id="mix-shape" aria-pressed="true">Compare shapes</button>
+          <button class="btn" type="button" id="mix-volume" aria-pressed="false">Real volumes</button>
+        </div>
+        <div class="chart-wrap desk-chart" id="desk-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ok)"></i>Fraud caught</span>
+          <span><i style="background:var(--bad)"></i>Fraud missed</span>
+          <span><i style="background:var(--warn)"></i>Genuine customers flagged</span>
+          <span><i style="background:var(--neutral)"></i>Genuine, passed</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-thr">Review threshold (risk score) <output for="s-thr"></output></label><input type="range" id="s-thr" min="150" max="900" step="5"></div>
+          <div class="ctl"><label for="s-d1">Model quality (AUC) <output for="s-d1"></output></label><input type="range" id="s-d1" min="0.3" max="4.5" step="0.05"></div>
+          <div class="ctl"><label for="s-p1">Fraud rate <output for="s-p1"></output></label><input type="range" id="s-p1" min="0" max="100" step="1"></div>
+        </div>
+        <div class="desk-grid">
+          <div class="cm" aria-label="Confusion matrix, per day">
+            <span></span><span class="h">Flagged</span><span class="h">Passed</span>
+            <span class="rh">Actually fraud</span>
+            <div class="cell tp"><b id="cm-tp"></b><span>caught (true positives)</span></div>
+            <div class="cell fn"><b id="cm-fn"></b><span>missed (false negatives)</span></div>
+            <span class="rh">Actually genuine</span>
+            <div class="cell fp"><b id="cm-fp"></b><span>false alarms (false positives)</span></div>
+            <div class="cell tn"><b id="cm-tn"></b><span>passed (true negatives)</span></div>
+          </div>
+          <div class="stats">
+            <div class="stat ok"><div class="k">Recall</div><div class="v" id="st-rec"></div><div class="s">of fraud is caught</div></div>
+            <div class="stat warn"><div class="k">Precision</div><div class="v" id="st-prec"></div><div class="s" id="st-prec-s"></div></div>
+            <div class="stat"><div class="k">Accuracy</div><div class="v" id="st-acc"></div><div class="s" id="st-acc-s"></div></div>
+            <div class="stat" id="st-cap-box"><div class="k">Alerts per day</div><div class="v" id="st-alerts"></div><div class="s" id="st-cap-s"></div><div class="capbar" id="capbar"><i></i></div></div>
+          </div>
+        </div>
+        <p class="sim-note">Simulated: 200,000 transactions a day; genuine and fraud scores are two overlapping bell curves. The maths is exact for this setup.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Spend a minute with it, and three things should stand out.</p>
+        <ul>
+          <li><strong>Every threshold is a trade.</strong> Lower it and you catch more fraud, but you also flag more genuine customers and create more work. No setting gets you all three. A better model shrinks the overlap, so the trade gets cheaper, but it never disappears.</li>
+          <li><strong>Accuracy tells you nothing here.</strong> Push the threshold all the way up so nothing is flagged and accuracy reads about 99.8%. You've caught no fraud at all, yet the "accuracy" is excellent, because 99.8% of transactions were genuine anyway.</li>
+          <li><strong>Rarity crushes precision.</strong> In real volumes the fraud is a sliver. Even where fraud scores are densest, genuine transactions outnumber it, so most alerts are false alarms unless the model is very good or the threshold is very high.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>The model gives you a ranking. The business chooses the threshold. Your job is to show what each threshold costs, in fraud lost, customers annoyed and analyst hours, so the choice is made deliberately rather than by default.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-outcomes">The four outcomes and the numbers built from them</h3>
+      <div class="prose">
+        <p>Once there's a threshold, every transaction lands in exactly one of four boxes: the confusion matrix from the simulation. Every classification metric is just a different ratio of these four counts. The trick is knowing <em>which question</em> each ratio answers.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>Recall</mtext><mo>=</mo><mfrac><mtext>TP</mtext><mrow><mtext>TP</mtext><mo>+</mo><mtext>FN</mtext></mrow></mfrac></math>
+        <p class="where">Of all the fraud that happened, how much did we catch? Also called sensitivity, or the true positive rate. Business question: <em>how much fraud gets through?</em></p>
+      </div>
+      <div class="formula" style="margin-top:10px">
+        <math display="block"><mtext>Precision</mtext><mo>=</mo><mfrac><mtext>TP</mtext><mrow><mtext>TP</mtext><mo>+</mo><mtext>FP</mtext></mrow></mfrac></math>
+        <p class="where">Of everything we flagged, how much was really fraud? Business question: <em>is the analysts' time well spent, and how many good customers are we bothering?</em></p>
+      </div>
+      <div class="formula" style="margin-top:10px">
+        <math display="block"><mtext>False positive rate</mtext><mo>=</mo><mfrac><mtext>FP</mtext><mrow><mtext>FP</mtext><mo>+</mo><mtext>TN</mtext></mrow></mfrac></math>
+        <p class="where">Of all genuine transactions, what share did we wrongly flag? This sounds like precision's opposite but answers a different question, and confusing the two causes much of the trouble below.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>You'll also meet <strong>F1</strong>, the harmonic mean of precision and recall. It's a convenient single number for comparing models at a fixed threshold, but it treats a missed fraud and a false alarm as equally bad, which they almost never are. When someone quotes an F1 score, ask: at what threshold, and why that one?</p>
+      </div>
+
+      <h3 class="sub" id="m-baserate">Why rare events fool almost everyone</h3>
+      <div class="prose">
+        <p>Precision isn't a fixed property of a model. It depends on how common fraud is. Write it out with Bayes' rule and you can see why:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>Precision</mtext><mo>=</mo><mfrac><mrow><mi>R</mi><mo>·</mo><mi>π</mi></mrow><mrow><mi>R</mi><mo>·</mo><mi>π</mi><mo>+</mo><mtext>FPR</mtext><mo>·</mo><mo>(</mo><mn>1</mn><mo>−</mo><mi>π</mi><mo>)</mo></mrow></mfrac></math>
+        <p class="where"><i>R</i> is recall, <i>π</i> is the fraud rate, FPR is the false positive rate.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Plug in a model that sounds excellent: it catches <strong>80%</strong> of fraud and wrongly flags only <strong>1%</strong> of genuine transactions. With fraud at <strong>0.2%</strong>:</p>
+        <ul>
+          <li>Fraud caught: 0.8 × 0.002 = 0.0016 of all transactions</li>
+          <li>False alarms: 0.01 × 0.998 = 0.00998 of all transactions</li>
+          <li>Precision: 0.0016 ÷ (0.0016 + 0.00998) ≈ <strong>13.8%</strong></li>
+        </ul>
+        <p>So about 6 in every 7 alerts are genuine customers, even though this model is roughly <strong>99% accurate</strong>. The 1% false positive rate is applied to a population 500 times bigger than the fraud population, and that swamps everything.</p>
+        <p>This is the same base-rate effect behind medical screening paradoxes, and it's the most useful single idea in this lesson. Whenever someone reports a low false positive rate for a rare event, convert it to "out of every 100 alerts, how many are real?"</p>
+      </div>
+      <div class="callout warn"><span class="k">Watch out</span>A precision figure measured on a balanced test set, such as 50% fraud after resampling, says nothing about live precision. The formula shows why: change π and precision changes, even though the model is identical.</div>
+
+      <h3 class="sub" id="m-curves">ROC curves versus precision-recall curves</h3>
+      <div class="prose">
+        <p>A threshold gives you one point. Sweep the threshold from top to bottom and you get a curve, which describes the model at every possible setting at once. Two curves are standard:</p>
+        <ul>
+          <li><strong>ROC curve</strong>: recall against false positive rate. The area under it, <strong>AUC</strong> (or AUROC), has a neat meaning: the chance that a randomly chosen fraud scores higher than a randomly chosen genuine transaction. It measures ranking quality alone.</li>
+          <li><strong>Precision-recall (PR) curve</strong>: precision against recall. Its area is usually summarised as <strong>average precision</strong>.</li>
+        </ul>
+        <p>The crucial difference: <strong>the ROC curve ignores the fraud rate, and the PR curve doesn't.</strong> Both axes of the ROC curve are rates within one class, so changing how common fraud is leaves it untouched. Precision mixes the two classes, so the PR curve shows what the fraud desk will actually experience.</p>
+      </div>
+
+      <figure class="figure" id="fig-curves">
+        <div class="fig-head"><span class="fig-title">Same model, two views</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> slide the fraud rate from 5% down to 0.05%. The ROC curve doesn't move at all. The PR curve collapses. The dot marks your current threshold from Simulation 1.</p>
+        <div class="two-up">
+          <div class="chart-wrap" id="roc-chart"></div>
+          <div class="chart-wrap" id="pr-chart"></div>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-p2">Fraud rate <output for="s-p2"></output></label><input type="range" id="s-p2" min="0" max="100" step="1"></div>
+          <div class="ctl"><label for="s-d2">Model quality (AUC) <output for="s-d2"></output></label><input type="range" id="s-d2" min="0.3" max="4.5" step="0.05"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">AUC (ROC)</div><div class="v" id="st-auc"></div><div class="s">ignores the fraud rate</div></div>
+          <div class="stat"><div class="k">Average precision (PR)</div><div class="v" id="st-ap"></div><div class="s">depends on the fraud rate</div></div>
+          <div class="stat"><div class="k">Random model's precision</div><div class="v" id="st-base"></div><div class="s">equal to the fraud rate</div></div>
+        </div>
+        <p class="sim-note">Both curves computed exactly from the same simulated score distributions as Simulation 1.</p>
+      </figure>
+
+      <div class="prose">
+        <p>This is why an AUC of 0.95 on a fraud model can come with a fraud desk that hates it. The AUC is honest about ranking but silent about workload. For rare-event problems, show the PR curve, or better, precision and recall at the threshold you'll actually use.</p>
+        <p>One nuance is worth knowing because it's recent. Don't conclude that the PR curve is simply better. Each answers a different question. AUC is the right tool for comparing ranking quality across populations with different fraud rates, and average precision can be distorted when you compare groups whose base rates differ. More on that in Part 4.</p>
+      </div>
+
+      <h3 class="sub" id="m-threshold">Choosing the threshold</h3>
+      <div class="prose">
+        <p>Three forces decide where the line goes, and in a bank all three apply at once.</p>
+        <ul>
+          <li><strong>The cost of a miss.</strong> A fraud that gets through costs the stolen amount, plus chargeback handling and some reputational damage. Call it <i>L</i>.</li>
+          <li><strong>The cost of an alert.</strong> Every flagged transaction uses analyst time, <i>c</i>. A flagged genuine customer adds friction, <i>f</i>: a declined card at the till, a call to the contact centre, sometimes a customer who stops using the card.</li>
+          <li><strong>Capacity.</strong> Twelve analysts can't review 4,000 cases a day, however cheap each review is.</li>
+        </ul>
+        <p>Ignoring capacity for a moment, there's a clean answer. If you knew the true probability <i>p</i> that a transaction is fraud, you should flag it whenever the expected loss from passing it exceeds the expected cost of flagging it. Solve that and you get the break-even probability:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msup><mi>p</mi><mo>*</mo></msup><mo>=</mo><mfrac><mrow><mi>c</mi><mo>+</mo><mi>f</mi></mrow><mrow><mi>L</mi><mo>+</mo><mi>f</mi></mrow></mfrac></math>
+        <p class="where">Flag every transaction whose fraud probability is above <i>p*</i>. With <i>L</i> = AED 1,800, <i>c</i> = AED 20 and <i>f</i> = AED 10, <i>p*</i> ≈ 1.7%: flag anything with even a 1-in-60 chance of being fraud.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>That's surprisingly low, and it's why fraud teams would flag far more than they can review if capacity allowed. The rule has a hidden requirement: it only works if the model's probabilities are <strong>true</strong>. A score labelled "2%" has to mean that about 2 in 100 such transactions really are fraud. That property is calibration, and it's the last piece of this lesson.</p>
+      </div>
+
+      <figure class="figure" id="fig-cost">
+        <div class="fig-head"><span class="fig-title">What each threshold costs</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> the defaults put the cheapest threshold well inside the red zone, where the team can't keep up. Press the button to move to the cheapest workable point. Then add analysts, or raise the fraud loss, and watch the best threshold move.</p>
+        <div class="chart-wrap" id="cost-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink);height:4px"></i>Total cost per day</span>
+          <span><i style="background:var(--bad)"></i>Fraud losses</span>
+          <span><i style="background:var(--warn)"></i>Review cost</span>
+          <span><i style="background:var(--neutral)"></i>Customer friction</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-L">Loss per missed fraud <output for="s-L"></output></label><input type="range" id="s-L" min="200" max="10000" step="100"></div>
+          <div class="ctl"><label for="s-c">Cost per review <output for="s-c"></output></label><input type="range" id="s-c" min="5" max="100" step="1"></div>
+          <div class="ctl"><label for="s-f">Friction per false alarm <output for="s-f"></output></label><input type="range" id="s-f" min="0" max="100" step="1"></div>
+          <div class="ctl"><label for="s-an">Analysts <output for="s-an"></output></label><input type="range" id="s-an" min="2" max="80" step="1"></div>
+        </div>
+        <div class="btns"><button class="btn" type="button" id="go-opt">Move to cheapest workable threshold</button></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Cost per day at your threshold</div><div class="v" id="st-cost"></div><div class="s" id="st-cost-s"></div></div>
+          <div class="stat ok"><div class="k">Cheapest workable</div><div class="v" id="st-feas"></div><div class="s" id="st-feas-s"></div></div>
+          <div class="stat"><div class="k">Cheapest with unlimited analysts</div><div class="v" id="st-opt"></div><div class="s" id="st-opt-s"></div></div>
+          <div class="stat"><div class="k">Break-even probability p*</div><div class="v" id="st-pstar"></div><div class="s">flag above this</div></div>
+        </div>
+        <p class="sim-note">Simulated costs in AED per day. The red zone is where alerts exceed the team's capacity.</p>
+      </figure>
+
+      <div class="prose">
+        <p>When capacity binds, as it nearly always does, the threshold is really set by the size of the team. The metric that matters then is <strong>precision at k</strong>: of the top <i>k</i> alerts you can work, how many are fraud? Academic work on card fraud has argued for exactly this framing for years.</p>
+        <p>Real banks also rarely use a single threshold. They use bands. Very high scores are declined outright, high scores go to manual review, the middle band gets an automatic <strong>step-up</strong> (a one-time passcode or 3-D Secure challenge), and everything else is approved. Step-up is the release valve: it's far cheaper than an analyst, so it lets you act on far more transactions than the team could ever review.</p>
+      </div>
+
+      <h3 class="sub" id="m-calibration">Calibration: can you trust the probability?</h3>
+      <div class="prose">
+        <p>A model is <strong>calibrated</strong> when its probabilities mean what they say. Take every transaction the model scored at 5%: about 5% of them should turn out to be fraud. Formally:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>P</mi><mo>(</mo><mtext>fraud</mtext><mo>∣</mo><mover><mi>p</mi><mo>^</mo></mover><mo>=</mo><mi>q</mi><mo>)</mo><mo>=</mo><mi>q</mi><mspace width="0.6em"></mspace><mtext>for every</mtext><mspace width="0.4em"></mspace><mi>q</mi></math>
+        <p class="where">You check it with a <strong>reliability diagram</strong>: group predictions into bins, then plot each bin's average predicted probability against the actual fraud rate in that bin. A calibrated model sits on the diagonal.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Calibration and ranking are <strong>independent</strong>. A model can rank perfectly and still be badly calibrated: if it doubles every probability, the ordering is unchanged, so the AUC is identical, but every "2%" really means 1%. Most of the time, miscalibration comes from one of three places:</p>
+        <ul>
+          <li><strong>Overconfidence.</strong> Modern neural networks and boosted trees often push probabilities towards 0 and 1 more than the evidence supports.</li>
+          <li><strong>Resampling.</strong> Fraud models are often trained after throwing away most genuine transactions to balance the classes. That inflates every predicted probability, sometimes massively.</li>
+          <li><strong>Drift.</strong> The fraud rate changes after training (a new scam wave, a seasonal shopping peak, a new card product), so the model's sense of what's normal is out of date.</li>
+        </ul>
+        <p>The fixes are cheap and leave the ranking untouched. <strong>Temperature scaling</strong> divides the model's log-odds by one number, fixing over- or under-confidence. <strong>Platt scaling</strong> fits a slope and an intercept, so it fixes confidence and a shifted base rate together. <strong>Isotonic regression</strong> fits any increasing curve, which is more flexible but needs more data. All three are fitted on recent held-out data, never on the training set.</p>
+      </div>
+
+      <figure class="figure" id="fig-calib">
+        <div class="fig-head"><span class="fig-title">Break the calibration, then fix it</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> pick a failure, look at the reliability curve and the cost, then apply a fix. Notice that the AUC never changes. Temperature scaling repairs overconfidence but not the undersampling problem. Platt scaling repairs both.</p>
+        <div class="btns" role="group" aria-label="Failure presets">
+          <button class="btn" type="button" data-preset="ok">Well calibrated</button>
+          <button class="btn" type="button" data-preset="over">Overconfident model</button>
+          <button class="btn" type="button" data-preset="under">Trained on undersampled data</button>
+          <button class="btn" type="button" data-preset="drift">Fraud rate halved since training</button>
+        </div>
+        <div class="calib-grid">
+          <div class="chart-wrap" id="calib-chart"></div>
+          <div style="display:grid;gap:14px;min-width:0">
+            <div class="controls" style="grid-template-columns:minmax(0,1fr)">
+              <div class="ctl"><label for="s-a">Confidence (1 = honest, above 1 = overconfident) <output for="s-a"></output></label><input type="range" id="s-a" min="0.4" max="2.5" step="0.05"></div>
+              <div class="ctl"><label for="s-b">Base-rate offset in log-odds (0 = correct) <output for="s-b"></output></label><input type="range" id="s-b" min="-2" max="5" step="0.05"></div>
+            </div>
+            <div class="btns">
+              <button class="btn" type="button" id="fix-temp">Apply temperature scaling</button>
+              <button class="btn" type="button" id="fix-platt">Apply Platt scaling</button>
+            </div>
+            <div class="stats">
+              <div class="stat"><div class="k">Frauds per day the model expects</div><div class="v" id="st-exp"></div><div class="s" id="st-exp-s"></div></div>
+              <div class="stat bad" id="st-xc-box"><div class="k">Extra cost from using p* on these scores</div><div class="v" id="st-xc"></div><div class="s">per day, vs a calibrated model</div></div>
+              <div class="stat"><div class="k">AUC</div><div class="v" id="st-auc2"></div><div class="s">unchanged by any of this</div></div>
+            </div>
+          </div>
+        </div>
+        <p class="sim-note">Simulated: same model and costs as Simulations 1 and 3. Ticks under the chart show where 50%, 90%, 99% and 99.9% of transactions fall.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The ticks along the bottom tell you something important. Almost every transaction has a predicted probability close to zero. The part of the curve that drives decisions, from about 1% upwards, applies to a tiny slice of traffic. That's why calibration has to be checked where the decisions happen, not averaged over everything. An average calibration error over all transactions can look tiny while the alert-generating region is badly off.</p>
+        <p>Calibration matters well beyond fraud. In credit risk, a probability of default is multiplied by an exposure to produce expected credit loss, which sets IFRS 9 provisions on the balance sheet. A model with excellent ranking and poor calibration can misstate provisions by millions. That's why credit validators test calibration explicitly, using tests such as the binomial and Hosmer–Lemeshow tests, rather than only discrimination metrics like AUC or Gini.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTIONS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>These ideas run through almost every other topic in the curriculum. When you meet them elsewhere, you'll recognise the same four boxes.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F1.4 · Bayes' rule and base rates</span><span class="t">Precision is Bayes' rule</span><p>The precision formula above is Bayes' theorem with different labels. Base-rate neglect is the root of most misread metrics.</p></div>
+        <div class="link-card"><span class="code">F3.5 · Imbalanced data</span><span class="t">Resampling breaks probabilities</span><p>Undersampling and SMOTE can help a model learn, but they distort its probabilities. Correct for them before using any threshold rule.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift monitoring</span><span class="t">Calibration fails first</span><p>When the fraud rate moves, ranking often holds up while calibration drifts. Monitor both, separately.</p></div>
+        <div class="link-card"><span class="code">B1.3 · Delayed labels</span><span class="t">Your precision is measured on a biased sample</span><p>You only learn the truth about transactions you flagged or that were later charged back, weeks later. Missed fraud is undercounted.</p></div>
+        <div class="link-card"><span class="code">B1.4 · Alert fatigue</span><span class="t">Capacity sets the threshold</span><p>Low precision at high volume burns analysts out, and tired analysts miss real fraud. Precision at k is a wellbeing metric too.</p></div>
+        <div class="link-card"><span class="code">B1.5 · Real-time decisions</span><span class="t">One score, several thresholds</span><p>Approve, step up, review, decline: each band is a threshold choice using the same cost logic.</p></div>
+        <div class="link-card"><span class="code">B4.3 · IFRS 9</span><span class="t">Calibration is money on the balance sheet</span><p>Probabilities of default are multiplied by exposures. Calibration error turns directly into provisioning error.</p></div>
+        <div class="link-card"><span class="code">M5.2 · LLM-as-judge</span><span class="t">A judge is a classifier</span><p>An LLM grading answers as pass or fail has precision, recall and calibration too, and the same base-rate traps.</p></div>
+        <div class="link-card"><span class="code">R8.1 · Conformal prediction</span><span class="t">Guarantees instead of hopes</span><p>Conformal methods give error-rate guarantees that hold even when calibration is imperfect.</p></div>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose"><p>The core ideas are decades old and settled. The live debates are about which summary metric to trust, how to measure calibration properly, and calibration in large language models.</p></div>
+      <ol class="timeline" style="margin-top:20px">
+        <li><span class="yr">2001</span><div><div class="t">Cost-sensitive decisions have a closed-form threshold</div><p>Elkan showed that with calibrated probabilities, the optimal decision threshold follows directly from the cost matrix. That's the <i>p*</i> rule in this lesson.</p><div class="src">Elkan, “The Foundations of Cost-Sensitive Learning”, IJCAI 2001</div></div></li>
+        <li><span class="yr">2005</span><div><div class="t">Many strong models produce distorted probabilities</div><p>Boosted trees, SVMs and others rank well but are systematically miscalibrated. Platt scaling and isotonic regression fix this.</p><div class="src">Niculescu-Mizil &amp; Caruana, “Predicting Good Probabilities with Supervised Learning”, ICML 2005</div></div></li>
+        <li><span class="yr">2006</span><div><div class="t">ROC and PR curves are mathematically linked</div><p>A curve dominates in ROC space if and only if it dominates in PR space, but areas under the two curves can rank models differently.</p><div class="src">Davis &amp; Goadrich, “The Relationship Between Precision-Recall and ROC Curves”, ICML 2006</div></div></li>
+        <li><span class="yr">2015</span><div><div class="t">PR plots are more informative under imbalance</div><p>A widely cited argument for PR over ROC when positives are rare.</p><div class="src">Saito &amp; Rehmsmeier, PLOS ONE 2015</div></div></li>
+        <li><span class="yr">2015</span><div><div class="t">Correcting probabilities after undersampling</div><p>Gives a closed-form correction for probabilities from a model trained on undersampled data, using the fraction of genuine cases kept.</p><div class="src">Dal Pozzolo et al., “Calibrating Probability with Undersampling for Unbalanced Classification”, IEEE SSCI 2015</div></div></li>
+        <li><span class="yr">2017</span><div><div class="t">Modern neural networks are overconfident</div><p>Deeper, larger networks were found to be worse calibrated than older ones. Temperature scaling, a single parameter, fixed most of it.</p><div class="src">Guo et al., “On Calibration of Modern Neural Networks”, ICML 2017</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">Card fraud should be judged by precision of the alerts you can work</div><p>Argued for precision-at-k given investigator capacity, and dealt with delayed and biased feedback from investigations.</p><div class="src">Dal Pozzolo et al., “Credit Card Fraud Detection: A Realistic Modeling and a Novel Learning Strategy”, IEEE TNNLS 2018</div></div></li>
+        <li><span class="yr">2019</span><div><div class="t">The standard calibration metric is biased</div><p>Binned expected calibration error (ECE) depends on the binning and can underestimate miscalibration. Use several diagnostics, not one number.</p><div class="src">Kumar, Liang &amp; Ma, “Verified Uncertainty Calibration”, NeurIPS 2019; Nixon et al., “Measuring Calibration in Deep Learning”, 2019</div></div></li>
+        <li><span class="yr">2022–23</span><div><div class="t">LLMs are fairly well calibrated, until post-training</div><p>Pretrained language models' token probabilities are often reasonably calibrated. OpenAI reported that this calibration degraded after RLHF post-training of GPT-4. This is why you can't treat a chatbot's stated confidence as a probability.</p><div class="src">Kadavath et al., “Language Models (Mostly) Know What They Know”, 2022; OpenAI, GPT-4 Technical Report, 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">The pushback: PR isn't simply better than ROC</div><p>Argues that AUPRC is not universally superior under class imbalance. It weights errors among the highest scores more heavily and can unfairly favour subgroups with higher base rates, a fairness concern when comparing customer segments.</p><div class="src">McDermott et al., “A Closer Look at AUROC and AUPRC under Class Imbalance”, NeurIPS 2024</div></div></li>
+      </ol>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Pick the metric that matches the decision. Use precision and recall at the operating threshold, precision at k when capacity binds, AUC for comparing ranking across populations, and always check calibration separately wherever probabilities drive money or policy.</div>
+    </section>
+
+    <!-- ============================== 5. FAILURES ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These are the mistakes you'll see in real projects, and in AI-generated analyses. Each comes with the quickest way to catch it.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Reporting accuracy on a rare event</div><p>“The model is 99.7% accurate.” Flagging nothing scores 99.8%.</p><div class="spot"><b>Spot it</b>Ask what accuracy the “flag nothing” model gets. If it's close, the number is meaningless.</div></li>
+        <li><div class="t">Quoting only AUC for an operational system</div><p>An AUC of 0.95 says nothing about how many alerts the team gets or what share are real.</p><div class="spot"><b>Spot it</b>Ask for precision and recall at the planned threshold, and the alert volume per day.</div></li>
+        <li><div class="t">Precision measured on resampled or balanced test data</div><p>Precision on a 50/50 test set can look like 90%, and fall below 10% in production.</p><div class="spot"><b>Spot it</b>Check the fraud rate in the evaluation set. It must match production.</div></li>
+        <li><div class="t">Threshold tuned on the test set</div><p>Choosing the best threshold on the same data you report results on makes the results optimistic.</p><div class="spot"><b>Spot it</b>Ask which data set chose the threshold. It should be a validation set, with results reported on a later, untouched period.</div></li>
+        <li><div class="t">Using probabilities from an undersampled model as if they were real</div><p>The scores are inflated, so any probability-based threshold or expected-loss figure is wrong.</p><div class="spot"><b>Spot it</b>Ask whether the training data was resampled, and whether the probabilities were corrected or recalibrated afterwards.</div></li>
+        <li><div class="t">Counting transactions when the business counts money</div><p>A model can catch 80% of fraud cases but only 55% of fraud value if it misses the big-ticket ones.</p><div class="spot"><b>Spot it</b>Ask for value-weighted recall (in AED) alongside count-based recall.</div></li>
+        <li><div class="t">Trusting labels that only exist where you looked</div><p>Confirmed fraud comes mostly from transactions you flagged or customers who complained. Unflagged fraud that nobody reports never gets a label, so recall looks better than it is.</p><div class="spot"><b>Spot it</b>Ask how fraud labels are created, how long chargebacks take to arrive, and whether a random sample of unflagged transactions is ever reviewed.</div></li>
+        <li><div class="t">Ignoring seasonal shift</div><p>Ramadan, Eid, Dubai Shopping Festival and summer travel all change spending patterns. A threshold set in a quiet month can flood the desk in a busy one.</p><div class="spot"><b>Spot it</b>Ask how performance and alert volumes were checked across seasonal peaks, using out-of-time data.</div></li>
+        <li><div class="t">AI-generated analysis that doesn't add up</div><p>Typical signs: an F1 score with no threshold stated, an AUC above 0.99 from a random train-test split, or text that says “precision improved” while the printed number went down.</p><div class="spot"><b>Spot it</b>Recompute one precision figure by hand from the confusion matrix. If you can't find the confusion matrix, that's your answer.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“The model doesn't make decisions. It ranks every transaction by risk. Where we draw the line is a business choice: lower means we catch more fraud but send more genuine customers to review. At the current setting we catch about half the fraud value with a workload our team can handle. Each extra point of fraud caught costs a predictable number of extra alerts, so the real question is whether we add analysts, or use automatic step-up checks, to move the line.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“Fraud is under 1% of volume, so I'd evaluate with precision and recall at the operating point, plus precision at k for the team's capacity, rather than AUC alone. I'd set thresholds from expected cost using calibrated probabilities. The break-even probability is c plus f over L plus f. I'd check calibration with reliability diagrams on out-of-time data, recalibrate with Platt or isotonic on a recent window, and correct for any undersampling. I'd also report value-weighted recall, and account for the label bias from only investigating flagged transactions.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Our fraud model is 99% accurate. Is that good?”</summary><div class="ans"><p>Not by itself. With fraud at 0.2%, flagging nothing is 99.8% accurate. I'd want recall (how much fraud it catches, by count and by value), precision (how many alerts are real), and the alert volume against team capacity.</p></div></details>
+        <details class="reveal"><summary>“The AUC is 0.96 but the fraud team says the alerts are useless. How?”</summary><div class="ans"><p>AUC measures ranking and ignores the fraud rate. At a 0.2% fraud rate, even a strong ranking can give low precision at the chosen threshold, so most alerts are false positives. The PR curve or precision at the operating point would have shown this. The fix might be a higher threshold, step-up authentication for the middle band, or better features to separate the overlap.</p></div></details>
+        <details class="reveal"><summary>“How would you choose the threshold?”</summary><div class="ans"><p>Start from expected cost: loss per missed fraud, cost per review, and customer friction per false alarm. With calibrated probabilities, flag above p* = (c + f) / (L + f). Then apply the capacity constraint. If the cost-optimal threshold produces more alerts than the team can work, set it by capacity and quantify what more capacity, or automated step-up, would save. Validate on a later time period, and revisit it at seasonal peaks.</p></div></details>
+        <details class="reveal"><summary>“You undersampled genuine transactions in training. Does that matter?”</summary><div class="ans"><p>For ranking, usually not much. For probabilities, yes. They're inflated because the model saw fraud far more often than it occurs. I'd correct them analytically using the sampling rate, or recalibrate on a recent sample with the true fraud rate, before using them for thresholds or expected-loss figures.</p></div></details>
+        <details class="reveal"><summary>“After recalibration the AUC didn't change. So did recalibration do anything?”</summary><div class="ans"><p>Yes. Recalibration is a monotonic transformation, so the ranking and the AUC stay the same by design. What changes is that the probabilities become trustworthy, which affects cost-based thresholds, expected-loss estimates, and anything that compares scores across models or time periods.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. SELF-CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones only need the formulas from Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. 100,000 transactions, 0.1% fraud. The model has 90% recall and a 2% false positive rate. What's its precision?</summary><div class="ans"><p>Fraud: 100. Caught: 90. Genuine: 99,900. False alarms: 2% × 99,900 = 1,998. Precision = 90 ÷ (90 + 1,998) ≈ <strong>4.3%</strong>. Fewer than 1 in 20 alerts is fraud.</p></div></details>
+        <details class="reveal"><summary>2. Missed fraud costs AED 2,000 on average, a review costs AED 25, and you ignore friction. What's the break-even probability?</summary><div class="ans"><p>p* = (25 + 0) ÷ (2,000 + 0) = <strong>1.25%</strong>. Any transaction with more than a 1-in-80 chance of being fraud is worth reviewing, if capacity allows.</p></div></details>
+        <details class="reveal"><summary>3. True or false: recalibrating a model improves its AUC.</summary><div class="ans"><p><strong>False.</strong> Calibration methods are monotonic, so they preserve the ranking, and AUC depends only on the ranking. Calibration and discrimination are separate properties.</p></div></details>
+        <details class="reveal"><summary>4. The fraud rate drops from 5% to 0.5%. Which changes: the ROC curve, the PR curve, or both?</summary><div class="ans"><p><strong>Only the PR curve</strong>, assuming the fraud and genuine score distributions themselves stay the same. ROC axes are rates within each class, so they ignore class balance. Precision mixes the classes, so it falls.</p></div></details>
+        <details class="reveal"><summary>5. A model was calibrated when fraud was 0.4%. Fraud is now 0.2%. You flag on a probability threshold. What goes wrong, and how do you fix it?</summary><div class="ans"><p>The model still assumes the old base rate, so it overestimates every probability. In odds terms it's about twice too high, so more transactions cross the threshold than should. Fix it by recalibrating the intercept on recent data. Here that's a shift of about −0.69 in log-odds, the natural log of ½. Ranking is unaffected.</p></div></details>
+        <details class="reveal"><summary>6. Analysts can review 500 alerts a day, but the cost-optimal threshold produces 900. What do you do?</summary><div class="ans"><p>Set the review threshold so the top 500 alerts go to analysts, measured by precision at 500. Then quantify the expected fraud value sitting in alerts 501–900 and compare it with the cost of more analysts. That's your business case. Also consider automated step-up authentication for that band: it acts on those transactions at a fraction of the cost of a manual review.</p></div></details>
+      </div>
+    </section>
+
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>C. Elkan. The Foundations of Cost-Sensitive Learning. IJCAI, 2001.</li>
+        <li>A. Niculescu-Mizil, R. Caruana. Predicting Good Probabilities with Supervised Learning. ICML, 2005.</li>
+        <li>J. Davis, M. Goadrich. The Relationship Between Precision-Recall and ROC Curves. ICML, 2006.</li>
+        <li>T. Saito, M. Rehmsmeier. The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets. PLOS ONE, 2015.</li>
+        <li>A. Dal Pozzolo, O. Caelen, R. Johnson, G. Bontempi. Calibrating Probability with Undersampling for Unbalanced Classification. IEEE SSCI, 2015.</li>
+        <li>C. Guo, G. Pleiss, Y. Sun, K. Weinberger. On Calibration of Modern Neural Networks. ICML, 2017.</li>
+        <li>A. Dal Pozzolo et al. Credit Card Fraud Detection: A Realistic Modeling and a Novel Learning Strategy. IEEE TNNLS, 2018.</li>
+        <li>A. Kumar, P. Liang, T. Ma. Verified Uncertainty Calibration. NeurIPS, 2019.</li>
+        <li>J. Nixon et al. Measuring Calibration in Deep Learning. CVPR Workshops, 2019.</li>
+        <li>S. Kadavath et al. Language Models (Mostly) Know What They Know. arXiv, 2022.</li>
+        <li>OpenAI. GPT-4 Technical Report. arXiv, 2023.</li>
+        <li>M. McDermott et al. A Closer Look at AUROC and AUPRC under Class Imbalance. NeurIPS, 2024.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F7: forecast and regression metrics (F7.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  // ---------- Shared simulated world ----------
+  // Genuine scores ~ N(0,1), fraud scores ~ N(d,1) on a latent scale; displayed as a 0–1000 risk score.
+  const S = { N: 200000, d: 2.5, prev: 0.002, t: 2.6, L: 1800, c: 20, f: 10, analysts: 12, per: 60, mix: 0, a: 1, b: 0 };
+  const X0 = -4, X1 = 8;
+  const toScore = x => (x - X0) / (X1 - X0) * 1000;
+  const fromScore = s => X0 + s / 1000 * (X1 - X0);
+  const auc = () => L.normCdf(S.d / Math.SQRT2);
+  const cap = () => S.analysts * S.per;
+  const prevFromSlider = v => Math.pow(10, L.lerp(Math.log10(0.0005), Math.log10(0.05), v / 100));
+  const sliderFromPrev = p => 100 * (Math.log10(p) - Math.log10(0.0005)) / (Math.log10(0.05) - Math.log10(0.0005));
+  const fmtPrev = p => (100 * p).toFixed(p < 0.01 ? 2 : 1) + "%";
+  const fmtK = v => v >= 1e6 ? "AED " + (v / 1e6).toFixed(2) + "m" : "AED " + Math.round(v / 1000) + "k";
+
+  function outcomes(t) {
+    const tpr = 1 - L.normCdf(t - S.d), fpr = 1 - L.normCdf(t);
+    const P = S.N * S.prev, G = S.N - P;
+    return { TP: P * tpr, FN: P * (1 - tpr), FP: G * fpr, TN: G * (1 - fpr), tpr, fpr };
+  }
+  function cost(t) {
+    const o = outcomes(t);
+    const miss = o.FN * S.L, review = (o.TP + o.FP) * S.c, friction = o.FP * S.f;
+    return { miss, review, friction, total: miss + review + friction, alerts: o.TP + o.FP };
+  }
+  const pstar = () => (S.c + S.f) / (S.L + S.f);
+  // True fraud probability at latent score s (equal-variance binormal): logit p = logit(prev) + d s - d²/2
+  const trueLogit = s => L.logit(S.prev) + S.d * s - S.d * S.d / 2;
+  const tOpt = () => (L.logit(pstar()) - L.logit(S.prev)) / S.d + S.d / 2;
+  function tCap() { // threshold where alerts == capacity (alerts fall as t rises)
+    let lo = -6, hi = 12;
+    if (cost(lo).alerts <= cap()) return lo;
+    for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (cost(m).alerts > cap()) lo = m; else hi = m; }
+    return hi;
+  }
+
+  // ---------- Controls (several sliders share one state) ----------
+  const controls = [
+    { id: "s-thr", get: () => toScore(S.t), set: v => ({ t: fromScore(v) }), fmt: v => Math.round(v) },
+    { id: "s-d1", get: () => S.d, set: v => ({ d: v }), fmt: v => L.normCdf(v / Math.SQRT2).toFixed(3) },
+    { id: "s-d2", get: () => S.d, set: v => ({ d: v }), fmt: v => L.normCdf(v / Math.SQRT2).toFixed(3) },
+    { id: "s-p1", get: () => sliderFromPrev(S.prev), set: v => ({ prev: prevFromSlider(v) }), fmt: v => fmtPrev(prevFromSlider(v)) },
+    { id: "s-p2", get: () => sliderFromPrev(S.prev), set: v => ({ prev: prevFromSlider(v) }), fmt: v => fmtPrev(prevFromSlider(v)) },
+    { id: "s-L", get: () => S.L, set: v => ({ L: v }), fmt: v => L.fmtAED(v) },
+    { id: "s-c", get: () => S.c, set: v => ({ c: v }), fmt: v => L.fmtAED(v) },
+    { id: "s-f", get: () => S.f, set: v => ({ f: v }), fmt: v => L.fmtAED(v) },
+    { id: "s-an", get: () => S.analysts, set: v => ({ analysts: v }), fmt: v => v + " (" + L.fmtInt(v * S.per) + " reviews)" },
+    { id: "s-a", get: () => S.a, set: v => ({ a: v }), fmt: v => v.toFixed(2) },
+    { id: "s-b", get: () => S.b, set: v => ({ b: v }), fmt: v => (v >= 0 ? "+" : "") + v.toFixed(2) }
+  ];
+  controls.forEach(c => {
+    c.el = document.getElementById(c.id);
+    c.out = document.querySelector(`output[for="${c.id}"]`);
+    c.el.addEventListener("input", () => setS(c.set(+c.el.value)));
+  });
+  function syncControls() {
+    controls.forEach(c => { const v = c.get(); if (document.activeElement !== c.el) c.el.value = v; c.out.textContent = c.fmt(+c.el.value); });
+  }
+  function setS(patch) { Object.assign(S, patch); syncControls(); renderAll(); }
+
+  // ---------- Simulation 1: the fraud desk ----------
+  const deskBox = document.getElementById("desk-chart");
+  let deskGeom = null;
+  function renderDesk() {
+    const W = Math.max(300, deskBox.clientWidth), H = 250, m = { l: 12, r: 12, t: 30, b: 30 };
+    deskBox.innerHTML = "";
+    const svg = L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Score distributions for genuine and fraudulent transactions with the review threshold" }, deskBox);
+    const X = L.scale(X0, X1, m.l, W - m.r);
+    const wG = L.lerp(1, 1 - S.prev, S.mix), wF = L.lerp(1, S.prev, S.mix);
+    const ymax = Math.max(wG, wF) * L.normPdf(0) * 1.08;
+    const Y = L.scale(0, ymax, H - m.b, m.t);
+    const xs = L.range(X0, X1, 300);
+    const g = x => wG * L.normPdf(x), fr = x => wF * L.normPdf(x, S.d);
+    function area(fn, a, b, cls) {
+      const pts = xs.filter(x => x > a && x < b);
+      const all = [a, ...pts, b].map(x => [X(x), Y(fn(x))]);
+      L.svg("path", { d: L.path([[X(a), Y(0)], ...all, [X(b), Y(0)]]) + "Z", class: cls }, svg);
+    }
+    area(g, X0, S.t, "a-tn"); area(g, S.t, X1, "a-fp");
+    area(fr, X0, S.t, "a-fn"); area(fr, S.t, X1, "a-tp");
+    L.svg("path", { d: L.path(xs.map(x => [X(x), Y(g(x))])), class: "ln-legit" }, svg);
+    L.svg("path", { d: L.path(xs.map(x => [X(x), Y(fr(x))])), class: "ln-fraud" }, svg);
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, class: "ax" }, svg);
+    for (let s = 0; s <= 1000; s += 200) {
+      const x = X(fromScore(s));
+      L.svg("line", { x1: x, x2: x, y1: H - m.b, y2: H - m.b + 4, class: "ax" }, svg);
+      L.svg("text", { x, y: H - m.b + 17, "text-anchor": "middle" }, svg).textContent = s;
+    }
+    const tl = L.svg("text", { x: X(0), y: Y(g(0)) - 8, "text-anchor": "middle", class: "lbl-ink" }, svg); tl.textContent = "Genuine";
+    const fy = Y(fr(S.d)), xt = X(S.t), fx = Math.min(X(S.d), W - 40);
+    // Keep the fraud label clear of the threshold line and its label
+    const near = Math.abs(fx - xt) < 50;
+    const fl = L.svg("text", {
+      x: near ? (fx < xt ? xt - 10 : xt + 10) : fx,
+      y: near ? Math.max(m.t + 26, fy + 18) : Math.max(m.t + 10, fy - 8),
+      "text-anchor": near ? (fx < xt ? "end" : "start") : "middle", class: "lbl-ink"
+    }, svg);
+    fl.textContent = S.mix > 0.5 ? "Fraud (the sliver)" : "Fraud";
+    L.svg("line", { x1: xt, x2: xt, y1: m.t - 14, y2: H - m.b, class: "ln-thr" }, svg);
+    L.svg("rect", { x: xt - 5, y: m.t - 22, width: 10, height: 14, rx: 3, class: "handle" }, svg);
+    const lab = L.svg("text", { x: xt + (xt > W - 150 ? -10 : 10), y: m.t - 11, "text-anchor": xt > W - 150 ? "end" : "start", class: "lbl-ink" }, svg);
+    lab.textContent = "Flag above " + Math.round(toScore(S.t));
+    deskGeom = { svg, W, X };
+
+    const o = outcomes(S.t);
+    document.getElementById("cm-tp").textContent = L.fmtInt(o.TP);
+    document.getElementById("cm-fn").textContent = L.fmtInt(o.FN);
+    document.getElementById("cm-fp").textContent = L.fmtInt(o.FP);
+    document.getElementById("cm-tn").textContent = L.fmtInt(o.TN);
+    const prec = o.TP / Math.max(1e-9, o.TP + o.FP);
+    document.getElementById("st-rec").textContent = L.fmtPct(o.tpr, 0);
+    document.getElementById("st-prec").textContent = L.fmtPct(prec, 0);
+    document.getElementById("st-prec-s").textContent = `${Math.round(prec * 100)} in 100 alerts are fraud`;
+    const acc = (o.TP + o.TN) / S.N;
+    document.getElementById("st-acc").textContent = L.fmtPct(acc, 1);
+    document.getElementById("st-acc-s").textContent = `flagging nothing scores ${L.fmtPct(1 - S.prev, 1)}`;
+    const alerts = o.TP + o.FP;
+    document.getElementById("st-alerts").textContent = L.fmtInt(alerts);
+    const over = alerts > cap();
+    document.getElementById("st-cap-s").textContent = over ? `over capacity of ${L.fmtInt(cap())}` : `within capacity of ${L.fmtInt(cap())}`;
+    const bar = document.getElementById("capbar");
+    bar.classList.toggle("over", over);
+    bar.firstElementChild.style.width = Math.min(100, 100 * alerts / cap()) + "%";
+    document.getElementById("st-cap-box").className = "stat " + (over ? "bad" : "ok");
+  }
+  // Drag the threshold directly on the chart
+  let dragging = false;
+  function dragTo(e) {
+    if (!deskGeom) return;
+    const r = deskGeom.svg.getBoundingClientRect();
+    const px = (e.clientX - r.left) * (deskGeom.W / r.width);
+    const s = L.clamp(toScore(X0 + (px - 12) / (deskGeom.W - 24) * (X1 - X0)), 150, 900);
+    setS({ t: fromScore(s) });
+  }
+  deskBox.addEventListener("pointerdown", e => { dragging = true; deskBox.setPointerCapture(e.pointerId); dragTo(e); });
+  deskBox.addEventListener("pointermove", e => { if (dragging) dragTo(e); });
+  deskBox.addEventListener("pointerup", () => { dragging = false; });
+  deskBox.addEventListener("pointercancel", () => { dragging = false; });
+
+  const mixBtns = { shape: document.getElementById("mix-shape"), volume: document.getElementById("mix-volume") };
+  function setMix(target) {
+    mixBtns.shape.setAttribute("aria-pressed", String(target === 0));
+    mixBtns.volume.setAttribute("aria-pressed", String(target === 1));
+    L.tween(S.mix, target, 700, v => { S.mix = v; renderDesk(); });
+  }
+  mixBtns.shape.addEventListener("click", () => setMix(0));
+  mixBtns.volume.addEventListener("click", () => setMix(1));
+
+  // ---------- Simulation 2: ROC and PR ----------
+  function axes(svg, X, Y, m, size, xl, yl) {
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: Y(0), y2: Y(1), class: "grid" }, svg);
+      L.svg("line", { x1: X(0), x2: X(1), y1: Y(v), y2: Y(v), class: "grid" }, svg);
+      if (v % 0.5 === 0) {
+        L.svg("text", { x: X(v), y: Y(0) + 15, "text-anchor": "middle" }, svg).textContent = v;
+        L.svg("text", { x: X(0) - 6, y: Y(v) + 4, "text-anchor": "end" }, svg).textContent = v;
+      }
+    });
+    L.svg("rect", { x: X(0), y: Y(1), width: X(1) - X(0), height: Y(0) - Y(1), class: "ax" }, svg);
+    L.svg("text", { x: (X(0) + X(1)) / 2, y: size - 4, "text-anchor": "middle" }, svg).textContent = xl;
+    const t = L.svg("text", { x: 12, y: (Y(0) + Y(1)) / 2, "text-anchor": "middle", transform: `rotate(-90 12 ${(Y(0) + Y(1)) / 2})` }, svg); t.textContent = yl;
+  }
+  function squareChart(id, title) {
+    const box = document.getElementById(id);
+    const size = Math.max(260, Math.min(box.clientWidth, 380));
+    box.innerHTML = "";
+    const svg = L.svg("svg", { viewBox: `0 0 ${size} ${size + 22}`, width: size, height: size + 22, role: "img", "aria-label": title }, box);
+    const head = L.svg("text", { x: 0, y: 14, class: "lbl-ink" }, svg); head.textContent = title;
+    const g = L.svg("g", { transform: "translate(0,22)" }, svg);
+    const m = { l: 44, r: 10, t: 8, b: 36 };
+    const X = L.scale(0, 1, m.l, size - m.r), Y = L.scale(0, 1, size - m.b, m.t);
+    return { g, X, Y, m, size };
+  }
+  function renderCurves() {
+    const ts = L.range(-6, 10, 320);
+    // ROC
+    const r = squareChart("roc-chart", "ROC curve");
+    axes(r.g, r.X, r.Y, r.m, r.size, "False positive rate", "Recall");
+    L.svg("line", { x1: r.X(0), y1: r.Y(0), x2: r.X(1), y2: r.Y(1), class: "ln-base" }, r.g);
+    L.svg("path", { d: L.path(ts.map(t => { const o = outcomes(t); return [r.X(o.fpr), r.Y(o.tpr)]; })), class: "ln-curve" }, r.g);
+    const o = outcomes(S.t);
+    L.svg("circle", { cx: r.X(o.fpr), cy: r.Y(o.tpr), r: 5.5, class: "dot-now" }, r.g);
+    // PR
+    const p = squareChart("pr-chart", "Precision-recall curve");
+    axes(p.g, p.X, p.Y, p.m, p.size, "Recall", "Precision");
+    L.svg("line", { x1: p.X(0), y1: p.Y(S.prev), x2: p.X(1), y2: p.Y(S.prev), class: "ln-base" }, p.g);
+    const pts = [];
+    let ap = 0, lastR = 0;
+    for (let i = ts.length - 1; i >= 0; i--) {
+      const q = outcomes(ts[i]);
+      const prec = q.TP / Math.max(1e-12, q.TP + q.FP);
+      pts.push([p.X(q.tpr), p.Y(prec)]);
+      ap += (q.tpr - lastR) * prec; lastR = q.tpr;
+    }
+    L.svg("path", { d: L.path(pts), class: "ln-curve" }, p.g);
+    const precNow = o.TP / Math.max(1e-12, o.TP + o.FP);
+    L.svg("circle", { cx: p.X(o.tpr), cy: p.Y(precNow), r: 5.5, class: "dot-now" }, p.g);
+    document.getElementById("st-auc").textContent = auc().toFixed(3);
+    document.getElementById("st-ap").textContent = ap.toFixed(3);
+    document.getElementById("st-base").textContent = fmtPrev(S.prev);
+  }
+
+  // ---------- Simulation 3: cost ----------
+  const costBox = document.getElementById("cost-chart");
+  function renderCost() {
+    const W = Math.max(300, costBox.clientWidth), H = 290, m = { l: 58, r: 14, t: 20, b: 34 };
+    costBox.innerHTML = "";
+    const svg = L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Daily cost by threshold" }, costBox);
+    const s0 = 350, s1 = 900;
+    const X = L.scale(s0, s1, m.l, W - m.r);
+    const ymax = S.N * S.prev * S.L * 1.2;
+    const Y = L.scale(0, ymax, H - m.b, m.t);
+    const clip = L.svg("clipPath", { id: "cost-clip" }, L.svg("defs", {}, svg));
+    L.svg("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b }, clip);
+    // over-capacity zone
+    const tc = tCap(), sc = toScore(tc);
+    if (sc > s0) L.svg("rect", { x: X(s0), y: m.t, width: X(Math.min(sc, s1)) - X(s0), height: H - m.t - m.b, class: "over-cap" }, svg);
+    if (sc > s0 && sc < s1) { const t = L.svg("text", { x: X(s0) + 6, y: m.t + 14 }, svg); t.textContent = "Over team capacity"; t.setAttribute("style", "fill:var(--bad)"); }
+    // grid + axes
+    for (let i = 0; i <= 4; i++) {
+      const v = ymax * i / 4;
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), class: "grid" }, svg);
+      L.svg("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end" }, svg).textContent = i === 0 ? "0" : fmtK(v);
+    }
+    for (let s = 400; s <= 900; s += 100) L.svg("text", { x: X(s), y: H - m.b + 17, "text-anchor": "middle" }, svg).textContent = s;
+    L.svg("text", { x: (m.l + W - m.r) / 2, y: H - 2, "text-anchor": "middle" }, svg).textContent = "Review threshold (risk score)";
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, class: "ax" }, svg);
+    const ss = L.range(s0, s1, 240);
+    const cs = ss.map(s => cost(fromScore(s)));
+    const gc = L.svg("g", { "clip-path": "url(#cost-clip)" }, svg);
+    [["miss", "ln-miss"], ["review", "ln-review"], ["friction", "ln-fric"], ["total", "ln-total"]].forEach(([k, cls]) => {
+      L.svg("path", { d: L.path(ss.map((s, i) => [X(s), Y(cs[i][k])])), class: cls }, gc);
+    });
+    // markers
+    const to = tOpt(), tf = Math.max(to, tc);
+    const so = toScore(to), sf = toScore(tf), sn = toScore(S.t);
+    if (sn >= s0 && sn <= s1) L.svg("line", { x1: X(sn), x2: X(sn), y1: m.t, y2: H - m.b, class: "ln-thr" }, svg);
+    if (so >= s0 && so <= s1) L.svg("circle", { cx: X(so), cy: Y(Math.min(ymax, cost(to).total)), r: 6, class: "dot-opt" }, svg);
+    if (Math.abs(sf - so) > 1 && sf >= s0 && sf <= s1) L.svg("circle", { cx: X(sf), cy: Y(Math.min(ymax, cost(tf).total)), r: 6, class: "dot-feas" }, svg);
+
+    const cNow = cost(S.t), cOpt = cost(to), cF = cost(tf);
+    document.getElementById("st-cost").textContent = fmtK(cNow.total);
+    document.getElementById("st-cost-s").textContent = `${L.fmtInt(cNow.alerts)} alerts a day, threshold ${Math.round(sn)}`;
+    document.getElementById("st-feas").textContent = fmtK(cF.total);
+    document.getElementById("st-feas-s").textContent = `threshold ${Math.round(sf)}, ${L.fmtInt(cF.alerts)} alerts (hollow dot)`;
+    document.getElementById("st-opt").textContent = fmtK(cOpt.total);
+    document.getElementById("st-opt-s").textContent = `threshold ${Math.round(so)}, needs ${L.fmtInt(cOpt.alerts)} alerts a day (solid dot)`;
+    document.getElementById("st-pstar").textContent = L.fmtPct(pstar(), 2);
+  }
+  document.getElementById("go-opt").addEventListener("click", () => {
+    const target = Math.max(tOpt(), tCap());
+    const lo = fromScore(150), hi = fromScore(900);
+    L.tween(S.t, L.clamp(target, lo, hi), 800, v => setS({ t: v }));
+  });
+
+  // ---------- Simulation 4: calibration ----------
+  const calBox = document.getElementById("calib-chart");
+  const sGrid = L.range(-6, 10, 1200), ds = sGrid[1] - sGrid[0];
+  const mixW = s => (1 - S.prev) * L.normPdf(s) + S.prev * L.normPdf(s, S.d);
+  const reported = s => L.sigmoid(S.a * trueLogit(s) + S.b);
+  function renderCalib() {
+    const size = Math.max(260, Math.min(calBox.clientWidth, 380));
+    calBox.innerHTML = "";
+    const svg = L.svg("svg", { viewBox: `0 0 ${size} ${size + 22}`, width: size, height: size + 22, role: "img", "aria-label": "Reliability diagram" }, calBox);
+    L.svg("text", { x: 0, y: 14, class: "lbl-ink" }, svg).textContent = "Reliability diagram";
+    const g = L.svg("g", { transform: "translate(0,22)" }, svg);
+    const m = { l: 44, r: 10, t: 8, b: 40 };
+    const X = L.scale(0, 1, m.l, size - m.r), Y = L.scale(0, 1, size - m.b, m.t);
+    axes(g, X, Y, m, size - 4, "Predicted probability", "Actual fraud rate");
+    L.svg("line", { x1: X(0), y1: Y(0), x2: X(1), y2: Y(1), class: "ln-base" }, g);
+    const qs = L.range(0.0005, 0.9995, 300);
+    L.svg("path", { d: L.path(qs.map(q => [X(q), Y(L.sigmoid((L.logit(q) - S.b) / S.a))])), class: "ln-cal" }, g);
+    // Where the transactions are: quantiles of predicted probability
+    let cum = 0; const marks = [0.5, 0.9, 0.99, 0.999]; let k = 0;
+    for (const s of sGrid) {
+      cum += mixW(s) * ds;
+      while (k < marks.length && cum >= marks[k]) {
+        const x = X(reported(s));
+        L.svg("line", { x1: x, x2: x, y1: Y(0) - 7, y2: Y(0), class: "rug" }, g);
+        k++;
+      }
+    }
+    // Stats
+    let expF = 0;
+    for (const s of sGrid) expF += mixW(s) * reported(s) * ds;
+    expF *= S.N;
+    const actual = S.N * S.prev;
+    document.getElementById("st-exp").textContent = L.fmtInt(expF);
+    document.getElementById("st-exp-s").textContent = `actual: ${L.fmtInt(actual)} a day`;
+    // Threshold implied by applying p* to the reported probabilities
+    const tUsed = ((L.logit(pstar()) - S.b) / S.a - L.logit(S.prev) + S.d * S.d / 2) / S.d;
+    const extra = Math.max(0, cost(tUsed).total - cost(tOpt()).total);
+    document.getElementById("st-xc").textContent = extra < 500 ? "≈ AED 0" : fmtK(extra);
+    document.getElementById("st-xc-box").className = "stat " + (extra < 500 ? "ok" : "bad");
+    document.getElementById("st-auc2").textContent = auc().toFixed(3);
+  }
+  const presets = { ok: { a: 1, b: 0 }, over: { a: 1.7, b: 0 }, under: { a: 1, b: Math.log(50) }, drift: { a: 1, b: Math.log(2) } };
+  function animateAB(target) {
+    const a0 = S.a, b0 = S.b;
+    L.tween(0, 1, 700, k => setS({ a: L.lerp(a0, target.a, k), b: L.lerp(b0, target.b, k) }));
+  }
+  document.querySelectorAll("[data-preset]").forEach(btn => btn.addEventListener("click", () => animateAB(presets[btn.dataset.preset])));
+  document.getElementById("fix-temp").addEventListener("click", () => animateAB({ a: 1, b: S.b / S.a }));
+  document.getElementById("fix-platt").addEventListener("click", () => animateAB({ a: 1, b: 0 }));
+
+  // ---------- Render everything ----------
+  function renderAll() { renderDesk(); renderCurves(); renderCost(); renderCalib(); }
+  syncControls();
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
