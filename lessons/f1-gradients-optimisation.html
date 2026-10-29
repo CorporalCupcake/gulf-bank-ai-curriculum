@@ -1,0 +1,1073 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gradients, Backpropagation and Optimisation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* Lesson-specific chart classes, all drawn from theme tokens */
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .ln-curve { stroke: var(--accent); stroke-width: 2.2; fill: none; }
+  .ln-path { stroke: var(--ink); stroke-width: 1.4; fill: none; }
+  .dot-step { fill: var(--ink); }
+  .dot-start { fill: var(--surface); stroke: var(--ink); stroke-width: 2; }
+  .ln-base { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+  .off-chart { fill: var(--bad) !important; }
+
+  /* Computation graph */
+  .edge { stroke: var(--line); stroke-width: 1.6; fill: none; }
+  .edge.fwd { stroke: var(--accent); stroke-width: 2.6; }
+  .edge.bwd { stroke: var(--fast); stroke-width: 2.6; }
+  .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+  .node.leaf rect { fill: var(--sunk); }
+  .node.fwd rect { stroke: var(--accent); stroke-width: 2.2; }
+  .node.bwd rect { stroke: var(--fast); stroke-width: 2.2; }
+  .figure svg text.nv { fill: var(--ink); font-size: 13px; font-weight: 500; }
+  .figure svg text.ng { fill: var(--fast); font-size: 11px; }
+  .edge-lab rect { fill: var(--fast); }
+  .figure svg .edge-lab text { fill: var(--surface); font-size: 11px; font-weight: 500; }
+  .step-box { background: var(--sunk); border-radius: 8px; padding: 12px 14px; font-size: 15px; min-height: 4.6em; max-width: var(--measure); }
+  .step-box .k { display: block; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+  .graph-key { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .graph-key i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .graph-key b { font-family: var(--font-mono); font-weight: 500; color: var(--fast); }
+
+  /* Depth sim */
+  .bar-v { fill: var(--bad); fill-opacity: .75; }
+  .bar-ok { fill: var(--accent); fill-opacity: .75; }
+  .bar-x { fill: var(--warn); fill-opacity: .8; }
+  .ln-zero { stroke: var(--ink); stroke-width: 1.2; }
+
+  /* Race */
+  .contour { stroke: var(--neutral); stroke-opacity: .55; stroke-width: 1; fill: none; }
+  .tr-sgd { stroke: var(--warn); }
+  .tr-mom { stroke: var(--t-edge); }
+  .tr-adam { stroke: var(--accent); }
+  .trail { stroke-width: 2; fill: none; stroke-linejoin: round; }
+  .end-sgd { fill: var(--warn); } .end-mom { fill: var(--t-edge); } .end-adam { fill: var(--accent); }
+  .mark-min { stroke: var(--ink); stroke-width: 1.6; }
+  .race-chart svg { cursor: crosshair; touch-action: manipulation; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .formula { grid-template-columns: minmax(0, 1fr); }
+  .formula math[display="block"] { overflow-x: auto; overflow-y: hidden; max-width: 100%; padding-bottom: 2px; }
+  .stat .v small { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .stat.sgd .k { color: var(--warn); } .stat.mom .k { color: var(--t-edge); } .stat.adam .k { color: var(--accent); }
+  .stat.sgd .k, .stat.mom .k, .stat.adam .k { font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F1 · Mathematics as intuition</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F1.3 · F1.8</span>
+        <span class="pill d">Day one</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Gradients, Backpropagation and Optimisation</h1>
+      <p class="dek">How a model finds out which way to adjust millions of numbers at once, why training sometimes stalls or explodes, and what optimisers such as Adam actually do about it.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Training is walking downhill on a loss surface in fog: backpropagation is the chain rule used to feel the slope in every direction at once, and an optimiser is the rule for how big a step to take, and in which direction.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Take a credit model that predicts whether a personal-loan customer will default. It has some adjustable numbers, called <strong>weights</strong>: how much to care about debt-to-income ratio, about missed payments, about salary transfers. A small logistic model has 40 of them. A fraud network on transaction sequences might have 2 million. An open-weights LLM you fine-tune on Arabic complaints has billions.</p>
+        <p>For any setting of the weights you can measure how wrong the model is on your training data. That single number is the <strong>loss</strong>. Picture every possible setting of the weights as a position on a landscape, with the loss as the height. Training means finding a low point.</p>
+        <p>The catch is that you're in thick fog. You can't see the landscape. You can only feel the slope under your feet. That slope is the <strong>gradient</strong>. So training is a loop: feel the slope, take a step downhill, repeat a few thousand or a few million times. How far you step each time is the <strong>learning rate</strong>, and it's the setting that most often makes or breaks a training run.</p>
+      </div>
+
+      <figure class="figure" id="fig-step">
+        <div class="fig-head"><span class="fig-title">One weight, one step at a time</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> press the four presets in order and play each one. Then make the bowl <b>sharper</b> without touching the learning rate. A step size that was fine becomes a disaster. What matters is the learning rate multiplied by the sharpness.</p>
+        <div class="btns" role="group" aria-label="Learning-rate presets">
+          <button class="btn" type="button" data-lr="0.05">Too small</button>
+          <button class="btn" type="button" data-lr="0.8">About right</button>
+          <button class="btn" type="button" data-lr="1.7">Zigzag</button>
+          <button class="btn" type="button" data-lr="2.15">Too big</button>
+          <button class="btn" type="button" id="lr-play">▶ Play the steps</button>
+        </div>
+        <div class="two-up">
+          <div class="chart-wrap" id="lr-curve"></div>
+          <div class="chart-wrap" id="lr-loss"></div>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-eta">Learning rate η <output for="s-eta"></output></label><input type="range" id="s-eta" min="0" max="100" step="0.5"></div>
+          <div class="ctl"><label for="s-sharp">Sharpness of the bowl (curvature) <output for="s-sharp"></output></label><input type="range" id="s-sharp" min="0.5" max="4" step="0.1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="lr-prod-box"><div class="k">Learning rate × sharpness</div><div class="v" id="lr-prod"></div><div class="s" id="lr-regime"></div></div>
+          <div class="stat"><div class="k">Loss after 30 steps</div><div class="v" id="lr-final"></div><div class="s">as a multiple of the starting loss</div></div>
+          <div class="stat"><div class="k">Steps to cut loss to 1%</div><div class="v" id="lr-steps"></div><div class="s" id="lr-steps-s"></div></div>
+          <div class="stat"><div class="k">Largest learning rate that converges</div><div class="v" id="lr-max"></div><div class="s">2 ÷ sharpness</div></div>
+        </div>
+        <p class="sim-note">Simulated: loss = ½ × sharpness × w², a bowl, which is the shape every smooth loss takes near its minimum. Each step is w ← w − η × slope. The numbers are exact.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things should stand out.</p>
+        <ul>
+          <li><strong>Step size alone means nothing.</strong> What matters is the learning rate times the curvature. Below 1, you slide smoothly to the bottom. Between 1 and 2 you overshoot each time and zigzag inwards. Above 2, each overshoot is bigger than the last and the loss explodes. That last case is the “loss went to NaN” message every ML engineer has seen.</li>
+          <li><strong>Too small is a quiet failure.</strong> Nothing goes wrong on screen. Training just takes 20 times longer, or stops before it gets anywhere, and someone concludes the features are weak.</li>
+          <li><strong>A real model has millions of directions, each with its own sharpness.</strong> One learning rate has to be safe in the sharpest direction, which makes it painfully slow in the flattest. That single tension explains almost every optimiser invented since the 1960s, and it's where this lesson ends up.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Every training run is the same three-step loop: measure the loss, compute its gradient with backpropagation, step against the gradient. Part 2 explains where the gradient comes from and why it can vanish or explode, then how optimisers choose the step.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-derivative">Derivatives: sensitivity of one number to another</h3>
+      <div class="prose">
+        <p>A derivative answers one question: <em>if I nudge this input a little, how much does the output move?</em> If a credit model's probability of default is 0.08 and its derivative with respect to debt-to-income ratio is 0.30, then raising the ratio by 0.01 raises the probability by about 0.003. That's all a derivative is, an exchange rate between two quantities, valid for small changes.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>f</mi><mo>(</mo><mi>x</mi><mo>+</mo><mi>h</mi><mo>)</mo><mo>≈</mo><mi>f</mi><mo>(</mo><mi>x</mi><mo>)</mo><mo>+</mo><msup><mi>f</mi><mo>′</mo></msup><mo>(</mo><mi>x</mi><mo>)</mo><mo>·</mo><mi>h</mi></math>
+        <p class="where">For a small nudge <i>h</i>, the output moves by the derivative times the nudge. The approximation gets worse as <i>h</i> grows, because the curve bends. That bending is the curvature from Simulation 1, and it's why big steps go wrong.</p>
+      </div>
+
+      <h3 class="sub" id="m-gradient">The gradient: every sensitivity at once</h3>
+      <div class="prose">
+        <p>A model has many weights, so the loss has many derivatives, one per weight. Stack them into a list and you have the <strong>gradient</strong>, written ∇L. Each entry is a <em>partial</em> derivative: how the loss moves if you nudge that one weight and hold every other weight still.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mo>∇</mo><mi>L</mi><mo>=</mo><mo>(</mo><mfrac><mrow><mo>∂</mo><mi>L</mi></mrow><mrow><mo>∂</mo><msub><mi>w</mi><mn>1</mn></msub></mrow></mfrac><mo>,</mo><mspace width="0.3em"></mspace><mfrac><mrow><mo>∂</mo><mi>L</mi></mrow><mrow><mo>∂</mo><msub><mi>w</mi><mn>2</mn></msub></mrow></mfrac><mo>,</mo><mspace width="0.3em"></mspace><mo>…</mo><mo>,</mo><mspace width="0.3em"></mspace><mfrac><mrow><mo>∂</mo><mi>L</mi></mrow><mrow><mo>∂</mo><msub><mi>w</mi><mi>n</mi></msub></mrow></mfrac><mo>)</mo></math>
+        <math display="block"><mi>w</mi><mo>←</mo><mi>w</mi><mo>−</mo><mi>η</mi><mspace width="0.15em"></mspace><mo>∇</mo><mi>L</mi></math>
+        <p class="where">First line: the gradient is a vector with one entry per weight. Second line: gradient descent moves every weight a small amount <i>η</i> (the learning rate) against its own entry.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Two geometric facts make the gradient special, and both come from the dot product (F1.1). For a small step Δ<i>w</i>, the loss changes by about ∇L · Δ<i>w</i>. So:</p>
+        <ul>
+          <li><strong>The gradient points in the direction of steepest ascent.</strong> Of all steps of a given length, the one that raises the loss most is the one aligned with the gradient. Its negative is steepest descent.</li>
+          <li><strong>It is perpendicular to the contour lines.</strong> Moving along a contour doesn't change the loss, so that direction has zero dot product with the gradient. You'll see this in Simulation 4: plain gradient descent always crosses contours at right angles, which is exactly why it zigzags in a narrow valley.</li>
+        </ul>
+        <p>The size of the gradient matters too. A large gradient means a steep slope, and a gradient near zero means you're on flat ground. Flat ground could be the bottom, a plateau, or a saddle. The gradient alone can't tell you which.</p>
+      </div>
+
+      <h3 class="sub" id="m-backprop">The chain rule and backpropagation</h3>
+      <div class="prose">
+        <p>A model is a chain of simple operations. For a one-neuron credit model: multiply each input by its weight, add them up with a bias to get <i>z</i>, squash <i>z</i> through a sigmoid to get a probability <i>p</i>, then score <i>p</i> against what really happened with log loss (F1.7). Each step is easy to differentiate on its own. The <strong>chain rule</strong> says the sensitivity of the whole chain is the product of the sensitivities of its links.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mfrac><mrow><mo>∂</mo><mi>L</mi></mrow><mrow><mo>∂</mo><msub><mi>w</mi><mn>1</mn></msub></mrow></mfrac><mo>=</mo><mfrac><mrow><mo>∂</mo><mi>L</mi></mrow><mrow><mo>∂</mo><mi>p</mi></mrow></mfrac><mo>·</mo><mfrac><mrow><mo>∂</mo><mi>p</mi></mrow><mrow><mo>∂</mo><mi>z</mi></mrow></mfrac><mo>·</mo><mfrac><mrow><mo>∂</mo><mi>z</mi></mrow><mrow><mo>∂</mo><msub><mi>w</mi><mn>1</mn></msub></mrow></mfrac><mo>=</mo><mo>(</mo><mi>p</mi><mo>−</mo><mi>y</mi><mo>)</mo><mo>·</mo><msub><mi>x</mi><mn>1</mn></msub></math>
+        <p class="where">If the loss moves 3 units per unit of <i>p</i>, and <i>p</i> moves 0.25 per unit of <i>z</i>, then the loss moves 3 × 0.25 = 0.75 per unit of <i>z</i>. Multiply the local exchange rates along the path. For log loss and a sigmoid, the first two factors collapse to the prediction error <i>p − y</i>.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Backpropagation</strong> is the chain rule organised cleverly. Run the model forwards once and keep every intermediate value. Then start at the loss and walk backwards. At each node, take the gradient arriving from above, multiply by that node's local derivative, and pass the result down to each input. Gradients that branches share, such as ∂L/∂<i>z</i> here, are computed once and reused by every weight below them.</p>
+      </div>
+
+      <figure class="figure" id="fig-graph">
+        <div class="fig-head"><span class="fig-title">Backpropagation, one customer at a time</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> press <b>Next step</b> eight times: four steps forward, four backward. Watch each orange gradient being made from the one above it times a local derivative. Then apply a gradient step and see the loss fall. Switch the customer to <b>Repaid</b> and the gradients flip sign.</p>
+        <div class="btns" role="group" aria-label="Step through the graph">
+          <button class="btn" type="button" id="g-prev">◀ Back</button>
+          <button class="btn" type="button" id="g-next">Next step ▶</button>
+          <button class="btn" type="button" id="g-all">Run all</button>
+          <button class="btn" type="button" id="g-reset">Reset weights</button>
+        </div>
+        <div class="chart-wrap" id="graph-chart"></div>
+        <div class="graph-key">
+          <span><i style="background:var(--accent)"></i>Forward pass: values</span>
+          <span><i style="background:var(--fast)"></i>Backward pass: gradients</span>
+          <span><b>g</b> = ∂(loss) / ∂(this node)</span>
+        </div>
+        <div class="step-box" aria-live="polite"><span class="k" id="g-step-k"></span><span id="g-step-t"></span></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-x1">Debt-to-income ratio x₁ <output for="s-x1"></output></label><input type="range" id="s-x1" min="0" max="1" step="0.01"></div>
+          <div class="ctl"><label for="s-x2">Missed payments in last 12 months x₂ <output for="s-x2"></output></label><input type="range" id="s-x2" min="0" max="6" step="1"></div>
+          <div class="ctl"><label for="s-geta">Learning rate for the update <output for="s-geta"></output></label><input type="range" id="s-geta" min="0.1" max="4" step="0.1"></div>
+        </div>
+        <div class="btns">
+          <button class="btn" type="button" id="g-y1" aria-pressed="true">Customer defaulted (y = 1)</button>
+          <button class="btn" type="button" id="g-y0" aria-pressed="false">Customer repaid (y = 0)</button>
+          <button class="btn" type="button" id="g-apply">Apply one gradient step</button>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Predicted default probability</div><div class="v" id="g-p"></div><div class="s" id="g-p-s"></div></div>
+          <div class="stat"><div class="k">Log loss</div><div class="v" id="g-loss"></div><div class="s" id="g-loss-s"></div></div>
+          <div class="stat"><div class="k">∂L/∂z = p − y</div><div class="v" id="g-err"></div><div class="s">the prediction error</div></div>
+          <div class="stat ok"><div class="k">Nudge w₂ by +0.01</div><div class="v" id="g-nudge"></div><div class="s" id="g-nudge-s"></div></div>
+        </div>
+        <p class="sim-note">Simulated: one customer and a one-neuron logistic model. Every number is computed exactly from the formulas shown. Real training averages these gradients over thousands of customers before each step.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Look at what the backward pass gave you. One sweep produced the gradient for every weight, and for every input too. That's the whole trick. A naive alternative is to nudge each weight separately and re-run the model to see what changes. For 7 billion weights that's 7 billion forward passes per step. Backpropagation gets all of them for roughly the cost of two or three forward passes, whatever the number of weights. In the literature this is <strong>reverse-mode automatic differentiation</strong>. PyTorch and JAX build the graph as your code runs and do the backward sweep for you when you call <code>loss.backward()</code>.</p>
+        <p>The price is memory. The backward pass needs the forward values (<i>p</i> and <i>x</i> above), so every intermediate activation is stored until it's used. For large models, activation memory, not weight memory, is often what runs out first. Techniques such as gradient checkpointing trade it back for extra compute by recomputing some activations.</p>
+      </div>
+
+      <h3 class="sub" id="m-vanish">Vanishing and exploding gradients</h3>
+      <div class="prose">
+        <p>The chain rule multiplies. A deep network is a long chain, so the gradient reaching the first layer is a product of dozens of local factors. If those factors are typically below 1, the product shrinks exponentially. If they're above 1, it grows exponentially. There's very little room in between.</p>
+        <p>The sigmoid's slope is at most 0.25, so a chain of 20 sigmoid layers can shrink the gradient by 0.25<sup>20</sup>, about 10<sup>−12</sup>. The early layers then get updates a trillion times smaller than the late ones, and effectively never learn. This is why networks deeper than a few layers were nearly untrainable until around 2010–2015, and why recurrent networks struggled to remember anything more than a few dozen steps back in a transaction sequence.</p>
+      </div>
+
+      <figure class="figure" id="fig-depth">
+        <div class="fig-head"><span class="fig-title">Why deep networks stopped learning</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> with <b>Sigmoid</b>, raise the depth from 5 to 30 and watch the bars fall off a cliff. Switch to <b>ReLU</b>: much better. Now set 40 layers and nudge the initial weight scale to 1.3, and it explodes; drop it to 0.7 and it vanishes again. Then pick <b>Residual + norm</b>, the design inside every modern transformer, and try to break it.</p>
+        <div class="btns" role="group" aria-label="Network design">
+          <button class="btn" type="button" data-act="sigmoid">Sigmoid</button>
+          <button class="btn" type="button" data-act="tanh">Tanh</button>
+          <button class="btn" type="button" data-act="relu">ReLU</button>
+          <button class="btn" type="button" data-act="res">Residual + norm</button>
+        </div>
+        <div class="chart-wrap" id="depth-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-depth">Depth (layers) <output for="s-depth"></output></label><input type="range" id="s-depth" min="2" max="50" step="1"></div>
+          <div class="ctl"><label for="s-scale">Initial weight scale (1 = standard) <output for="s-scale"></output></label><input type="range" id="s-scale" min="0.5" max="2" step="0.05"></div>
+        </div>
+        <div class="btns"><button class="btn" type="button" id="d-new">New random network</button></div>
+        <div class="stats">
+          <div class="stat" id="d-first-box"><div class="k">Gradient at layer 1 ÷ gradient at the output</div><div class="v" id="d-first"></div><div class="s" id="d-first-s"></div></div>
+          <div class="stat"><div class="k">Typical change per layer</div><div class="v" id="d-per"></div><div class="s">multiplied each layer going back</div></div>
+          <div class="stat" id="d-dead-box"><div class="k">Layers effectively frozen</div><div class="v" id="d-dead"></div><div class="s">gradient under 1/1,000 of the output's</div></div>
+        </div>
+        <p class="sim-note">Simulated: a real 32-unit-wide network with random weights and a random input, run forwards then backwards in your browser. Bars show the size of the backpropagated gradient arriving at each layer, ∂L/∂(layer input). “Standard” scale means Glorot-style for sigmoid and tanh, He-style for ReLU.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The fixes became the standard toolkit of deep learning (F5.2):</p>
+        <ul>
+          <li><strong>ReLU activations</strong>, whose slope is exactly 1 wherever they're active, so they don't shrink the gradient by themselves.</li>
+          <li><strong>Careful initialisation</strong> (Glorot, then He), which sets the random starting weights so that each layer neither shrinks nor grows the signal on average. The scale slider shows how narrow that window is.</li>
+          <li><strong>Residual connections</strong>, which compute <i>h</i> + <i>f</i>(<i>h</i>) instead of <i>f</i>(<i>h</i>). The “+ <i>h</i>” gives the gradient a direct path back with a local derivative of 1, so it can't vanish along that route.</li>
+          <li><strong>Normalisation layers</strong>, which rescale activations at every layer so that nothing drifts out of range.</li>
+          <li><strong>Gradient clipping</strong>, a blunt safety net: if the gradient's overall size exceeds a limit, scale it down before stepping. Almost every LLM training and fine-tuning recipe uses it.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-explain">Gradients as explanations</h3>
+      <div class="prose">
+        <p>Backpropagation gives you gradients with respect to the <em>inputs</em> as a free by-product, as Simulation 2 showed. ∂<i>p</i>/∂<i>x</i> answers “which inputs, nudged slightly, would move this prediction most?” Shown as a heat map over an image, a document or a customer's features, it's called a <strong>saliency map</strong>. It's the oldest explanation method for neural networks.</p>
+        <p>It has a known weakness, and the sigmoid shows it plainly. For the one-neuron model, ∂<i>p</i>/∂<i>x</i><sub>1</sub> = <i>p</i>(1 − <i>p</i>) × <i>w</i><sub>1</sub>. For a customer the model is 99% sure will default, <i>p</i>(1 − <i>p</i>) is about 0.01, so every input looks unimportant, precisely when the inputs are pushing hardest. The gradient measures local sensitivity, not contribution.</p>
+        <p><strong>Integrated gradients</strong> fixes this by adding up the gradient along a straight path from a baseline customer to this customer. Its attributions sum exactly to the difference in prediction, the same “adds up” property that makes SHAP (F8.2) attractive. Gradient-based variants of SHAP are built the same way. So if a validator asks how a neural fraud model's reason codes are produced, the answer often starts with backpropagation.</p>
+      </div>
+
+      <h3 class="sub" id="m-landscape">Loss landscapes: convex, non-convex, saddles</h3>
+      <div class="prose">
+        <p>A loss surface is <strong>convex</strong> if it's bowl-shaped everywhere. A straight line between any two points on the surface lies above it. Convex problems have one lowest valley, so any downhill method that converges finds the best answer, and different solvers agree. Logistic regression with log loss is convex. That's a quiet reason credit scorecards are regulator-friendly: the same data gives the same coefficients, whoever fits them.</p>
+        <p>Neural networks are <strong>non-convex</strong>. Their landscapes have many low regions, plateaus and ridges, and where you end up depends on the random starting point, the data order and the optimiser. Two networks trained on identical data with different random seeds can have the same AUC and still disagree on thousands of individual customers. That has consequences when one of those customers is declined.</p>
+        <p>For decades the worry was getting stuck in a bad local minimum. In high dimensions it mostly isn't the problem. For a point to be a local minimum, the surface has to curve upwards in <em>every</em> direction. With a million directions, a flat point is far more likely to curve up in some and down in others. That's a <strong>saddle point</strong>, like a mountain pass. Saddles are what make training plateau. The gradient near them is tiny, so plain gradient descent creeps for a long time before it finds the downhill way out. Research since 2014 suggests that in large networks, most high-loss critical points are saddles, and most local minima are nearly as good as each other.</p>
+      </div>
+
+      <h3 class="sub" id="m-lr">Learning rate, noise and batch size</h3>
+      <div class="prose">
+        <p>Simulation 1 showed the core rule. On a bowl with curvature <i>a</i>, gradient descent converges only if <i>η</i> &lt; 2/<i>a</i>. In a real network the binding constraint is the sharpest direction, measured by the largest eigenvalue of the curvature matrix (the Hessian). A striking 2021 finding, the <strong>edge of stability</strong>, is that full-batch training tends to push the sharpness up until it sits right at 2/<i>η</i> and then hovers there. The loss keeps falling, but not smoothly. Networks adapt their landscape to the step size you choose.</p>
+        <p>In practice nobody computes the gradient on all the data at once. <strong>Stochastic gradient descent (SGD)</strong> estimates it from a random mini-batch of, say, 256 customers. The estimate is noisy, and the noise is mostly useful. It's cheap, it jostles the weights off saddles, and it tends to steer away from very sharp minima, which often generalise worse.</p>
+        <p>Batch size and learning rate are linked. A bigger batch gives a less noisy gradient, so you can take bigger steps. The <strong>linear scaling rule</strong> says double the batch, double the learning rate, and it works up to a point. Beyond the <strong>critical batch size</strong>, extra examples per step stop buying faster progress and you're just spending compute. Recent work finds that the critical batch size grows with the amount of training data much more than with model size.</p>
+      </div>
+
+      <h3 class="sub" id="m-optimisers">Momentum, RMSProp and Adam</h3>
+      <div class="prose">
+        <p>Plain gradient descent has two weaknesses. It zigzags across narrow valleys, because the sharp direction limits the step size while the flat direction starves. And it crawls near saddles, where the gradient is tiny. Modern optimisers fix these with two ideas.</p>
+        <p><strong>Momentum</strong> keeps a running average of recent gradients and steps along that instead. Zigzag components alternate in sign, so they cancel. The consistent downhill component adds up. It works like a heavy ball rolling down the valley. With the usual setting, <i>β</i> = 0.9, a steady gradient gets amplified up to 10 times, because 1/(1 − 0.9) = 10.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>v</mi><mo>←</mo><mi>β</mi><mi>v</mi><mo>+</mo><mi>g</mi><mspace width="1.2em"></mspace><mi>w</mi><mo>←</mo><mi>w</mi><mo>−</mo><mi>η</mi><mi>v</mi></math>
+        <p class="where"><i>g</i> is the current gradient and <i>v</i> is the velocity, a decaying sum of past gradients.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Per-parameter step sizes</strong> attack the curvature mismatch directly. RMSProp keeps a running average of each weight's <em>squared</em> gradient and divides each step by its square root. Weights with consistently large gradients get smaller steps, and weights with tiny gradients get bigger ones. <strong>Adam</strong> (2014) combines this with momentum, plus a correction for the first few steps when the averages are still near zero.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>m</mi><mo>←</mo><msub><mi>β</mi><mn>1</mn></msub><mi>m</mi><mo>+</mo><mo>(</mo><mn>1</mn><mo>−</mo><msub><mi>β</mi><mn>1</mn></msub><mo>)</mo><mi>g</mi></math>
+        <math display="block"><mi>s</mi><mo>←</mo><msub><mi>β</mi><mn>2</mn></msub><mi>s</mi><mo>+</mo><mo>(</mo><mn>1</mn><mo>−</mo><msub><mi>β</mi><mn>2</mn></msub><mo>)</mo><msup><mi>g</mi><mn>2</mn></msup></math>
+        <math display="block"><mi>w</mi><mo>←</mo><mi>w</mi><mo>−</mo><mi>η</mi><mfrac><mover><mi>m</mi><mo>^</mo></mover><mrow><msqrt><mover><mi>s</mi><mo>^</mo></mover></msqrt><mo>+</mo><mi>ε</mi></mrow></mfrac></math>
+        <p class="where"><i>m</i> is the momentum and <i>s</i> the running average of squared gradients, both kept separately for every weight. Hats mean bias-corrected. Defaults: <i>β</i><sub>1</sub> = 0.9, <i>β</i><sub>2</sub> = 0.999, often 0.95 for LLMs. The ratio is roughly ±1 per step whatever the gradient's raw size, so <i>η</i> becomes a step length in weight units.</p>
+      </div>
+
+      <figure class="figure" id="fig-race">
+        <div class="fig-head"><span class="fig-title">Optimiser race</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> on the <b>stretched valley</b>, watch plain SGD crawl while momentum and Adam reach the bottom. On the <b>saddle</b>, look at the loss chart: SGD sits on a long plateau before it escapes. Then <b>tilt the valley</b>: Adam loses much of its edge, because its per-weight step sizes only help along the weight axes. Click the contour map to choose a new start.</p>
+        <div class="btns" role="group" aria-label="Loss surface">
+          <button class="btn" type="button" data-surf="valley">Stretched valley</button>
+          <button class="btn" type="button" data-surf="tilt">Tilted valley</button>
+          <button class="btn" type="button" data-surf="saddle">Saddle point</button>
+          <button class="btn" type="button" id="r-play">▶ Race</button>
+        </div>
+        <div class="chart-wrap race-chart" id="race-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--warn)"></i>SGD</span>
+          <span><i style="background:var(--t-edge)"></i>Momentum (β = 0.9)</span>
+          <span><i style="background:var(--accent)"></i>Adam</span>
+          <span><i style="background:var(--ink);height:2px"></i>+ marks the minimum</span>
+        </div>
+        <div class="chart-wrap" id="race-loss"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-reta">Learning rate (shared) <output for="s-reta"></output></label><input type="range" id="s-reta" min="0" max="100" step="0.5"></div>
+          <div class="ctl"><label for="s-rsteps">Steps <output for="s-rsteps"></output></label><input type="range" id="s-rsteps" min="10" max="300" step="5"></div>
+        </div>
+        <div class="toggles" role="group" aria-label="Options">
+          <button class="toggle" type="button" data-opt="sgd" aria-pressed="true">SGD</button>
+          <button class="toggle" type="button" data-opt="mom" aria-pressed="true">Momentum</button>
+          <button class="toggle" type="button" data-opt="adam" aria-pressed="true">Adam</button>
+          <button class="toggle" type="button" id="r-noise" aria-pressed="false">Mini-batch noise</button>
+        </div>
+        <div class="stats">
+          <div class="stat sgd"><div class="k">SGD</div><div class="v" id="r-sgd"></div><div class="s" id="r-sgd-s"></div></div>
+          <div class="stat mom"><div class="k">Momentum</div><div class="v" id="r-mom"></div><div class="s" id="r-mom-s"></div></div>
+          <div class="stat adam"><div class="k">Adam</div><div class="v" id="r-adam"></div><div class="s" id="r-adam-s"></div></div>
+        </div>
+        <p class="sim-note">Simulated: exact two-weight surfaces (a quadratic valley with a 40:1 curvature ratio, the same valley rotated 35°, and a saddle with minima either side). Big numbers are loss above the minimum after the chosen steps. Noise is seeded, so each optimiser gets the same noise. One learning rate is shared, but for Adam it means a step length rather than a gradient multiplier.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The stretched valley is not an abstract curiosity. It's what you get when one input is an account balance in AED, ranging into the millions, and another is a ratio between 0 and 1. The loss is far more sensitive to one weight than the other, so the valley is long and thin. Standardising features before training is the cheapest optimiser upgrade there is.</p>
+        <p>Push the shared learning rate above 0.5 on either valley and SGD diverges. That's Simulation 1's rule again: the sharp direction has curvature 4, and 2 ÷ 4 = 0.5. Momentum and Adam survive well beyond it.</p>
+        <p>The tilted valley shows Adam's limit. Its rescaling is <em>diagonal</em>: one number per weight, aligned with the weight axes. When the sharp and flat directions are mixtures of weights, as they mostly are in real networks, a diagonal rescaling can't fully straighten the valley. The newer optimisers in Part 4, such as Shampoo, SOAP and Muon, go after exactly this gap by working with whole weight matrices rather than individual weights.</p>
+        <p>One more detail matters in every fine-tuning script you'll read. <strong>AdamW</strong> applies weight decay (shrinking weights towards zero) separately from the adaptive step. The older approach added an L2 penalty to the gradient, and Adam's division by √<i>s</i> then weakened the decay on exactly the weights that move most. AdamW decouples the two, and it's now the default almost everywhere.</p>
+      </div>
+
+      <h3 class="sub" id="m-schedules">Warmup and schedules</h3>
+      <div class="prose">
+        <p>The best learning rate changes during training, so almost nobody uses a constant one.</p>
+        <ul>
+          <li><strong>Warmup.</strong> Start near zero and ramp up over the first few hundred or thousand steps. At the start, the weights are random, the landscape is often at its sharpest, and Adam's running averages are based on very few gradients. Full-size steps then can throw the model somewhere it never recovers from. Warmup gives the network time to move to calmer ground.</li>
+          <li><strong>Decay.</strong> Towards the end, shrink the step so the weights settle into the bottom of the valley instead of bouncing around it. Common shapes: linear decay to zero, cosine decay, and step drops.</li>
+          <li><strong>Warmup-stable-decay (WSD).</strong> Hold the rate constant for most of training, then decay sharply at the end. Its practical appeal for large runs is that you don't have to fix the training length in advance: you can branch off and decay from any checkpoint.</li>
+        </ul>
+        <p>A useful mental picture from recent work is the <strong>river valley</strong>. The high constant rate makes fast progress along the valley floor while bouncing off its walls. The final decay stops the bouncing and reveals the progress already made. That's why loss curves under WSD drop sharply once the decay begins.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTIONS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Gradients are the engine underneath almost every model in the curriculum, and they turn up in places you might not expect: explanations, attacks and privacy.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F1.7 · Cross-entropy</span><span class="t">The loss you differentiate</span><p>Log loss is cross-entropy. Its gradient with a sigmoid or softmax output is simply prediction minus truth, which is why it's the default classification loss.</p></div>
+        <div class="link-card"><span class="code">F4.3 · Gradient boosting</span><span class="t">Gradient descent on functions</span><p>XGBoost and LightGBM fit each new tree to the negative gradient of the loss. Their “learning rate” is the same idea: shrink each step so it doesn't overshoot.</p></div>
+        <div class="link-card"><span class="code">F4.2 · Logistic regression</span><span class="t">Convex, so the answer is unique</span><p>Scorecard coefficients don't depend on the solver or the starting point. Neural networks give up that guarantee, which validators notice.</p></div>
+        <div class="link-card"><span class="code">F5.2 · Initialisation, normalisation, residuals</span><span class="t">The vanishing-gradient cure</span><p>Everything in Simulation 3 that kept the bars level is a standard architecture choice. Transformers depend on all of it.</p></div>
+        <div class="link-card"><span class="code">F6.2 · Learning rates, schedules, batch size</span><span class="t">The operational side</span><p>How to pick a learning rate in practice, run a range test, and change batch size without breaking training.</p></div>
+        <div class="link-card"><span class="code">F6.4 · Reading loss curves</span><span class="t">Plateaus, spikes and divergence</span><p>A flat stretch is often a saddle, a spike is often an exploding gradient, and a rising curve is a learning rate above 2/sharpness.</p></div>
+        <div class="link-card"><span class="code">F8.2 · SHAP</span><span class="t">Gradients as reason codes</span><p>Gradient-based attributions such as integrated gradients and gradient SHAP explain neural models. Know their saturation blind spot.</p></div>
+        <div class="link-card"><span class="code">G1.4 · Adversarial examples</span><span class="t">The attacker's gradient</span><p>The gradient with respect to the inputs tells an attacker the cheapest change that flips a decision. Fraudsters probing limits are doing a slow, manual version.</p></div>
+        <div class="link-card"><span class="code">A11.3 · Differential privacy</span><span class="t">Privacy lives in the optimiser</span><p>DP-SGD clips each customer's gradient and adds noise before the step, which bounds how much any one customer can influence the model.</p></div>
+        <div class="link-card"><span class="code">M2.4 · Fine-tuning and LoRA</span><span class="t">Optimiser memory is the bill</span><p>Adam stores two extra numbers per weight. LoRA trains a small fraction of the weights, so the optimiser state shrinks and fine-tuning fits on bank-owned GPUs.</p></div>
+        <div class="link-card"><span class="code">R2.4 · Training efficiency: Muon, μP</span><span class="t">The research frontier</span><p>Matrix-aware optimisers and hyperparameter transfer across model sizes. Part 4 gives the short version.</p></div>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Backpropagation is settled science, unchanged in principle since 1986. Optimisers are not settled. AdamW has been the default for about seven years and is still the safe answer. The live questions are whether matrix-aware optimisers such as Muon are worth switching to, how to schedule learning rates when you don't know how long you'll train, and how big a batch can usefully get.</p>
+      </div>
+      <p class="asof" style="margin-top:18px">Checked on 29 October 2026. Tags show how established each practice is:
+        <span class="status live">Live</span> standard in real use,
+        <span class="status pilot">Pilot</span> used by some teams, not yet standard,
+        <span class="status prop">Proposed</span> research results.</p>
+
+      <h3 class="sub" id="f-landscape">What people actually use</h3>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Setting</th><th>Typical choice, late 2026</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Logistic regression scorecard</b></td><td>Convex, so Newton-type solvers such as L-BFGS (scikit-learn's default). There's no learning rate to tune.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Gradient-boosted trees</b></td><td>Gradient descent in function space. The learning rate is the shrinkage per tree, typically 0.01–0.1 with more trees.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Fine-tuning a pretrained transformer or LoRA adapter</b></td><td>AdamW, short warmup, linear or cosine decay, gradient clipping. Learning rates around 10<sup>−5</sup> for full fine-tuning and 10<sup>−4</sup> for LoRA are common starting points.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Training a mid-sized network from scratch</b></td><td>AdamW with warmup, cosine or one-cycle decay, and clipping.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Frontier LLM pretraining</b></td><td>AdamW remains the most published choice (Llama 3, DeepSeek-V3). Muon for the hidden weight matrices, with AdamW for the rest, in Kimi K2, GLM-4.5 and GLM-5.</td><td><span class="status live">Live</span><br><small>both in production</small></td></tr>
+            <tr><td><b>Muon in PyTorch</b></td><td><code>torch.optim.Muon</code> now ships in PyTorch itself, documented for 2D hidden-layer weights only, with AdamW for embeddings, biases and the rest.</td><td><span class="status live">Live</span><br><small>adoption outside LLM labs still early</small></td></tr>
+            <tr><td><b>Schedule-free optimisers</b></td><td>Replace the learning-rate schedule with weight averaging. Won the self-tuning track of the AlgoPerf benchmark.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Shampoo, SOAP and other matrix preconditioners</b></td><td>Approximate second-order methods. Distributed Shampoo won AlgoPerf's externally tuned track. More engineering and memory than AdamW.</td><td><span class="status pilot">Pilot</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub" id="f-timeline">How we got here</h3>
+      <ol class="timeline" style="margin-top:16px">
+        <li><span class="yr">1964</span><div><div class="t">Momentum</div><p>Polyak's heavy-ball method: add a fraction of the previous step to the current one. Still inside every modern optimiser.</p><div class="src">Polyak, USSR Computational Mathematics and Mathematical Physics, 1964</div></div></li>
+        <li><span class="yr">1986</span><div><div class="t">Backpropagation popularised</div><p>Reverse-mode differentiation had appeared earlier (Linnainmaa, 1970), but this paper showed it could train hidden layers that learn useful features.</p><div class="src">Rumelhart, Hinton &amp; Williams, Nature, 1986</div></div></li>
+        <li><span class="yr">1994</span><div><div class="t">Vanishing gradients explained</div><p>Showed why gradient-trained recurrent networks fail to learn long-range dependencies: the products of local derivatives shrink or blow up exponentially.</p><div class="src">Bengio, Simard &amp; Frasconi, IEEE Trans. Neural Networks, 1994 (and Hochreiter, 1991)</div></div></li>
+        <li><span class="yr">2010–16</span><div><div class="t">Deep networks become trainable</div><p>Glorot initialisation (2010), ReLUs, He initialisation (2015), batch normalisation (2015) and residual connections (2016) together made 100-layer networks trainable.</p><div class="src">Glorot &amp; Bengio, AISTATS 2010; He et al., ICCV 2015 and CVPR 2016</div></div></li>
+        <li><span class="yr">2014</span><div><div class="t">Saddles, not local minima</div><p>Argued that in high dimensions, plateaus in training are mostly caused by saddle points.</p><div class="src">Dauphin et al., NeurIPS 2014</div></div></li>
+        <li><span class="yr">2014</span><div><div class="t">Adam</div><p>Momentum plus per-parameter step sizes from RMSProp, with bias correction. It became the default because it works reasonably well with little tuning.</p><div class="src">Kingma &amp; Ba, ICLR 2015 (arXiv 2014)</div></div></li>
+        <li><span class="yr">2017–18</span><div><div class="t">Large batches: warmup and the critical batch size</div><p>Trained ImageNet in an hour with a linear-scaling rule plus warmup. A year later, OpenAI showed the gradient noise scale predicts the batch size beyond which returns diminish.</p><div class="src">Goyal et al., 2017; McCandlish et al., 2018</div></div></li>
+        <li><span class="yr">2019</span><div><div class="t">AdamW</div><p>Decoupled weight decay from Adam's adaptive step. Now the default in PyTorch fine-tuning recipes and most LLM training.</p><div class="src">Loshchilov &amp; Hutter, ICLR 2019</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">Edge of stability</div><p>Full-batch gradient descent drives the sharpness up to 2/<i>η</i> and holds it there, so the classical “step below 2/sharpness” picture is something training actively negotiates.</p><div class="src">Cohen et al., ICLR 2021</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Schedule-free training and the AlgoPerf benchmark</div><p>Schedule-free AdamW removes the need to know the training length in advance. It won AlgoPerf's self-tuning track, and Distributed Shampoo won the externally tuned track, beating well-tuned Adam baselines.</p><div class="src">Defazio et al., NeurIPS 2024; Kasimbeg et al., ICLR 2025</div></div></li>
+        <li><span class="yr">2024–25</span><div><div class="t">Muon</div><p>Takes the momentum for each weight matrix and orthogonalises it with a few cheap matrix iterations, so every direction in the update gets a similar step. Introduced in late 2024 for speed-running small models. Moonshot AI then scaled it to LLMs and trained Kimi K2, a one-trillion-parameter model, on 15.5 trillion tokens with a variant called MuonClip, reporting no loss spikes.</p><div class="src">Jordan et al., blog, 2024; Liu et al., “Muon is Scalable for LLM Training”, 2025; Kimi K2 report, 2025</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Why WSD works, and how big batches can get</div><p>The river-valley explanation of warmup-stable-decay schedules, and evidence that the critical batch size scales mainly with data size, not model size.</p><div class="src">Wen et al., ICLR 2025; Zhang et al., ICLR 2025</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">The reality check on new optimisers</div><p>A careful benchmark found that most claimed 1.4–2× speed-ups over AdamW shrink once AdamW's own hyperparameters are properly tuned. Matrix-based optimisers such as Muon and SOAP kept a real edge, about 1.3–1.4× at 0.1 billion parameters, falling to about 1.1× at 1.2 billion.</p><div class="src">Wen, Hall, Ma &amp; Liang, “Fantastic Pretraining Optimizers and Where to Find Them”, ICLR 2026</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Muon in production and in PyTorch</div><p>Zhipu's GLM-5 (744 billion parameters) describes a Muon-based pretraining setup, following GLM-4.5. PyTorch now includes Muon in <code>torch.optim</code>.</p><div class="src">GLM-5 technical report, Feb 2026; PyTorch documentation</div></div></li>
+      </ol>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>AdamW with warmup, a decaying schedule and gradient clipping is still the correct default for anything a bank will train. Muon-style optimisers are a genuine but modest gain that matters at pretraining scale. Treat any claim of a 2× speed-up with suspicion until you know how well the AdamW baseline was tuned.</div>
+    </section>
+
+    <!-- ============================== 5. FAILURES ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These are the training problems you'll meet in real projects and in AI-generated training code. Each comes with the quickest way to catch it.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Loss suddenly becomes NaN or shoots upwards</div><p>The learning rate is above the stability limit for some sharp direction, often at the very start or after a batch with extreme values, such as a single AED 40 million corporate transfer in a retail dataset.</p><div class="spot"><b>Spot it</b>Log the gradient norm every step. A spike just before the loss jumps points to exploding gradients. Lower the learning rate, add warmup and clipping, and check the inputs for outliers.</div></li>
+        <li><div class="t">Loss falls a little, then goes flat</div><p>It could be a learning rate that's too small, a saddle plateau, vanishing gradients in early layers, or “dead” ReLUs that output zero for every input.</p><div class="spot"><b>Spot it</b>Look at per-layer gradient norms, as in Simulation 3. If early layers are thousands of times smaller than late ones, it's an architecture or initialisation problem, not a data problem.</div></li>
+        <li><div class="t">Unscaled features make a stretched valley</div><p>Balances in AED next to ratios between 0 and 1 give the narrow valley from Simulation 4. Training is slow, unstable, or both.</p><div class="spot"><b>Spot it</b>Check that inputs are standardised or log-transformed before a neural network sees them. Tree models don't care, but neural networks and regularised regressions do.</div></li>
+        <li><div class="t">Fine-tuning learning rate copied from a from-scratch recipe</div><p>A learning rate of 10<sup>−3</sup> on a pretrained Arabic-English model can wreck what it already knew within a few hundred steps. That's catastrophic forgetting.</p><div class="spot"><b>Spot it</b>Fine-tuning rates are usually 10–100 times smaller than pretraining rates. Check performance on a general held-out set, not only the new task.</div></li>
+        <li><div class="t">Adam with L2 when AdamW was meant</div><p>In PyTorch, <code>Adam(weight_decay=…)</code> adds an L2 penalty to the gradient. It isn't decoupled decay, so regularisation behaves differently from what the paper or recipe assumed.</p><div class="spot"><b>Spot it</b>Search the code for the optimiser line. If weight decay matters, it should be <code>AdamW</code>.</div></li>
+        <li><div class="t">Changing the batch size and keeping the learning rate</div><p>Moving to a bigger GPU and quadrupling the batch without touching the learning rate makes training effectively slower per example. Raising the rate without warmup can make it diverge.</p><div class="spot"><b>Spot it</b>Any change of batch size should come with a learning-rate re-check, ideally a short sweep.</div></li>
+        <li><div class="t">Schedule mismatched to the run</div><p>A cosine schedule set for 10 epochs but stopped at 3 leaves the learning rate high, so the model never settles. Resuming from a checkpoint can restart warmup by accident.</p><div class="spot"><b>Spot it</b>Plot the learning rate alongside the loss. It should be a deliberate shape that ends low.</div></li>
+        <li><div class="t">“Our new optimiser is twice as fast”</div><p>Most such claims compare against an AdamW baseline with untuned settings. Careful benchmarks shrink the gain to 10–40%.</p><div class="spot"><b>Spot it</b>Ask whether the AdamW baseline had its own learning-rate and weight-decay sweep, at the same scale and token budget.</div></li>
+        <li><div class="t">Different seed, different customers declined</div><p>Non-convex training means two equally accurate models can disagree on individual decisions. A validator re-running your training may get a different model.</p><div class="spot"><b>Spot it</b>Retrain with several seeds and measure how many decisions flip. Fix seeds and record library versions for reproducibility.</div></li>
+        <li><div class="t">AI-generated training loop with silent bugs</div><p>Typical errors: no <code>zero_grad()</code>, so gradients pile up across steps; <code>scheduler.step()</code> called per epoch when the schedule was defined per batch; gradients flowing into a model that was meant to be frozen.</p><div class="spot"><b>Spot it</b>Train on 10 examples. A correct loop should drive training loss to near zero. If it can't overfit a tiny set, something in the loop is broken.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Training a model is a controlled search. We measure how wrong it is, work out which way to adjust each of its settings to be less wrong, and repeat millions of times. Most failed projects don't fail on the idea. They fail because this search was set up badly, with steps too big, too small, or inputs on wildly different scales. The good news is these problems leave clear fingerprints in the training logs, so we can catch them early and cheaply.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“Backprop is reverse-mode autodiff: one forward pass storing activations, one backward pass multiplying local Jacobians, so the full gradient costs a small multiple of a forward pass. For training I'd default to AdamW with warmup, cosine or linear decay and gradient-norm clipping, standardised inputs, and per-layer gradient-norm logging. I'd sweep the learning rate first, because it's the most sensitive setting. For reproducibility I'd fix seeds and report variation across seeds. Muon is interesting at pretraining scale, but the tuned-baseline evidence puts its gain at about 1.1–1.4×, so I wouldn't switch for a bank-sized model without a test.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“The training loss went to NaN overnight. What happened?”</summary><div class="ans"><p>Most likely the update overshot in a sharp direction and the loss exploded: a learning rate too high for that point in training, a missing or too-short warmup, or an extreme input value producing a huge gradient. Mixed-precision overflow is another candidate. I'd check the gradient-norm log just before the failure, then add or tighten clipping, lower the peak learning rate, and look for outliers in that batch.</p></div></details>
+        <details class="reveal"><summary>“Why not just use the newest optimiser?”</summary><div class="ans"><p>Because the gains are smaller than headlines suggest and the switching cost is real. Careful benchmarks find matrix optimisers such as Muon roughly 1.1–1.4× faster than a properly tuned AdamW, with the gain shrinking as models grow. For models a bank trains or fine-tunes, a well-tuned AdamW recipe is the lower-risk choice. A new optimiser would need a like-for-like test with its own tuning budget.</p></div></details>
+        <details class="reveal"><summary>“Is our scorecard's solution the only possible one? Would a neural network's be?”</summary><div class="ans"><p>For logistic regression, yes, essentially. The loss is convex, so any solver that converges reaches the same coefficients, given the same data and regularisation. For a neural network, no. The landscape is non-convex, so different seeds and data orders give different models. They often have similar overall accuracy but disagree on individual customers, which matters for adverse-action reasons and for validation. Seed studies and ensembling are the usual responses.</p></div></details>
+        <details class="reveal"><summary>“After fine-tuning on our complaints data, the model got worse at general Arabic. Why?”</summary><div class="ans"><p>Classic catastrophic forgetting, usually from too high a learning rate or too many steps on a narrow dataset. The large updates overwrote general-purpose weights. Remedies: a learning rate 10–100 times lower than pretraining, warmup and decay, fewer epochs, LoRA so most weights are frozen, and mixing some general data into fine-tuning. Track a general benchmark alongside the task metric.</p></div></details>
+        <details class="reveal"><summary>“Can we use gradients to explain individual decisions?”</summary><div class="ans"><p>Yes, with care. The gradient of the prediction with respect to each input shows local sensitivity, but it fails when the model is saturated: a near-certain prediction has near-zero gradients everywhere. Integrated gradients or gradient-based SHAP fix this by accumulating gradients from a baseline, and their attributions add up to the change in prediction. Even then, they explain the model, not the world, so they need the same validation as any other reason-code method.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. SELF-CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones only need the formulas from Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A one-neuron credit model predicts p = 0.8 for a customer who repaid (y = 0). Their debt-to-income input is 0.5. What is ∂L/∂z, what is the gradient for that weight, and which way will gradient descent move the weight?</summary><div class="ans"><p>∂L/∂z = p − y = <strong>0.8</strong>. ∂L/∂w = 0.8 × 0.5 = <strong>0.4</strong>. Gradient descent subtracts η × 0.4, so the weight <strong>decreases</strong>. The model learns to give this kind of debt-to-income ratio less weight towards default, because it was wrongly alarmed.</p></div></details>
+        <details class="reveal"><summary>2. A loss is ½ × 4 × w². What is the largest learning rate that converges? What happens at η = 0.4?</summary><div class="ans"><p>The limit is 2 ÷ 4 = <strong>0.5</strong>. At η = 0.4 each step multiplies w by 1 − 0.4 × 4 = −0.6, so it <strong>overshoots and flips sign every step but still converges</strong>, shrinking by 40% each time.</p></div></details>
+        <details class="reveal"><summary>3. Each of 20 sigmoid layers multiplies the backward gradient by at most 0.25. How much smaller, at least, is the gradient reaching the first layer?</summary><div class="ans"><p>0.25<sup>20</sup> ≈ <strong>9 × 10<sup>−13</sup></strong>, nearly a trillion times smaller. That's why deep sigmoid networks barely trained, and why ReLUs, residual connections and careful initialisation became standard.</p></div></details>
+        <details class="reveal"><summary>4. With momentum β = 0.9 and a gradient that stays constant for many steps, how much bigger does the step become than plain SGD's?</summary><div class="ans"><p>The velocity tends to g × (1 + 0.9 + 0.9² + …) = g ÷ (1 − 0.9) = <strong>10 g</strong>. So the step is about 10 times larger along a consistent direction, while gradients that alternate in sign largely cancel.</p></div></details>
+        <details class="reveal"><summary>5. Two weights have steady gradients of 0.001 and 1,000. Roughly how big are Adam's steps for each, and why is that both useful and risky?</summary><div class="ans"><p>Both are about <strong>η</strong>, because Adam divides each gradient by the root of its own running mean square, which is about its own size. That's useful because the flat direction finally gets a sensible step. It's risky because Adam no longer reflects how important each direction is. A weight with tiny, noisy gradients can be pushed as hard as one that matters, which is one reason for warmup, decay and weight decay.</p></div></details>
+        <details class="reveal"><summary>6. True or false: in a large neural network, a point where the gradient is zero and the loss is still high is most likely a bad local minimum.</summary><div class="ans"><p><strong>False</strong>, in all likelihood. With millions of directions, a flat point is far more likely to curve down in at least one direction, which makes it a saddle. Saddles cause plateaus that noise, momentum and adaptive methods help escape.</p></div></details>
+        <details class="reveal"><summary>7. You move fine-tuning from a batch size of 16 to 128 on a bigger GPU. What should you check?</summary><div class="ans"><p>The learning rate. With 8 times the batch, the gradient is less noisy and the same rate takes 8 times fewer steps per epoch, so progress per example can drop. The linear scaling rule would suggest raising the rate, up to 8 times for SGD, less for Adam in practice, with warmup. Beyond the critical batch size the gain flattens. Run a short sweep rather than trusting a rule.</p></div></details>
+      </div>
+    </section>
+
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>I. Goodfellow, Y. Bengio, A. Courville. <a href="https://www.deeplearningbook.org/">Deep Learning</a>, chapters 4, 6.5 and 8. MIT Press, 2016.</li>
+        <li>G. Goh. <a href="https://distill.pub/2017/momentum/">Why Momentum Really Works</a>. Distill, 2017.</li>
+        <li>A. G. Baydin et al. <a href="https://jmlr.org/papers/v18/17-468.html">Automatic Differentiation in Machine Learning: a Survey</a>. JMLR, 2018.</li>
+        <li>D. Rumelhart, G. Hinton, R. Williams. <a href="https://www.nature.com/articles/323533a0">Learning Representations by Back-propagating Errors</a>. Nature, 1986.</li>
+        <li>Y. Bengio, P. Simard, P. Frasconi. <a href="https://ieeexplore.ieee.org/document/279181">Learning Long-Term Dependencies with Gradient Descent Is Difficult</a>. IEEE Trans. Neural Networks, 1994.</li>
+        <li>X. Glorot, Y. Bengio. <a href="https://proceedings.mlr.press/v9/glorot10a.html">Understanding the Difficulty of Training Deep Feedforward Neural Networks</a>. AISTATS, 2010.</li>
+        <li>K. He, X. Zhang, S. Ren, J. Sun. <a href="https://arxiv.org/abs/1512.03385">Deep Residual Learning for Image Recognition</a>. CVPR, 2016.</li>
+        <li>Y. Dauphin et al. <a href="https://arxiv.org/abs/1406.2572">Identifying and Attacking the Saddle Point Problem in High-Dimensional Non-Convex Optimization</a>. NeurIPS, 2014.</li>
+        <li>D. Kingma, J. Ba. <a href="https://arxiv.org/abs/1412.6980">Adam: A Method for Stochastic Optimization</a>. ICLR, 2015.</li>
+        <li>I. Loshchilov, F. Hutter. <a href="https://arxiv.org/abs/1711.05101">Decoupled Weight Decay Regularization</a>. ICLR, 2019.</li>
+        <li>P. Goyal et al. <a href="https://arxiv.org/abs/1706.02677">Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour</a>. 2017.</li>
+        <li>S. McCandlish, J. Kaplan, D. Amodei et al. <a href="https://arxiv.org/abs/1812.06162">An Empirical Model of Large-Batch Training</a>. 2018.</li>
+        <li>J. Cohen et al. <a href="https://arxiv.org/abs/2103.00065">Gradient Descent on Neural Networks Typically Occurs at the Edge of Stability</a>. ICLR, 2021.</li>
+        <li>D. S. Kalra, M. Barkeshli. <a href="https://arxiv.org/abs/2406.09405">Why Warmup the Learning Rate? Underlying Mechanisms and Improvements</a>. NeurIPS, 2024.</li>
+        <li>A. Defazio et al. <a href="https://arxiv.org/abs/2405.15682">The Road Less Scheduled</a>. NeurIPS, 2024.</li>
+        <li>P. Kasimbeg et al. <a href="https://arxiv.org/abs/2502.15015">Accelerating Neural Network Training: An Analysis of the AlgoPerf Competition</a>. ICLR, 2025.</li>
+        <li>K. Wen et al. <a href="https://arxiv.org/abs/2410.05192">Understanding Warmup-Stable-Decay Learning Rates: A River Valley Loss Landscape Perspective</a>. ICLR, 2025.</li>
+        <li>H. Zhang et al. <a href="https://arxiv.org/abs/2410.21676">How Does Critical Batch Size Scale in Pre-training?</a> ICLR, 2025.</li>
+        <li>K. Jordan et al. <a href="https://kellerjordan.github.io/posts/muon/">Muon: An Optimizer for Hidden Layers in Neural Networks</a>. Blog, 2024.</li>
+        <li>J. Liu et al. <a href="https://arxiv.org/abs/2502.16982">Muon is Scalable for LLM Training</a>. 2025.</li>
+        <li>Kimi Team. <a href="https://arxiv.org/abs/2507.20534">Kimi K2: Open Agentic Intelligence</a>. 2025.</li>
+        <li>GLM Team. <a href="https://arxiv.org/abs/2602.15763">GLM-5: from Vibe Coding to Agentic Engineering</a>. 2026.</li>
+        <li>K. Wen, D. Hall, T. Ma, P. Liang. <a href="https://arxiv.org/abs/2509.02046">Fantastic Pretraining Optimizers and Where to Find Them</a>. ICLR, 2026.</li>
+        <li>PyTorch. <a href="https://docs.pytorch.org/docs/stable/generated/torch.optim.Muon.html">torch.optim.Muon documentation</a>.</li>
+        <li>K. Simonyan, A. Vedaldi, A. Zisserman. <a href="https://arxiv.org/abs/1312.6034">Deep Inside Convolutional Networks: Visualising Image Classification Models and Saliency Maps</a>. 2013.</li>
+        <li>M. Sundararajan, A. Taly, Q. Yan. <a href="https://arxiv.org/abs/1703.01365">Axiomatic Attribution for Deep Networks</a> (integrated gradients). ICML, 2017.</li>
+        <li>S. Lundberg, S.-I. Lee. <a href="https://arxiv.org/abs/1705.07874">A Unified Approach to Interpreting Model Predictions</a>. NeurIPS, 2017.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F1: probability, Bayes' rule and base rates (F1.4)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  // ---------- Shared helpers ----------
+  const $ = id => document.getElementById(id);
+  const neg = s => String(s).replace(/-/g, "−");
+  const f = (v, d = 2) => neg(v.toFixed(d));
+  const SUP = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+  const sup = n => String(n).split("").map(c => SUP[c] || c).join("");
+  function sci(v) {
+    if (!isFinite(v)) return "∞";
+    if (v === 0) return "0";
+    const e = Math.floor(Math.log10(Math.abs(v)));
+    if (e >= -2 && e <= 3) return neg(v.toFixed(Math.max(0, 1 - e)));
+    let m = v / Math.pow(10, e);
+    if (Math.abs(m) >= 9.95) { m /= 10; return neg(m.toFixed(1)) + " × 10" + sup(e + 1); }
+    return neg(m.toFixed(1)) + " × 10" + sup(e);
+  }
+  function setPressed(sel, on) { document.querySelectorAll(sel).forEach(b => b.setAttribute("aria-pressed", String(on(b)))); }
+  function mkSvg(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function clipRect(svg, id, x, y, w, h) {
+    const cp = L.svg("clipPath", { id }, L.svg("defs", {}, svg));
+    L.svg("rect", { x, y, width: w, height: h }, cp);
+    return `url(#${id})`;
+  }
+  // Seeded random numbers, so simulations are reproducible
+  function rng(seed) {
+    return function () {
+      seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+      let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function gauss(r) { let u = 0; while (!u) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+
+  // =====================================================================
+  // Simulation 1: learning rate on a 1D bowl. L(w) = ½ a w²
+  // =====================================================================
+  const S1 = { eta: 0.3, a: 1, shown: 30 };
+  const W0 = -3, K1 = 30, WMAX = 4.5, LMAX = 20;
+  const etaMin = 0.005, etaMax = 5;
+  const etaFrom = v => Math.pow(10, L.lerp(Math.log10(etaMin), Math.log10(etaMax), v / 100));
+  const sliderFromEta = e => 100 * (Math.log10(e) - Math.log10(etaMin)) / (Math.log10(etaMax) - Math.log10(etaMin));
+  const fmtEta = e => e < 0.1 ? e.toFixed(3) : e.toFixed(2);
+  const etaIn = $("s-eta"), sharpIn = $("s-sharp");
+  function syncS1() {
+    etaIn.value = sliderFromEta(S1.eta); sharpIn.value = S1.a;
+    document.querySelector('output[for="s-eta"]').textContent = fmtEta(S1.eta);
+    document.querySelector('output[for="s-sharp"]').textContent = S1.a.toFixed(1);
+  }
+  etaIn.addEventListener("input", () => { s1Tok++; S1.eta = etaFrom(+etaIn.value); S1.shown = K1; syncS1(); renderS1(); });
+  sharpIn.addEventListener("input", () => { s1Tok++; S1.a = +sharpIn.value; S1.shown = K1; syncS1(); renderS1(); });
+  document.querySelectorAll("[data-lr]").forEach(b => b.addEventListener("click", () => {
+    S1.eta = L.clamp(+b.dataset.lr / S1.a, etaMin, etaMax); syncS1(); playS1();
+  }));
+  $("lr-play").addEventListener("click", playS1);
+  let s1Tok = 0;
+  function playS1() { const t = ++s1Tok; S1.shown = 0; renderS1(); L.tween(0, K1, 2600, v => { if (t !== s1Tok) return; S1.shown = Math.floor(v); renderS1(); }, () => { if (t !== s1Tok) return; S1.shown = K1; renderS1(); }); }
+
+  function renderS1() {
+    const r = 1 - S1.eta * S1.a;
+    const ws = [], ls = [];
+    for (let k = 0; k <= K1; k++) { const w = W0 * Math.pow(r, k); ws.push(w); ls.push(0.5 * S1.a * w * w); }
+    // Curve chart
+    const box = $("lr-curve");
+    const W = Math.max(280, box.clientWidth), H = 250, m = { l: 36, r: 10, t: 22, b: 32 };
+    const svg = mkSvg(box, W, H, "Loss bowl with gradient-descent steps");
+    const X = L.scale(-WMAX, WMAX, m.l, W - m.r), Y = L.scale(0, LMAX, H - m.b, m.t);
+    L.svg("text", { x: 0, y: 13, class: "lbl-ink" }, svg).textContent = "Loss as one weight changes";
+    for (let v = 0; v <= LMAX; v += 5) {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), class: "grid" }, svg);
+      L.svg("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end" }, svg).textContent = v;
+    }
+    for (let v = -4; v <= 4; v += 2) L.svg("text", { x: X(v), y: H - m.b + 16, "text-anchor": "middle" }, svg).textContent = neg(v);
+    L.svg("text", { x: (m.l + W - m.r) / 2, y: H - 3, "text-anchor": "middle" }, svg).textContent = "weight w (best value 0)";
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0), class: "ax" }, svg);
+    const clip = clipRect(svg, "lr-clip", m.l, m.t, W - m.l - m.r, H - m.t - m.b);
+    const g = L.svg("g", { "clip-path": clip }, svg);
+    const xs = L.range(-WMAX, WMAX, 200);
+    L.svg("path", { d: L.path(xs.map(x => [X(x), Y(0.5 * S1.a * x * x)])), class: "ln-curve" }, g);
+    // Path of steps: stop after the first point that leaves the chart
+    const pts = []; let off = -1;
+    for (let k = 0; k <= Math.min(S1.shown, K1); k++) {
+      pts.push([X(ws[k]), Y(ls[k])]);
+      if (Math.abs(ws[k]) > WMAX || ls[k] > LMAX) { off = k; break; }
+    }
+    L.svg("path", { d: L.path(pts), class: "ln-path" }, g);
+    pts.forEach((p, i) => L.svg("circle", { cx: p[0], cy: p[1], r: i === 0 ? 5 : 3.2, class: i === 0 ? "dot-start" : "dot-step" }, g));
+    if (off >= 0) {
+      const t = L.svg("text", { x: W - m.r - 4, y: m.t + 14, "text-anchor": "end", class: "off-chart" }, svg);
+      t.textContent = `Off the chart after ${off} step${off === 1 ? "" : "s"}`;
+    }
+    // Loss-by-step chart (log scale)
+    const box2 = $("lr-loss");
+    const W2 = Math.max(280, box2.clientWidth), m2 = { l: 44, r: 10, t: 22, b: 32 };
+    const svg2 = mkSvg(box2, W2, H, "Loss by step, log scale");
+    L.svg("text", { x: 0, y: 13, class: "lbl-ink" }, svg2).textContent = "Loss ÷ starting loss, by step (log scale)";
+    const lo = -8, hi = 4;
+    const X2 = L.scale(0, K1, m2.l, W2 - m2.r), Y2 = L.scale(lo, hi, H - m2.b, m2.t);
+    for (let e = lo; e <= hi; e += 2) {
+      L.svg("line", { x1: m2.l, x2: W2 - m2.r, y1: Y2(e), y2: Y2(e), class: e === 0 ? "ln-base" : "grid" }, svg2);
+      L.svg("text", { x: m2.l - 6, y: Y2(e) + 4, "text-anchor": "end" }, svg2).textContent = e === 0 ? "1" : "10" + sup(e);
+    }
+    for (let k = 0; k <= K1; k += 10) L.svg("text", { x: X2(k), y: H - m2.b + 16, "text-anchor": "middle" }, svg2).textContent = k;
+    L.svg("text", { x: (m2.l + W2 - m2.r) / 2, y: H - 3, "text-anchor": "middle" }, svg2).textContent = "step";
+    const clip2 = clipRect(svg2, "lr-clip2", m2.l, m2.t, W2 - m2.l - m2.r, H - m2.t - m2.b);
+    const g2 = L.svg("g", { "clip-path": clip2 }, svg2);
+    const L0 = ls[0];
+    const lp = [];
+    for (let k = 0; k <= S1.shown; k++) {
+      const rel = ls[k] / L0;
+      lp.push([X2(k), Y2(rel > 0 ? L.clamp(Math.log10(rel), lo - 1, hi + 1) : lo - 1)]);
+    }
+    L.svg("path", { d: L.path(lp), class: "ln-curve" }, g2);
+    lp.forEach(p => L.svg("circle", { cx: p[0], cy: p[1], r: 2.4, class: "dot-step" }, g2));
+
+    // Stats
+    const prod = S1.eta * S1.a;
+    let regime, cls;
+    if (prod < 0.3) { regime = "too small: a slow crawl"; cls = "warn"; }
+    else if (prod < 0.995) { regime = "smooth slide to the bottom"; cls = "ok"; }
+    else if (prod <= 1.005) { regime = "lands on the bottom in one step"; cls = "ok"; }
+    else if (prod < 1.995) { regime = "overshoots, zigzags inwards"; cls = "warn"; }
+    else if (prod <= 2.005) { regime = "bounces for ever"; cls = "bad"; }
+    else { regime = "each step overshoots more: diverges"; cls = "bad"; }
+    $("lr-prod").textContent = prod.toFixed(2);
+    $("lr-regime").textContent = regime;
+    $("lr-prod-box").className = "stat " + cls;
+    const fin = Math.pow(r, 2 * K1);
+    $("lr-final").textContent = fin < 1e-12 ? "< 10" + sup(-12) : sci(fin);
+    const ar = Math.abs(r);
+    let steps, stepsS;
+    if (ar < 1e-9) { steps = "1"; stepsS = "exactly at the bottom after one step"; }
+    else if (ar >= 0.99999) { steps = "Never"; stepsS = ar > 1.00001 ? "loss grows every step" : "loss never shrinks"; }
+    else { const k = Math.ceil(Math.log(0.01) / (2 * Math.log(ar))); steps = L.fmtInt(k); stepsS = "each step multiplies w by " + f(r, 2); }
+    $("lr-steps").textContent = steps; $("lr-steps-s").textContent = stepsS;
+    $("lr-max").textContent = (2 / S1.a).toFixed(2);
+  }
+
+  // =====================================================================
+  // Simulation 2: computation graph for a one-neuron credit model
+  // =====================================================================
+  const G0 = { w1: 2, w2: 0.6, b: -2.5 };
+  const G = { x1: 0.55, x2: 2, y: 1, w1: G0.w1, w2: G0.w2, b: G0.b, eta: 1, step: 0, note: "" };
+  const MAXSTEP = 8;
+  function lossAt(w1, w2, b) {
+    const p = L.sigmoid(w1 * G.x1 + w2 * G.x2 + b);
+    return G.y ? -Math.log(p) : -Math.log(1 - p);
+  }
+  function compute() {
+    const c = {};
+    c.m1 = G.w1 * G.x1; c.m2 = G.w2 * G.x2; c.z = c.m1 + c.m2 + G.b; c.p = L.sigmoid(c.z);
+    c.L = G.y ? -Math.log(c.p) : -Math.log(1 - c.p);
+    c.dLdp = G.y ? -1 / c.p : 1 / (1 - c.p);
+    c.dpdz = c.p * (1 - c.p);
+    c.gp = c.dLdp; c.gz = c.gp * c.dpdz;
+    c.gm1 = c.gz; c.gm2 = c.gz; c.gb = c.gz;
+    c.gw1 = c.gz * G.x1; c.gw2 = c.gz * G.x2; c.gx1 = c.gz * G.w1; c.gx2 = c.gz * G.w2;
+    return c;
+  }
+  // Node definitions: forward stage at which value appears, backward stage at which gradient appears
+  const NODES = {
+    x1: { lab: "x₁ DTI", fs: 0, bs: 8, leaf: 1 }, w1: { lab: "w₁", fs: 0, bs: 8, leaf: 1 },
+    x2: { lab: "x₂ missed", fs: 0, bs: 8, leaf: 1 }, w2: { lab: "w₂", fs: 0, bs: 8, leaf: 1 },
+    m1: { lab: "w₁·x₁", fs: 1, bs: 7 }, m2: { lab: "w₂·x₂", fs: 1, bs: 7 }, b: { lab: "b bias", fs: 0, bs: 7, leaf: 1 },
+    z: { lab: "z sum", fs: 2, bs: 6 }, p: { lab: "p = σ(z)", fs: 3, bs: 5 }, L: { lab: "L loss", fs: 4, bs: 5 }
+  };
+  const EDGES = [
+    ["x1", "m1", 1, 8, c => "×" + f(G.w1)], ["w1", "m1", 1, 8, c => "×" + f(G.x1)],
+    ["x2", "m2", 1, 8, c => "×" + f(G.w2)], ["w2", "m2", 1, 8, c => "×" + f(G.x2, 0)],
+    ["m1", "z", 2, 7, c => "×1"], ["m2", "z", 2, 7, c => "×1"], ["b", "z", 2, 7, c => "×1"],
+    ["z", "p", 3, 6, c => "×" + f(c.dpdz, 3)], ["p", "L", 4, 5, c => "×" + f(c.dLdp, 2)]
+  ];
+  function layout(W) {
+    const P = {};
+    if (W >= 640) {
+      const H = 300, cx = [0.085, 0.3, 0.51, 0.71, 0.905].map(v => v * W);
+      const bw = Math.min(124, W * 0.15);
+      P.x1 = [cx[0], 40]; P.w1 = [cx[0], 112]; P.x2 = [cx[0], 188]; P.w2 = [cx[0], 260];
+      P.m1 = [cx[1], 76]; P.b = [cx[1], 150]; P.m2 = [cx[1], 224];
+      P.z = [cx[2], 150]; P.p = [cx[3], 150]; P.L = [cx[4], 150];
+      return { P, H, bw, bh: 58 };
+    }
+    const H = 470, bw = Math.min(110, (W - 16) / 4 - 8);
+    const c4 = [0.125, 0.375, 0.625, 0.875].map(v => v * W);
+    P.x1 = [c4[0], 36]; P.w1 = [c4[1], 36]; P.x2 = [c4[2], 36]; P.w2 = [c4[3], 36];
+    P.m1 = [0.25 * W, 140]; P.b = [0.5 * W, 140]; P.m2 = [0.75 * W, 140];
+    P.z = [0.5 * W, 240]; P.p = [0.5 * W, 340]; P.L = [0.5 * W, 436];
+    return { P, H, bw, bh: 58 };
+  }
+  const gBox = $("graph-chart");
+  function renderGraph() {
+    const c = compute();
+    const W = Math.max(300, gBox.clientWidth), lay = layout(W), P = lay.P;
+    const svg = mkSvg(gBox, W, lay.H, "Computation graph of a one-neuron credit-default model");
+    const s = G.step;
+    const vals = { x1: G.x1, w1: G.w1, x2: G.x2, w2: G.w2, b: G.b, m1: c.m1, m2: c.m2, z: c.z, p: c.p, L: c.L };
+    const grads = { x1: c.gx1, w1: c.gw1, x2: c.gx2, w2: c.gw2, b: c.gb, m1: c.gm1, m2: c.gm2, z: c.gz, p: c.gp, L: 1 };
+    // Edges
+    const labs = [];
+    EDGES.forEach(([a, b2, fs, bs, lab]) => {
+      const fwd = s === fs, bwd = s === bs && s >= 5;
+      L.svg("line", { x1: P[a][0], y1: P[a][1], x2: P[b2][0], y2: P[b2][1], class: "edge" + (fwd ? " fwd" : bwd ? " bwd" : "") }, svg);
+      if (bwd) labs.push([(P[a][0] + P[b2][0]) / 2, (P[a][1] + P[b2][1]) / 2, lab(c)]);
+    });
+    // Nodes
+    Object.keys(NODES).forEach(k => {
+      const n = NODES[k], [x, y] = P[k];
+      const fwdNow = n.fs === s && s >= 1 && s <= 4, bwdNow = n.bs === s && s >= 5;
+      const grp = L.svg("g", { class: "node" + (n.leaf ? " leaf" : "") + (fwdNow ? " fwd" : bwdNow ? " bwd" : "") }, svg);
+      L.svg("rect", { x: x - lay.bw / 2, y: y - lay.bh / 2, width: lay.bw, height: lay.bh, rx: 8 }, grp);
+      L.svg("text", { x, y: y - 12, "text-anchor": "middle" }, grp).textContent = k === "L" ? `loss (y=${G.y})` : n.lab;
+      const showV = s >= n.fs;
+      const dv = k === "x2" ? f(vals[k], 0) : (k === "p" || k === "L" || k === "z") ? f(vals[k], 3) : f(vals[k], 2);
+      L.svg("text", { x, y: y + 5, "text-anchor": "middle", class: "nv" }, grp).textContent = showV ? dv : "?";
+      if (s >= n.bs && s >= 5) L.svg("text", { x, y: y + 21, "text-anchor": "middle", class: "ng" }, grp).textContent = "g " + f(grads[k], 3);
+    });
+    // Local-derivative labels on the active backward edges
+    labs.forEach(([x, y, t]) => {
+      const grp = L.svg("g", { class: "edge-lab" }, svg);
+      const w = t.length * 7 + 10;
+      L.svg("rect", { x: x - w / 2, y: y - 9, width: w, height: 18, rx: 9 }, grp);
+      L.svg("text", { x, y: y + 4, "text-anchor": "middle" }, grp).textContent = t;
+    });
+    // Step narrative
+    const Y = G.y, pct = (100 * c.p).toFixed(1);
+    const T = [
+      ["Start", `Customer: debt-to-income ${f(G.x1)}, ${G.x2} missed payment${G.x2 === 1 ? "" : "s"}, ${Y ? "defaulted" : "repaid"}. Weights w₁ = ${f(G.w1)}, w₂ = ${f(G.w2)}, b = ${f(G.b)}. Press Next step to run the model forwards.`],
+      ["Forward 1 · multiply", `w₁·x₁ = ${f(G.w1)} × ${f(G.x1)} = ${f(c.m1, 3)}. w₂·x₂ = ${f(G.w2)} × ${G.x2} = ${f(c.m2, 3)}.`],
+      ["Forward 2 · add", `z = ${f(c.m1, 3)} + ${f(c.m2, 3)} + (${f(G.b)}) = ${f(c.z, 3)}. This is the model's log-odds of default.`],
+      ["Forward 3 · squash", `p = σ(${f(c.z, 3)}) = ${f(c.p, 3)}. The model gives this customer a ${pct}% chance of default.`],
+      ["Forward 4 · score", Y ? `The customer defaulted (y = 1), so loss = −ln p = −ln ${f(c.p, 3)} = ${f(c.L, 3)}. A confident, correct prediction would cost almost 0.` : `The customer repaid (y = 0), so loss = −ln(1 − p) = −ln ${f(1 - c.p, 3)} = ${f(c.L, 3)}. A confident, correct prediction would cost almost 0.`],
+      ["Backward 1 · start at the loss", Y ? `The local derivative of −ln p is −1/p = ${f(c.dLdp, 3)}, so g(p) = 1 × ${f(c.dLdp, 3)}. Negative means raising p would lower the loss.` : `The local derivative of −ln(1 − p) is 1/(1 − p) = ${f(c.dLdp, 3)}, so g(p) = 1 × ${f(c.dLdp, 3)}. Positive means lowering p would lower the loss.`],
+      ["Backward 2 · through the sigmoid", `The sigmoid's local derivative is p(1 − p) = ${f(c.p, 3)} × ${f(1 - c.p, 3)} = ${f(c.dpdz, 3)}. So g(z) = ${f(c.dLdp, 3)} × ${f(c.dpdz, 3)} = ${f(c.gz, 3)}, which is exactly p − y.`],
+      ["Backward 3 · through the sum", `A sum passes the gradient unchanged to each input, because its local derivatives are all 1. g(w₁·x₁) = g(w₂·x₂) = g(b) = ${f(c.gz, 3)}.`],
+      ["Backward 4 · through the multiplies", `The local derivative of w·x with respect to w is x. So g(w₁) = ${f(c.gz, 3)} × ${f(G.x1)} = ${f(c.gw1, 3)} and g(w₂) = ${f(c.gz, 3)} × ${G.x2} = ${f(c.gw2, 3)}. With respect to x it's w: g(x₁) = ${f(c.gx1, 3)}, g(x₂) = ${f(c.gx2, 3)}. One backward sweep, every gradient.`]
+    ];
+    $("g-step-k").textContent = G.note ? "Update applied" : T[s][0];
+    $("g-step-t").textContent = G.note || T[s][1];
+    // Stats
+    $("g-p").textContent = (100 * c.p).toFixed(1) + "%";
+    $("g-p-s").textContent = Y ? "customer actually defaulted" : "customer actually repaid";
+    $("g-loss").textContent = f(c.L, 3);
+    $("g-loss-s").textContent = "0 would be a perfect, confident prediction";
+    $("g-err").textContent = f(c.gz, 3);
+    const pred = c.gw2 * 0.01, act = lossAt(G.w1, G.w2 + 0.01, G.b) - c.L;
+    $("g-nudge").textContent = f(act, 4);
+    $("g-nudge-s").textContent = `actual change in loss; gradient × 0.01 predicts ${f(pred, 4)}`;
+    $("g-prev").disabled = s === 0; $("g-next").disabled = s === MAXSTEP;
+  }
+  function setStep(k) { G.step = L.clamp(k, 0, MAXSTEP); G.note = ""; renderGraph(); }
+  $("g-next").addEventListener("click", () => setStep(G.step + 1));
+  $("g-prev").addEventListener("click", () => setStep(G.step - 1));
+  $("g-all").addEventListener("click", () => setStep(MAXSTEP));
+  $("g-reset").addEventListener("click", () => { Object.assign(G, G0); setStep(0); });
+  function setY(y) { G.y = y; setPressed("#g-y1, #g-y0", b => (b.id === "g-y1") === (y === 1)); G.note = ""; renderGraph(); }
+  $("g-y1").addEventListener("click", () => setY(1));
+  $("g-y0").addEventListener("click", () => setY(0));
+  $("g-apply").addEventListener("click", () => {
+    const c = compute(), before = c.L;
+    G.w1 -= G.eta * c.gw1; G.w2 -= G.eta * c.gw2; G.b -= G.eta * c.gb;
+    const after = compute();
+    G.step = 4;
+    const dir = v => v < 0 ? "up" : "down";
+    G.note = `Each weight moved against its gradient, times the learning rate ${f(G.eta, 1)}: w₁ went ${dir(c.gw1)} to ${f(G.w1)}, w₂ ${dir(c.gw2)} to ${f(G.w2)}, b ${dir(c.gb)} to ${f(G.b)}. Loss went from ${f(before, 3)} to ${f(after.L, 3)}. Press Next step to backpropagate again from the new weights.`;
+    renderGraph();
+  });
+  [["s-x1", "x1", v => v.toFixed(2)], ["s-x2", "x2", v => String(v)], ["s-geta", "eta", v => v.toFixed(1)]].forEach(([id, key, fmt]) => {
+    const el = $(id), out = document.querySelector(`output[for="${id}"]`);
+    el.value = G[key]; out.textContent = fmt(G[key]);
+    el.addEventListener("input", () => { G[key] = +el.value; out.textContent = fmt(G[key]); if (key !== "eta") G.note = ""; renderGraph(); });
+  });
+
+  // =====================================================================
+  // Simulation 3: gradient size through depth
+  // =====================================================================
+  const D = { act: "sigmoid", depth: 10, scale: 1, seed: 7 };
+  const WIDTH = 32;
+  const ACT = {
+    sigmoid: { f: L.sigmoid, d: a => { const s = L.sigmoid(a); return s * (1 - s); }, gain: 1 },
+    tanh: { f: Math.tanh, d: a => { const t = Math.tanh(a); return 1 - t * t; }, gain: 1 },
+    relu: { f: a => a > 0 ? a : 0, d: a => a > 0 ? 1 : 0, gain: Math.SQRT2 }
+  };
+  function matVec(Wm, v, n) { const o = new Float64Array(n); for (let i = 0; i < n; i++) { let s = 0; const row = Wm[i]; for (let j = 0; j < n; j++) s += row[j] * v[j]; o[i] = s; } return o; }
+  function matTVec(Wm, v, n) { const o = new Float64Array(n); for (let i = 0; i < n; i++) { const vi = v[i], row = Wm[i]; for (let j = 0; j < n; j++) o[j] += row[j] * vi; } return o; }
+  const norm = v => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+  function depthGrads() {
+    const r = rng(D.seed), n = WIDTH, N = D.depth;
+    const gain = D.act === "res" ? Math.SQRT2 : ACT[D.act].gain;
+    const std = D.scale * gain / Math.sqrt(n);
+    const Ws = [];
+    for (let l = 0; l < N; l++) { const M = []; for (let i = 0; i < n; i++) { const row = new Float64Array(n); for (let j = 0; j < n; j++) row[j] = std * gauss(r); M.push(row); } Ws.push(M); }
+    let h = new Float64Array(n); for (let i = 0; i < n; i++) h[i] = gauss(r);
+    const c = new Float64Array(n); for (let i = 0; i < n; i++) c[i] = gauss(r);
+    const cache = [];
+    for (let l = 0; l < N; l++) {
+      if (D.act === "res") {
+        const rms = Math.sqrt(h.reduce((s, x) => s + x * x, 0) / n) || 1e-12;
+        const nr = h.map(x => x / rms), q = nr.map(x => x > 0 ? x : 0);
+        const out = matVec(Ws[l], q, n);
+        cache.push({ rms, nr, q });
+        h = h.map((x, i) => x + out[i]);
+      } else {
+        const a = matVec(Ws[l], h, n);
+        cache.push({ hin: h, a });
+        h = a.map(ACT[D.act].f);
+      }
+    }
+    // Backward: gradient of L = c · h_N
+    let delta = c; const Gs = new Array(N);
+    for (let l = N - 1; l >= 0; l--) {
+      const C = cache[l];
+      if (D.act === "res") {
+        const gq = matTVec(Ws[l], delta, n);
+        const gn = gq.map((x, i) => C.nr[i] > 0 ? x : 0);
+        const dot = gn.reduce((s, x, i) => s + x * C.nr[i], 0);
+        delta = delta.map((x, i) => x + (gn[i] - C.nr[i] * dot / n) / C.rms);
+        Gs[l] = norm(delta);
+      } else {
+        const ga = delta.map((x, i) => x * ACT[D.act].d(C.a[i]));
+        delta = matTVec(Ws[l], ga, n);
+        Gs[l] = norm(delta);
+      }
+    }
+    const top = norm(c);
+    return Gs.map(g => g / top);
+  }
+  const dBox = $("depth-chart");
+  function renderDepth() {
+    const rel = depthGrads(), N = rel.length;
+    const logs = rel.map(v => v > 0 ? Math.log10(v) : -300);
+    const mn = Math.min(...logs), mx = Math.max(...logs);
+    const lo = Math.max(-30, Math.min(-3, Math.floor(mn))), hi = Math.min(30, Math.max(1, Math.ceil(mx)));
+    const W = Math.max(300, dBox.clientWidth), H = 260, m = { l: 48, r: 10, t: 24, b: 34 };
+    const svg = mkSvg(dBox, W, H, "Gradient size at each layer, log scale");
+    L.svg("text", { x: 0, y: 13, class: "lbl-ink" }, svg).textContent = W < 520 ? "Gradient at each layer ÷ at output (log)" : "Gradient reaching each layer ÷ gradient at the output (log scale)";
+    const X = L.scale(0, N, m.l, W - m.r), Y = L.scale(lo, hi, H - m.b, m.t);
+    const span = hi - lo, stepE = span > 24 ? 6 : span > 12 ? 4 : span > 6 ? 2 : 1;
+    for (let e = Math.ceil(lo / stepE) * stepE; e <= hi; e += stepE) {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(e), y2: Y(e), class: "grid" }, svg);
+      L.svg("text", { x: m.l - 6, y: Y(e) + 4, "text-anchor": "end" }, svg).textContent = e === 0 ? "1" : "10" + sup(e);
+    }
+    const bw = Math.max(1, (X(1) - X(0)) * 0.72);
+    logs.forEach((v, l) => {
+      const vv = L.clamp(v, lo, hi);
+      const y0 = Y(0), y1 = Y(vv);
+      const cls = v < -3 ? "bar-v" : v > 3 ? "bar-x" : "bar-ok";
+      L.svg("rect", { x: X(l + 0.5) - bw / 2, y: Math.min(y0, y1), width: bw, height: Math.max(1, Math.abs(y1 - y0)), class: cls }, svg);
+    });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0), class: "ln-zero" }, svg);
+    L.svg("text", { x: m.l, y: H - 14, "text-anchor": "start" }, svg).textContent = W < 520 ? "← layer 1 (input)" : "← layer 1 (input side)";
+    L.svg("text", { x: W - m.r, y: H - 14, "text-anchor": "end" }, svg).textContent = W < 520 ? `layer ${N} (output) →` : `layer ${N} (output side) →`;
+    // Stats
+    const first = rel[0];
+    $("d-first").textContent = first > 0 ? sci(first) : "0";
+    $("d-first-s").textContent = first < 1e-3 ? "vanishing: early layers barely learn" : first > 1e3 ? "exploding: early layers get huge updates" : "healthy: every layer learns at a similar pace";
+    $("d-first-box").className = "stat " + (first < 1e-3 ? "bad" : first > 1e3 ? "warn" : "ok");
+    const per = first > 0 ? Math.pow(first, 1 / N) : 0;
+    $("d-per").textContent = "×" + (per >= 0.995 && per <= 1.005 ? "1.00" : per.toFixed(2));
+    const dead = rel.filter(v => v < 1e-3).length;
+    $("d-dead").textContent = dead + " of " + N;
+    $("d-dead-box").className = "stat " + (dead > 0 ? "bad" : "ok");
+  }
+  const depthIn = $("s-depth"), scaleIn = $("s-scale");
+  function syncDepth() {
+    depthIn.value = D.depth; scaleIn.value = D.scale;
+    document.querySelector('output[for="s-depth"]').textContent = D.depth;
+    document.querySelector('output[for="s-scale"]').textContent = D.scale.toFixed(2);
+    setPressed("[data-act]", b => b.dataset.act === D.act);
+  }
+  depthIn.addEventListener("input", () => { D.depth = +depthIn.value; syncDepth(); renderDepth(); });
+  scaleIn.addEventListener("input", () => { D.scale = +scaleIn.value; syncDepth(); renderDepth(); });
+  document.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", () => { D.act = b.dataset.act; syncDepth(); renderDepth(); }));
+  $("d-new").addEventListener("click", () => { D.seed = (D.seed * 7919 + 13) % 100003; renderDepth(); });
+
+  // =====================================================================
+  // Simulation 4: optimiser race on 2D surfaces
+  // =====================================================================
+  const TH = 35 * Math.PI / 180, CT = Math.cos(TH), ST = Math.sin(TH);
+  const SURF = {
+    valley: {
+      f: (x, y) => 0.5 * (0.1 * x * x + 4 * y * y), g: (x, y) => [0.1 * x, 4 * y],
+      dom: [-5, 5, -2.5, 2.5], start: [-4.5, 1.2], fmin: 0, mins: [[0, 0]],
+      levels: [0.02, 0.06, 0.15, 0.35, 0.7, 1.2, 2, 3.2, 5, 8, 12]
+    },
+    tilt: {
+      f: (x, y) => { const u = CT * x + ST * y, v = -ST * x + CT * y; return 0.5 * (0.1 * u * u + 4 * v * v); },
+      g: (x, y) => { const u = CT * x + ST * y, v = -ST * x + CT * y; return [0.1 * u * CT - 4 * v * ST, 0.1 * u * ST + 4 * v * CT]; },
+      dom: [-5, 5, -2.5, 2.5], start: [-4, -2], fmin: 0, mins: [[0, 0]],
+      levels: [0.02, 0.06, 0.15, 0.35, 0.7, 1.2, 2, 3.2, 5, 8, 12]
+    },
+    saddle: {
+      f: (x, y) => 0.5 * x * x - 0.5 * y * y + 0.25 * y * y * y * y, g: (x, y) => [x, -y + y * y * y],
+      dom: [-3, 3, -1.5, 1.5], start: [-2.8, 0.001], fmin: -0.25, mins: [[0, 1], [0, -1]], saddle: [0, 0],
+      levels: [-0.2, -0.12, -0.05, 0, 0.05, 0.15, 0.35, 0.7, 1.2, 2, 3, 4.2]
+    }
+  };
+  const R = { surf: "valley", eta: 0.1, steps: 100, noise: false, show: { sgd: true, mom: true, adam: true }, shown: null, start: null };
+  const rEtaMin = 0.005, rEtaMax = 1;
+  const rEtaFrom = v => Math.pow(10, L.lerp(Math.log10(rEtaMin), Math.log10(rEtaMax), v / 100));
+  const rSliderFrom = e => 100 * (Math.log10(e) - Math.log10(rEtaMin)) / (Math.log10(rEtaMax) - Math.log10(rEtaMin));
+  const NOISE = 0.5;
+  function runOpt(kind) {
+    const S = SURF[R.surf], st = R.start || S.start;
+    let x = st[0], y = st[1];
+    const pts = [[x, y]], gaps = [S.f(x, y) - S.fmin];
+    let v = [0, 0], m = [0, 0], s = [0, 0], diverged = false;
+    const r = rng(1234);
+    for (let k = 1; k <= R.steps; k++) {
+      let [gx, gy] = S.g(x, y);
+      if (R.noise) { gx += NOISE * gauss(r); gy += NOISE * gauss(r); }
+      if (kind === "sgd") { x -= R.eta * gx; y -= R.eta * gy; }
+      else if (kind === "mom") { v = [0.9 * v[0] + gx, 0.9 * v[1] + gy]; x -= R.eta * v[0]; y -= R.eta * v[1]; }
+      else {
+        const b1 = 0.9, b2 = 0.999, eps = 1e-8;
+        m = [b1 * m[0] + (1 - b1) * gx, b1 * m[1] + (1 - b1) * gy];
+        s = [b2 * s[0] + (1 - b2) * gx * gx, b2 * s[1] + (1 - b2) * gy * gy];
+        const c1 = 1 - Math.pow(b1, k), c2 = 1 - Math.pow(b2, k);
+        x -= R.eta * (m[0] / c1) / (Math.sqrt(s[0] / c2) + eps);
+        y -= R.eta * (m[1] / c1) / (Math.sqrt(s[1] / c2) + eps);
+      }
+      if (!isFinite(x) || !isFinite(y) || Math.abs(x) > 1e4 || Math.abs(y) > 1e4) { diverged = true; break; }
+      pts.push([x, y]); gaps.push(S.f(x, y) - S.fmin);
+    }
+    let reach = -1;
+    for (let k = 0; k < gaps.length; k++) if (gaps[k] < 0.01) { reach = k; break; }
+    return { pts, gaps, diverged, reach };
+  }
+  // Marching squares contours
+  const SEG = { 1: [[3, 0]], 2: [[0, 1]], 3: [[3, 1]], 4: [[1, 2]], 5: [[3, 0], [1, 2]], 6: [[0, 2]], 7: [[3, 2]], 8: [[2, 3]], 9: [[0, 2]], 10: [[0, 1], [2, 3]], 11: [[1, 2]], 12: [[1, 3]], 13: [[0, 1]], 14: [[0, 3]] };
+  function contourPath(S, X, Y, nx, ny) {
+    const [x0, x1, y0, y1] = S.dom;
+    const gx = i => x0 + (x1 - x0) * i / nx, gy = j => y0 + (y1 - y0) * j / ny;
+    const V = []; for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) V.push(S.f(gx(i), gy(j)));
+    const at = (i, j) => V[j * (nx + 1) + i];
+    let d = "";
+    S.levels.forEach(lv => {
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const v0 = at(i, j), v1 = at(i + 1, j), v2 = at(i + 1, j + 1), v3 = at(i, j + 1);
+        const idx = (v0 > lv ? 1 : 0) | (v1 > lv ? 2 : 0) | (v2 > lv ? 4 : 0) | (v3 > lv ? 8 : 0);
+        if (idx === 0 || idx === 15) continue;
+        const ep = e => {
+          const t = (a, b) => (lv - a) / (b - a);
+          if (e === 0) return [gx(i + t(v0, v1)), gy(j)];
+          if (e === 1) return [gx(i + 1), gy(j + t(v1, v2))];
+          if (e === 2) return [gx(i + 1 - t(v2, v3)), gy(j + 1)];
+          return [gx(i), gy(j + 1 - t(v3, v0))];
+        };
+        SEG[idx].forEach(([a, b]) => { const p = ep(a), q = ep(b); d += `M${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}L${X(q[0]).toFixed(1)},${Y(q[1]).toFixed(1)}`; });
+      }
+    });
+    return d;
+  }
+  const rBox = $("race-chart"), rlBox = $("race-loss");
+  let rGeom = null;
+  const KINDS = ["sgd", "mom", "adam"];
+  function renderRace() {
+    const S = SURF[R.surf];
+    const runs = {}; KINDS.forEach(k => runs[k] = runOpt(k));
+    const shown = R.shown == null ? R.steps : R.shown;
+    const [x0, x1, y0, y1] = S.dom;
+    const W = Math.max(300, rBox.clientWidth), m = { l: 6, r: 6, t: 6, b: 6 };
+    const pw = W - m.l - m.r, ph = pw * (y1 - y0) / (x1 - x0), H = ph + m.t + m.b;
+    const svg = mkSvg(rBox, W, H, "Contour map of the loss surface with optimiser trajectories");
+    const X = L.scale(x0, x1, m.l, W - m.r), Y = L.scale(y0, y1, H - m.b, m.t);
+    L.svg("rect", { x: m.l, y: m.t, width: pw, height: ph, class: "ax" }, svg);
+    L.svg("path", { d: contourPath(S, X, Y, Math.round(pw / 7), Math.round(ph / 7)), class: "contour" }, svg);
+    S.mins.forEach(([a, b]) => {
+      L.svg("line", { x1: X(a) - 6, x2: X(a) + 6, y1: Y(b), y2: Y(b), class: "mark-min" }, svg);
+      L.svg("line", { x1: X(a), x2: X(a), y1: Y(b) - 6, y2: Y(b) + 6, class: "mark-min" }, svg);
+    });
+    if (S.saddle) L.svg("text", { x: X(S.saddle[0]) + 8, y: Y(S.saddle[1]) - 6 }, svg).textContent = "saddle";
+    const clip = clipRect(svg, "race-clip", m.l, m.t, pw, ph);
+    const g = L.svg("g", { "clip-path": clip }, svg);
+    KINDS.forEach(k => {
+      if (!R.show[k]) return;
+      const pts = runs[k].pts.slice(0, shown + 1).map(p => [X(p[0]), Y(p[1])]);
+      L.svg("path", { d: L.path(pts), class: `trail tr-${k}` }, g);
+      const e = pts[pts.length - 1];
+      L.svg("circle", { cx: e[0], cy: e[1], r: 4.5, class: `end-${k}` }, g);
+    });
+    const st = R.start || S.start;
+    L.svg("circle", { cx: X(st[0]), cy: Y(st[1]), r: 5, class: "dot-start" }, svg);
+    L.svg("text", { x: X(st[0]) + 8, y: Y(st[1]) + (st[1] > (y0 + y1) / 2 ? 16 : -8) }, svg).textContent = "start";
+    rGeom = { svg, X, Y, W, H, m, pw, ph, dom: S.dom };
+
+    // Loss gap chart (log scale)
+    const W2 = Math.max(300, rlBox.clientWidth), H2 = 190, m2 = { l: 48, r: 10, t: 24, b: 30 };
+    const svg2 = mkSvg(rlBox, W2, H2, "Loss above the minimum by step, log scale");
+    L.svg("text", { x: 0, y: 13, class: "lbl-ink" }, svg2).textContent = "Loss above the minimum, by step (log scale)";
+    const lo = -6, hi = 2;
+    const X2 = L.scale(0, R.steps, m2.l, W2 - m2.r), Y2 = L.scale(lo, hi, H2 - m2.b, m2.t);
+    for (let e = lo; e <= hi; e += 2) {
+      L.svg("line", { x1: m2.l, x2: W2 - m2.r, y1: Y2(e), y2: Y2(e), class: "grid" }, svg2);
+      L.svg("text", { x: m2.l - 6, y: Y2(e) + 4, "text-anchor": "end" }, svg2).textContent = e === 0 ? "1" : "10" + sup(e);
+    }
+    L.svg("line", { x1: m2.l, x2: W2 - m2.r, y1: Y2(-2), y2: Y2(-2), class: "ln-base" }, svg2);
+    for (let k = 0; k <= R.steps; k += R.steps > 150 ? 100 : 50) L.svg("text", { x: X2(k), y: H2 - m2.b + 16, "text-anchor": "middle" }, svg2).textContent = k;
+    const clip2 = clipRect(svg2, "race-clip2", m2.l, m2.t, W2 - m2.l - m2.r, H2 - m2.t - m2.b);
+    const g2 = L.svg("g", { "clip-path": clip2 }, svg2);
+    KINDS.forEach(k => {
+      if (!R.show[k]) return;
+      const gp = runs[k].gaps.slice(0, shown + 1).map((v, i) => [X2(i), Y2(L.clamp(Math.log10(Math.max(v, 1e-9)), lo - 1, hi + 1))]);
+      L.svg("path", { d: L.path(gp), class: `trail tr-${k}` }, g2);
+    });
+
+    // Stats
+    KINDS.forEach(k => {
+      const rr = runs[k];
+      const last = rr.gaps[rr.gaps.length - 1];
+      $("r-" + k).textContent = rr.diverged ? "Diverged" : last < 1e-9 ? "< 10" + sup(-9) : sci(last);
+      $("r-" + k + "-s").textContent = rr.diverged ? `blew up after ${rr.pts.length - 1} steps` : rr.reach >= 0 ? `first within 0.01 of the minimum at step ${rr.reach}` : `not within 0.01 of the minimum in ${R.steps} steps`;
+    });
+  }
+  const rEtaIn = $("s-reta"), rStepsIn = $("s-rsteps");
+  function syncRace() {
+    rEtaIn.value = rSliderFrom(R.eta); rStepsIn.value = R.steps;
+    document.querySelector('output[for="s-reta"]').textContent = fmtEta(R.eta);
+    document.querySelector('output[for="s-rsteps"]').textContent = R.steps;
+    setPressed("[data-surf]", b => b.dataset.surf === R.surf);
+    document.querySelectorAll("[data-opt]").forEach(b => b.setAttribute("aria-pressed", String(R.show[b.dataset.opt])));
+    $("r-noise").setAttribute("aria-pressed", String(R.noise));
+  }
+  rEtaIn.addEventListener("input", () => { rTok++; R.eta = rEtaFrom(+rEtaIn.value); R.shown = null; syncRace(); renderRace(); });
+  rStepsIn.addEventListener("input", () => { rTok++; R.steps = +rStepsIn.value; R.shown = null; syncRace(); renderRace(); });
+  document.querySelectorAll("[data-surf]").forEach(b => b.addEventListener("click", () => { R.surf = b.dataset.surf; R.start = null; syncRace(); playRace(); }));
+  document.querySelectorAll("[data-opt]").forEach(b => b.addEventListener("click", () => { R.show[b.dataset.opt] = !R.show[b.dataset.opt]; syncRace(); renderRace(); }));
+  $("r-noise").addEventListener("click", () => { R.noise = !R.noise; syncRace(); renderRace(); });
+  $("r-play").addEventListener("click", playRace);
+  let rTok = 0;
+  function playRace() { const t = ++rTok; R.shown = 0; renderRace(); L.tween(0, R.steps, 2400, v => { if (t !== rTok) return; R.shown = Math.floor(v); renderRace(); }, () => { if (t !== rTok) return; R.shown = null; renderRace(); }); }
+  rBox.addEventListener("click", e => {
+    if (!rGeom) return;
+    const r = rGeom.svg.getBoundingClientRect();
+    const sx = rGeom.W / r.width, px = (e.clientX - r.left) * sx, py = (e.clientY - r.top) * sx;
+    const [x0, x1, y0, y1] = rGeom.dom;
+    const x = x0 + (px - rGeom.m.l) / rGeom.pw * (x1 - x0), y = y1 - (py - rGeom.m.t) / rGeom.ph * (y1 - y0);
+    if (x < x0 || x > x1 || y < y0 || y > y1) return;
+    rTok++; R.start = [x, y]; R.shown = null; renderRace();
+  });
+
+  // ---------- Render everything ----------
+  function renderAll() { renderS1(); renderGraph(); renderDepth(); renderRace(); }
+  syncS1(); syncDepth(); syncRace();
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
