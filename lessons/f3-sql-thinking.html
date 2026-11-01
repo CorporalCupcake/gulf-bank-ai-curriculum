@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SQL Thinking: Joins, Windows and Aggregation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* Lesson-specific styles, all drawn from theme tokens */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  pre { margin: 0; background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 13px; line-height: 1.55; max-width: var(--measure); }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .figure pre { max-width: none; }
+  .prose pre { margin-top: 1.05em; }
+  pre .kw { color: var(--accent); font-weight: 500; }
+
+  /* Tiny data tables inside sims: compact, never force page width */
+  table.data.mini { min-width: 0; font-size: 13px; }
+  table.data.mini th, table.data.mini td { padding: 6px 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  table.data td.dup { background: var(--warn-soft); color: var(--warn); }
+  table.data td.nul { color: var(--muted); font-style: italic; }
+  table.data td.num { text-align: right; }
+  table.data th.num { text-align: right; }
+  table.data tr.keep td { background: var(--ok-soft); }
+  table.data tr.drop td { color: var(--muted); }
+  table.data tr.tie td.out { background: var(--warn-soft); color: var(--warn); }
+  table.data td.out { font-weight: 600; }
+  .tv { font-family: var(--font-mono); font-size: 11px; padding: 1px 7px; border-radius: 999px; }
+  .tv.t { background: var(--ok-soft); color: var(--ok); }
+  .tv.f { background: var(--neutral-soft); color: var(--muted); }
+  .tv.u { background: var(--warn-soft); color: var(--warn); }
+  .scroll-y { max-height: 420px; overflow-y: auto; }
+
+  /* Sim 4 timeline */
+  .as-axis { stroke: var(--line); stroke-width: 2; }
+  .as-snap { fill: var(--accent); }
+  .as-avail { fill: var(--surface); stroke: var(--muted); stroke-width: 1.6; }
+  .as-link { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+  .as-app { stroke: var(--ink); stroke-width: 2; }
+  .as-pick { fill: none; stroke: var(--warn); stroke-width: 3; }
+  .as-pick.ok { stroke: var(--ok); }
+  .as-pick.bad { stroke: var(--bad); }
+  .as-future { fill: var(--bad); fill-opacity: .06; }
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+
+  /* Logical order strip */
+  .order { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; counter-reset: ord; max-width: 880px; }
+  .order li { counter-increment: ord; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; color: var(--muted); }
+  .order li::before { content: counter(ord); font-family: var(--font-mono); font-size: 11px; color: var(--accent); display: block; margin-bottom: 2px; }
+  .order li b { display: block; font-family: var(--font-mono); font-size: 12px; color: var(--ink); font-weight: 500; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F3 · Data science practice</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F3.3</span>
+        <span class="pill d">Day one</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>SQL Thinking: Joins, Windows and Aggregation</h1>
+      <p class="dek">Bank data lives in warehouses, and most wrong numbers in a bank are born in a query that ran without error. How to read a query by its grain, spot a join that multiplied rows, and know what a window function really does.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A SQL result is a claim about what one row means; nearly every wrong number comes from a join or filter that quietly changed the grain, or silently dropped the rows you meant to keep.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A product head asks: "What is the combined monthly salary of our salary-transfer customers who hold an account with us?" An analyst writes a query that joins the <code>customers</code> table to the <code>accounts</code> table and sums the <code>salary</code> column. It runs in four seconds. It returns a number. The number is nearly double the truth.</p>
+        <p>Nothing failed. There was no error, no warning, no NULL. The reason is simple: a customer with three accounts becomes three rows after the join, and the salary is copied onto each of them. The sum then counts that salary three times. A customer with <em>no</em> account disappeared from an inner join, so they were counted zero times. One query, both mistakes at once.</p>
+        <p>Play with the toy version below. Five customers, a known true total, and a join you can change.</p>
+      </div>
+
+      <figure class="figure" id="fig-fanout">
+        <div class="fig-head"><span class="fig-title">The salary that was counted three times</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start with <b>Inner join</b> and read the total against the true AED 100,000. Switch to <b>Left join</b>: Yusuf, who has no account, comes back as a row of NULLs, but the inflation stays. Turn on <b>also join cards</b> and watch the rows multiply again. Then pick <b>Aggregate first, then join</b>, which restores one row per customer.</p>
+        <div class="btns" role="group" aria-label="Join type">
+          <button class="btn" type="button" data-join="inner" aria-pressed="true">Inner join</button>
+          <button class="btn" type="button" data-join="left" aria-pressed="false">Left join</button>
+          <button class="btn" type="button" data-join="pre" aria-pressed="false">Aggregate first, then join</button>
+        </div>
+        <div class="toggles" role="group" aria-label="Options"><button class="toggle" type="button" id="t-cards" aria-pressed="false">Also join cards (a second one-to-many)</button></div>
+        <pre><code id="s1-sql"></code></pre>
+        <div class="table-wrap"><div id="s1-tbl"></div></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Rows after the joins</div><div class="v" id="st1-rows"></div><div class="s">customers table has 5</div></div>
+          <div class="stat" id="st1-sum-b"><div class="k">SUM(salary) from the result</div><div class="v" id="st1-sum"></div><div class="s" id="st1-sum-s"></div></div>
+          <div class="stat"><div class="k">True total, 5 customers</div><div class="v">AED 100,000</div><div class="s">one salary per customer</div></div>
+          <div class="stat" id="st1-cust-b"><div class="k">Customers still present</div><div class="v" id="st1-cust"></div><div class="s">of 5</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: five invented customers with salaries of AED 20,000, 15,000, 30,000, 10,000 and 25,000, holding 3, 1, 2, 0 and 2 accounts and 2, 1, 2, 0 and 1 cards. Totals are exact arithmetic on the rows shown. Highlighted salary cells are copies.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to take from it.</p>
+        <ul>
+          <li><strong>Every table has a grain</strong>, the thing one row stands for. Customers are one row per customer. Accounts are one row per account. A salary lives at the customer grain, so it can only be summed safely at the customer grain.</li>
+          <li><strong>A join changes the grain of the result</strong> to the finest of the tables it touches. After joining accounts, a row is an account, and every customer-level column is now repeated. Summing a repeated column is the commonest silent error in banking analytics.</li>
+          <li><strong>The join type decides who survives.</strong> An inner join drops customers with no match. That is a form of selection (F2.6) that you chose without noticing.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before you read or write any query, say in one sentence what one row of each input is, and what one row of the output is. If you can't, you can't yet trust the number.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-grain">Grain, keys and fan-out</h3>
+      <div class="prose">
+        <p>In dimensional modelling the first design decision is the <strong>grain</strong>: the precise meaning of one row. Kimball's rule is to declare it before anything else, because every column added afterwards must be true <em>at that grain</em>. A salary is true per customer. A balance is true per account per day. A transaction amount is true per transaction.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Table</th><th>One row is</th><th>Safe to SUM here</th><th>Dangerous to SUM after joining down to</th></tr></thead>
+          <tbody>
+            <tr><td><b>customers</b></td><td>One customer, as of now</td><td>Salary, declared income, risk score</td><td>Accounts, cards, transactions</td></tr>
+            <tr><td><b>accounts</b></td><td>One account</td><td>Credit limit, product count</td><td>Transactions, daily balances</td></tr>
+            <tr><td><b>account_daily_balance</b></td><td>One account on one date</td><td>Balance across accounts on a <em>single</em> date. Never across dates.</td><td>Anything finer</td></tr>
+            <tr><td><b>transactions</b></td><td>One posted transaction</td><td>Amount in AED</td><td>Alerts raised, if one transaction can raise several</td></tr>
+            <tr><td><b>aml_alerts</b></td><td>One alert (not one customer)</td><td>Count of alerts</td><td>Customers: use <code>COUNT(DISTINCT customer_id)</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The balance row deserves a second look. Balances are <strong>semi-additive</strong>: you can add them across accounts, but adding them across days is meaningless. The sum of thirty daily balances is not "the balance". It is thirty times the balance. Use the average or the closing value across time.</p>
+        <p>A join connects two tables on a <strong>key</strong>. Whether it is safe depends on the relationship:</p>
+        <ul>
+          <li><strong>One-to-one</strong> on a key that is unique in both tables. The grain is unchanged. Safe.</li>
+          <li><strong>Many-to-one</strong>, such as accounts to customers, where the key is unique on the right. Safe for the left table's columns. The left grain is kept.</li>
+          <li><strong>One-to-many</strong>, such as customers to accounts, with a unique key on the left. The result takes the finer grain, and left-hand columns are repeated. This is the fan-out.</li>
+          <li><strong>Many-to-many</strong>, where neither side is unique. Rows multiply per key. Two joins of one-to-many type off the same parent, as in Simulation 1 with accounts and cards, behave like this: each customer's accounts are paired with each of their cards.</li>
+        </ul>
+        <p>The size of the damage is easy to state. Let customer <i>c</i> have <i>a<sub>c</sub></i> accounts and <i>b<sub>c</sub></i> cards.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>rows</mtext><mo>=</mo><munder><mo>∑</mo><mi>c</mi></munder><msub><mi>a</mi><mi>c</mi></msub><mo>·</mo><msub><mi>b</mi><mi>c</mi></msub><mspace width="2em"></mspace><mtext>SUM(salary)</mtext><mo>=</mo><munder><mo>∑</mo><mi>c</mi></munder><msub><mi>s</mi><mi>c</mi></msub><mo>·</mo><msub><mi>a</mi><mi>c</mi></msub><mo>·</mo><msub><mi>b</mi><mi>c</mi></msub></math>
+        <p class="where">Each customer's salary <i>s<sub>c</sub></i> is counted once for every pairing of an account and a card, not once. With one account and one card each, the product is 1 and nothing goes wrong, which is exactly why the bug hides in small test samples. Note the multiplication: adding a second one-to-many join doesn't add rows, it <em>multiplies</em> them. In Simulation 1, a customer with 3 accounts and 2 cards appears 6 times.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>How to defend yourself:</p>
+        <ul>
+          <li><strong>Test the key before joining.</strong> <code>SELECT customer_id, COUNT(*) FROM accounts GROUP BY 1 HAVING COUNT(*) &gt; 1</code> tells you at once whether accounts is one-per-customer.</li>
+          <li><strong>Compare row counts</strong> before and after each join. A left join that returns more rows than the left table has fanned out. An inner join that returns fewer has dropped something.</li>
+          <li><strong>Aggregate the many-side first</strong>, down to the grain you want to keep, then join. That's the third button in Simulation 1.</li>
+          <li><strong>Know that <code>COUNT(DISTINCT)</code> and <code>SELECT DISTINCT</code> are patches.</strong> They repair counts of keys but not sums of copied values. <code>SUM(DISTINCT salary)</code> is worse: it removes two customers who happen to earn the same amount.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-joins">Inner and left joins: who survives</h3>
+      <div class="prose">
+        <p>Think of a join as a filter on pairs. An <strong>inner join</strong> keeps only left rows that found a partner. A <strong>left join</strong> keeps every left row and fills the right side with NULL when no partner exists. Right and full outer joins are the same ideas mirrored or combined; most production SQL uses inner and left only, and treats a right join as a sign the query could be reordered.</p>
+        <p>The practical rule is about what you are counting. If the question is "what happens to <em>our customers</em>", the customers table is the spine and everything else is left-joined onto it. An inner join to a reporting table that only contains customers with activity gives you "customers with activity", a smaller population. Churn rates, cure rates and default rates computed on it are selected samples, which is the lesson of F2.6 arriving through a query.</p>
+        <p>Two cousins are worth knowing. A <strong>semi-join</strong> asks "does a match exist?" without multiplying rows, written with <code>EXISTS</code>. An <strong>anti-join</strong> asks "does no match exist?", written with <code>NOT EXISTS</code> or a left join filtered to NULL on the right key. Anti-joins find customers with no card, accounts never reviewed, or alerts without a case. They are also the safe way to test for membership, as the NULL section below explains.</p>
+        <p>The subtlest join bug is where you put a filter on the right-hand table:</p>
+      </div>
+<pre style="margin-top:1.05em"><code><span class="kw">-- A: filter in ON. Keeps every customer; October activity if any</span>
+<span class="kw">SELECT</span> c.customer_id, SUM(t.amount_aed)
+<span class="kw">FROM</span> customers c
+<span class="kw">LEFT JOIN</span> transactions t
+  <span class="kw">ON</span> t.customer_id = c.customer_id
+ <span class="kw">AND</span> t.txn_month = '2026-10'
+<span class="kw">GROUP BY</span> c.customer_id;
+
+<span class="kw">-- B: filter in WHERE. Silently becomes an inner join</span>
+<span class="kw">SELECT</span> c.customer_id, SUM(t.amount_aed)
+<span class="kw">FROM</span> customers c
+<span class="kw">LEFT JOIN</span> transactions t <span class="kw">ON</span> t.customer_id = c.customer_id
+<span class="kw">WHERE</span> t.txn_month = '2026-10'
+<span class="kw">GROUP BY</span> c.customer_id;</code></pre>
+      <div class="prose" style="margin-top:1.05em">
+        <p>In query B, a customer with no transactions has <code>t.txn_month = NULL</code> after the join. <code>NULL = '2026-10'</code> is not true, so <code>WHERE</code> throws the row away. The "left join" now behaves like an inner join, and the customers who did nothing in October, often the ones you most wanted to see, vanish. The rule: a condition that describes <em>which partners count</em> goes in <code>ON</code>. A condition that describes <em>which final rows to keep</em> goes in <code>WHERE</code>. For a left-joined table, that is almost always <code>ON</code>.</p>
+      </div>
+
+      <h3 class="sub" id="m-agg">Aggregation, and the mean of means</h3>
+      <div class="prose">
+        <p><code>GROUP BY</code> collapses many rows into one per group key. Every column in the output must then be either a group key or wrapped in an aggregate. That is not pedantry: it says the output grain is the group key, and anything else has no single value to show.</p>
+        <p>Aggregates differ in how they treat NULL, and the differences matter:</p>
+        <ul>
+          <li><code>COUNT(*)</code> counts rows. <code>COUNT(col)</code> counts rows where <code>col</code> is not NULL. They differ whenever the column has gaps.</li>
+          <li><code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code> skip NULLs. So <code>AVG(income)</code> is the average over customers who <em>have</em> an income on file, not over all customers. If missing incomes are not random, this is another selection effect.</li>
+          <li><code>SUM</code> of an all-NULL group is NULL, not zero. Wrap in <code>COALESCE(SUM(x), 0)</code> when a missing total should read as zero.</li>
+        </ul>
+        <p>The other classic trap is averaging averages. Branch A has 100 customers with an average balance of AED 10,000. Branch B has 900 with AED 40,000. The average of the two averages is AED 25,000. The true average is (100 × 10,000 + 900 × 40,000) / 1,000 = AED 37,000. Whenever you re-aggregate, carry the <em>sums and counts</em>, not the averages, then divide at the end. The same goes for rates: a bank-wide default rate is total defaults over total loans, not the mean of branch rates.</p>
+        <p><code>WHERE</code> filters rows before grouping. <code>HAVING</code> filters groups after, so it is the only place that can refer to an aggregate: <code>HAVING COUNT(*) &gt; 1</code>.</p>
+      </div>
+
+      <h3 class="sub" id="m-null">NULL: three-valued logic</h3>
+      <div class="prose">
+        <p>NULL means "unknown", not "empty" and not "zero". SQL therefore has three truth values, TRUE, FALSE and UNKNOWN. Any comparison with NULL, including <code>NULL = NULL</code>, is UNKNOWN. <code>NOT UNKNOWN</code> is still UNKNOWN. And a <code>WHERE</code> clause keeps a row only if the condition is <em>TRUE</em>. UNKNOWN is thrown away along with FALSE.</p>
+        <p>The consequence is awkward: a predicate and its negation don't cover the table. Some rows are neither. In KYC data, the fields that are NULL are rarely a random sample. They are the customers whose onboarding was incomplete, who came through a legacy channel, or whose status wasn't migrated. A filter that drops them has made a decision about those customers without saying so.</p>
+      </div>
+
+      <figure class="figure" id="fig-null">
+        <div class="fig-head"><span class="fig-title">Rows that are neither active nor not active</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> run <code>status = 'active'</code>, then <code>status &lt;&gt; 'active'</code>. Add the two row counts and compare with 10. Look at how much AED is in the UNKNOWN rows. Then try <code>IS DISTINCT FROM</code> and <code>COALESCE</code>, which treat NULL deliberately. Finally try <code>NOT IN</code> with a NULL in the list, which returns nothing at all.</p>
+        <div class="btns" role="group" aria-label="Predicate" id="s3-btns"></div>
+        <pre><code id="s3-sql"></code></pre>
+        <div class="table-wrap scroll-y"><div id="s3-tbl"></div></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Rows returned</div><div class="v" id="st3-rows"></div><div class="s">of 10 accounts</div></div>
+          <div class="stat"><div class="k">Balance returned</div><div class="v" id="st3-bal"></div><div class="s">of AED 131,250</div></div>
+          <div class="stat" id="st3-u-b"><div class="k">Rows evaluating to UNKNOWN</div><div class="v" id="st3-u"></div><div class="s" id="st3-u-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: ten invented accounts. Five are active, two dormant, one closed and two have a NULL status. Row results follow SQL's three-valued logic exactly; a row is returned only when the predicate is TRUE.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Four habits cover most of the risk.</p>
+        <ul>
+          <li><strong>Test for NULL with <code>IS NULL</code></strong>, never with <code>= NULL</code>.</li>
+          <li><strong>Prefer <code>IS DISTINCT FROM</code></strong> (or an explicit <code>COALESCE</code>) for "not equal" when the column may be NULL.</li>
+          <li><strong>Prefer <code>NOT EXISTS</code> to <code>NOT IN</code>.</strong> If the subquery returns even one NULL, <code>x NOT IN (subquery)</code> is never true, so the whole filter returns nothing. A single missing customer ID in a blacklist table can silently turn a screening query into one that clears everyone.</li>
+          <li><strong>Count your NULLs</strong> in every column you filter or join on. <code>COUNT(*) - COUNT(col)</code> is the fastest way. NULL join keys never match anything, including each other, so those rows vanish from an inner join and sit unmatched in a left one.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-window">Window functions: aggregate without collapsing</h3>
+      <div class="prose">
+        <p><code>GROUP BY</code> turns many rows into one. A <strong>window function</strong> computes something across a set of related rows and puts the answer on <em>every</em> row, keeping them all. That distinction is the whole idea. The window is defined by three parts:</p>
+        <ul>
+          <li><strong><code>PARTITION BY</code></strong>: which rows belong together, like a <code>GROUP BY</code> that doesn't collapse. Per customer, per account. Without it, the whole table is one partition.</li>
+          <li><strong><code>ORDER BY</code></strong>: the order of rows inside the partition. It makes "previous", "running" and "latest" meaningful.</li>
+          <li><strong>The frame</strong>: for each row, which rows inside the partition feed the calculation. <code>ROWS BETWEEN 2 PRECEDING AND CURRENT ROW</code> is the current row and the two before it. Without an explicit frame, a window with <code>ORDER BY</code> defaults to <em>everything from the start up to the current row's peers</em>.</li>
+        </ul>
+        <p>That last default hides a trap. Rows with the same <code>ORDER BY</code> value are <strong>peers</strong>. The default frame (<code>RANGE</code>) includes all peers, so two transactions on the same date both show the same running total, one that already includes the other. Add <code>ROWS</code> and a tiebreaker and each row gets its own step. Try it below.</p>
+      </div>
+
+      <figure class="figure" id="fig-window">
+        <div class="fig-head"><span class="fig-title">Collapse, or keep every row</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start on <b>GROUP BY</b>: ten rows become two. Switch to <b>Total per customer</b> and the ten rows are back, each carrying a total. Turn <b>PARTITION BY customer</b> off to see what the missing clause does. On <b>Running total</b>, switch the frame between RANGE and ROWS and watch the two same-day transactions. <b>Latest per customer</b> is the pattern behind most "current record" queries.</p>
+        <div class="btns" role="group" aria-label="Calculation" id="s2-btns"></div>
+        <div class="toggles" role="group" aria-label="Options">
+          <button class="toggle" type="button" id="t-part" aria-pressed="true">PARTITION BY customer</button>
+          <button class="toggle" type="button" id="t-frame" aria-pressed="false">Frame: ROWS (off = default RANGE)</button>
+        </div>
+        <pre><code id="s2-sql"></code></pre>
+        <div class="table-wrap"><div id="s2-tbl"></div></div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: ten invented card transactions, five per customer, with amounts in AED and day-of-October dates. Two transactions for customer A share a date (2 Oct), as do two for customer B (3 Oct). Ties are broken by transaction id. All values are computed exactly as the SQL window semantics define them.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The functions you will meet most:</p>
+        <ul>
+          <li><strong>Aggregates as windows</strong>: <code>SUM</code>, <code>AVG</code>, <code>COUNT</code> over a window. Used for running totals, rolling averages, and "share of the customer's total" (amount divided by the partition sum).</li>
+          <li><strong>Ranking</strong>: <code>ROW_NUMBER()</code> numbers rows 1, 2, 3 with no ties. <code>RANK()</code> gives ties the same number and then skips (1, 1, 3). <code>DENSE_RANK()</code> doesn't skip (1, 1, 2).</li>
+          <li><strong>Offsets</strong>: <code>LAG(x, 1)</code> is the previous row's value, <code>LEAD</code> the next. The basis of "days since last transaction" and "change in balance from last month".</li>
+          <li><strong>Distribution</strong>: <code>NTILE(10)</code> for deciles, <code>PERCENT_RANK()</code>. Useful for score bands.</li>
+        </ul>
+        <p>The pattern you will write or review most is <strong>latest record per entity</strong>: customer address, risk rating, account status. It is a <code>ROW_NUMBER</code> ordered by recency, descending, keeping number 1:</p>
+      </div>
+<pre style="margin-top:1.05em"><code><span class="kw">WITH</span> ranked <span class="kw">AS</span> (
+  <span class="kw">SELECT</span> *,
+         ROW_NUMBER() <span class="kw">OVER</span> (
+           <span class="kw">PARTITION BY</span> customer_id
+           <span class="kw">ORDER BY</span> updated_at <span class="kw">DESC</span>, record_id <span class="kw">DESC</span>   <span class="kw">-- tiebreaker</span>
+         ) <span class="kw">AS</span> rn
+  <span class="kw">FROM</span> kyc_profile_history
+)
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> ranked <span class="kw">WHERE</span> rn = 1;</code></pre>
+      <div class="prose" style="margin-top:1.05em">
+        <p>Note the tiebreaker. If two records share the latest timestamp, <code>ROW_NUMBER</code> picks one arbitrarily, and the choice can change between runs. <code>RANK</code> would keep both and reintroduce duplicates. Either way, an unstable "latest record" will give you a feature that flickers from day to day for no real reason. Some warehouses offer <code>QUALIFY</code> to filter on a window result directly, saving the wrapper.</p>
+      </div>
+
+      <h3 class="sub" id="m-asof">Latest record, and as-of joins</h3>
+      <div class="prose">
+        <p>"Latest record" is fine for dashboards about today. For a model, it is a trap. Suppose you build a training set of past loan applications and attach each customer's bureau score. If you attach the <em>latest</em> score, an application from March receives a score from October, which already reflects the missed payments that followed. The model learns from the future. This is leakage (F3.2), and a join is the commonest way it enters.
+
+</p>
+        <p>The right operation is an <strong>as-of join</strong>: for each event, find the most recent snapshot at or before the event. History tables usually come in one of two shapes:</p>
+        <ul>
+          <li><strong>Snapshots</strong>: one row per customer per date (monthly bureau pulls).</li>
+          <li><strong>Slowly changing dimensions</strong> (type 2): one row per version, with <code>valid_from</code> and <code>valid_to</code>. The match is <code>event_time &gt;= valid_from AND event_time &lt; valid_to</code>.</li>
+        </ul>
+        <p>Many engines now have a native <code>ASOF JOIN</code> (DuckDB, Snowflake). In any other engine you can write the same thing with a window function or a correlated subquery, ordered by snapshot time and limited to those not later than the event.</p>
+        <p>There is a second clock, and it's the one people forget. A snapshot dated 31 October may only have <em>reached the warehouse</em> on 12 November. A bureau record reflects what the bureau knew at its date, but your bank could not use it before delivery. An honest as-of join uses the <strong>availability time</strong> (when the system could have known), not just the event time (when it happened). Simulation 4 puts the two side by side.</p>
+      </div>
+
+      <figure class="figure" id="fig-asof">
+        <div class="fig-head"><span class="fig-title">Which bureau score did the model really have?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> keep the application date near day 175 and flip between the four methods. <b>Latest row</b> always uses day 280, a score from after the application. <b>Exact date</b> mostly finds nothing. <b>As-of (snapshot date)</b> looks right but uses a score that hadn't yet arrived. Only the last one matches what the bank knew. Move the reporting-lag slider to zero and the two as-of methods agree.</p>
+        <div class="btns" role="group" aria-label="Join method" id="s4-btns"></div>
+        <div class="chart-wrap" id="s4-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-app">Application date (day of year) <output for="s-app"></output></label><input type="range" id="s-app" min="0" max="300" step="5" value="175"></div>
+          <div class="ctl"><label for="s-lag">Reporting lag: days until a bureau score reaches the warehouse <output for="s-lag"></output></label><input type="range" id="s-lag" min="0" max="60" step="5" value="30"></div>
+        </div>
+        <pre><code id="s4-sql"></code></pre>
+        <div class="stats">
+          <div class="stat" id="st4-val-b"><div class="k">Score this method attaches</div><div class="v" id="st4-val"></div><div class="s" id="st4-val-s"></div></div>
+          <div class="stat" id="st4-know-b"><div class="k">Known to the bank on that date?</div><div class="v" id="st4-know"></div><div class="s" id="st4-know-s"></div></div>
+          <div class="stat"><div class="k">Score the bank really had</div><div class="v" id="st4-true"></div><div class="s" id="st4-true-s"></div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <div class="legend">
+          <span><i style="background:var(--accent);border-radius:50%"></i>Snapshot date, with score</span>
+          <span><i style="border:1.6px solid var(--muted);border-radius:50%;background:var(--surface)"></i>Day it reached the warehouse</span>
+          <span><i style="background:var(--bad);opacity:.25"></i>The future, from the application's point of view</span>
+        </div>
+        <p class="sim-note">Simulated: one customer with five invented bureau snapshots (score 720, 705, 640, 590 and 560, on days 10, 80, 150, 220 and 280). The score falls as repayment problems build. Nothing is estimated; each method is a plain rule applied to those five rows.</p>
+      </figure>
+
+      <h3 class="sub" id="m-order">Logical query order: how to read any query</h3>
+      <div class="prose">
+        <p>SQL is written in one order and evaluated in another. Written: <code>SELECT … FROM … WHERE … GROUP BY …</code>. Logically, the database works through it like this:</p>
+      </div>
+      <ol class="order" style="margin-top:14px">
+        <li><b>FROM / JOIN</b>build the row set; grain is fixed here</li>
+        <li><b>WHERE</b>filter rows (TRUE only)</li>
+        <li><b>GROUP BY</b>collapse to groups</li>
+        <li><b>HAVING</b>filter groups</li>
+        <li><b>Window functions</b>run over what survived</li>
+        <li><b>SELECT</b>compute outputs and aliases</li>
+        <li><b>DISTINCT</b>remove duplicate rows</li>
+        <li><b>ORDER BY, LIMIT</b>sort, then truncate</li>
+      </ol>
+      <div class="prose" style="margin-top:1.2em">
+        <p>(Real optimisers reorder things for speed, but they must give the same answer as this order.) Several rules follow:</p>
+        <ul>
+          <li>You can't use a window function or a <code>SELECT</code> alias in <code>WHERE</code>, because those don't exist yet. That's why "latest record" needs a wrapper or <code>QUALIFY</code>.</li>
+          <li>A window function runs <em>after</em> <code>GROUP BY</code>, so it can work on aggregated results: rank customers by their monthly spend total, in one query.</li>
+          <li>Filtering rows in <code>WHERE</code> changes what a window or aggregate sees. A running total with a <code>WHERE</code> on date will start from zero at the filter, not from the start of history.</li>
+          <li><code>LIMIT</code> without <code>ORDER BY</code> returns an arbitrary set. Never sample with it.</li>
+        </ul>
+        <p>A reading checklist for any query, yours, a colleague's, or one an LLM wrote:</p>
+        <ol>
+          <li>What is one row of each input table? What is one row of the output?</li>
+          <li>For each join: which key, is it unique on each side, inner or left, and what happens to unmatched rows?</li>
+          <li>Where do the filters sit, and could a NULL slip through or be lost?</li>
+          <li>Are any summed columns repeated from a coarser grain?</li>
+          <li>For time: is each value as-of the event, or as-of today?</li>
+          <li>Do the row counts reconcile with a number you already trust?</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>SQL is where the statistics and modelling in the rest of the curriculum get their data. A mistake here passes into every later step unseen, because later steps assume the table is right.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F2.6 · Selection bias</span><span class="t"><a href="f2-confounding-simpson-selection.html">An inner join is a selection filter</a></span><p>Dropping customers with no matching row is a choice about who is in the sample. Left-join from the population you care about, then look at what the NULLs say.</p></div>
+        <div class="link-card"><span class="code">F3.2 · Point-in-time correctness</span><span class="t">Leakage enters through joins</span><p>An as-of join with an availability clock is the mechanical fix for features that quietly peek into the future. Part 2 builds the machinery; F3.2 explains why it matters for every model.</p></div>
+        <div class="link-card"><span class="code">F3.4 · Behavioural features</span><span class="t">Recency, frequency, velocity</span><p>Almost every behavioural feature is a window function: counts in a trailing frame, <code>LAG</code> for gaps between events, <code>MAX</code> of dates for recency.</p></div>
+        <div class="link-card"><span class="code">F3.1 · Exploratory analysis</span><span class="t">Reconcile first</span><p>Broken joins and duplicates are the first thing to hunt. Row-count reconciliation and key uniqueness checks are exploratory analysis done in SQL.</p></div>
+        <div class="link-card"><span class="code">F7.1 – F7.4 · Metrics</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Fan-out poisons precision and recall</a></span><p>If an alert table is joined to a table with several rows per alert, the same alert is counted multiple times and precision and recall are computed on the wrong denominator.</p></div>
+        <div class="link-card"><span class="code">F2.8 · Survival analysis</span><span class="t"><a href="f2-survival-analysis.html">Event tables are SQL work</a></span><p>Time-to-event data needs the right start date, the right end date and honest censoring, all built with date arithmetic and as-of logic before any model sees it.</p></div>
+        <div class="link-card"><span class="code">F2.1 · Uncertainty</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">Duplicates break standard errors</a></span><p>Repeated rows look like extra independent data, shrinking intervals and flattering significance. Check the grain before computing any interval.</p></div>
+        <div class="link-card"><span class="code">Bank use</span><span class="t">Regulatory and board numbers</span><p>Customer counts, exposure totals, AML alert volumes and complaint statistics are SQL outputs. A wrong join is a misreported figure, and the question after it will be "how was this calculated?"</p></div>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The core of SQL is old and stable. What is changing is the tooling around it: engines that make as-of joins a built-in, conveniences that shorten the awkward patterns, and language models that now write much of the SQL. Reading it critically has become more important, not less.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Searches run on 1 November 2026. Benchmark figures below come from the cited papers and may have been overtaken on live leaderboards.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1970</span><div><div class="t">The relational model</div><p>Codd's paper defines data as relations (tables) manipulated by set operations. Joins, keys and the logic of "which rows survive" all start here.</p><div class="src">Codd, Communications of the ACM, 1970</div></div></li>
+        <li><span class="yr">2003</span><div><div class="t">Window functions standardised</div><p>The SQL standard adds <code>OVER (PARTITION BY … ORDER BY … frame)</code>. Analytic work that once needed self-joins or cursors becomes a single clause. Documentation for every major engine still follows this shape.</p><div class="src">PostgreSQL documentation, window function tutorial</div></div></li>
+        <li><span class="yr">2011</span><div><div class="t">Temporal tables enter the standard</div><p>System-versioned tables keep history automatically and allow queries "as of" a past time, the database-level version of the as-of join in Part 2.</p><div class="src">SQL:2011; see Kulkarni &amp; Michels, SIGMOD Record, 2012</div></div></li>
+        <li><span class="yr">2020s</span><div><div class="t">Native ASOF JOIN</div><p>DuckDB and Snowflake document a built-in <code>ASOF JOIN</code> that matches each row to the closest earlier row on a time column. Feature stores use the same operation to build point-in-time-correct training sets. Support differs between engines, so check yours before relying on it.</p><div class="src">DuckDB and Snowflake documentation; Hopsworks glossary on point-in-time joins</div></div></li>
+        <li><span class="yr">2020s</span><div><div class="t">Shorter patterns</div><p>Several warehouses support <code>QUALIFY</code> (filter on a window result without a wrapper) and <code>GROUP BY ALL</code>. They shorten the queries you will read most often. Neither is in the standard yet, so dialects vary.</p><div class="src">Snowflake and DuckDB documentation</div></div></li>
+        <li><span class="yr">2023–26</span><div><div class="t">Open table formats and time travel</div><p>Table formats such as Apache Iceberg let a query read the table as it was at an earlier snapshot or timestamp. That makes reproducing last quarter's training set feasible, provided the snapshots are retained.</p><div class="src">Apache Iceberg documentation</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Text-to-SQL meets the enterprise</div><p>Spider 2.0 tests language models on real enterprise-scale workflows with large schemas, multiple dialects and long queries. In the paper, the best agent framework solved about 21% of tasks, where models score above 90% on the older Spider 1.0 and 73% on BIRD. Clean benchmark schemas flatter the models. Real warehouses, with their ambiguous grains and half-documented columns, are much harder.</p><div class="src">Lei et al., Spider 2.0, ICLR 2025 (arXiv 2411.07763)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is in banking teams:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Window-function "latest record" and rolling features</b></td><td>The default way to build current-state tables and behavioural features in a warehouse.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Automated data tests on keys and row counts</b></td><td>Uniqueness, not-null and reconciliation checks run on every pipeline build (for example with dbt-style tests).</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>As-of joins with availability time</b></td><td>Done carefully by teams with feature stores or model-risk scrutiny; often missing in ad hoc analyses.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>LLM-drafted SQL with human review</b></td><td>Analysts use assistants to draft queries, then check grain, joins and filters by hand, as in the checklist above.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Natural-language questions answered directly from the warehouse</b></td><td>Promising on clean schemas; enterprise benchmarks show large accuracy gaps.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Query review as part of model validation</b></td><td>Validators ask for the SQL behind training data and reconcile counts to source systems.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These are the mistakes you will meet in warehouse queries and in AI-generated ones. Each comes with the quickest way to catch it.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Summing a column repeated by a join</div><p>Customer salary, credit limit or risk-weighted exposure summed after joining to a finer table.</p><div class="spot"><b>Spot it</b>Compare the total with the same sum on the source table alone. If the joined version is larger, you've fanned out.</div></li>
+        <li><div class="t">A second one-to-many join that multiplies</div><p>Accounts and cards joined to the same customer. Rows are products, not sums.</p><div class="spot"><b>Spot it</b>Row count after the join exceeds either child table's count for the same customers. Aggregate each child first.</div></li>
+        <li><div class="t">Patching duplicates with DISTINCT</div><p><code>SELECT DISTINCT</code> or <code>COUNT(DISTINCT)</code> added until the number "looks right".</p><div class="spot"><b>Spot it</b>Ask why duplicates exist. If the answer isn't a clear grain statement, the fix is hiding a bug. <code>SUM(DISTINCT amount)</code> is nearly always wrong.</div></li>
+        <li><div class="t">The left join that became an inner join</div><p>A WHERE filter on a right-hand column removes the unmatched, NULL rows.</p><div class="spot"><b>Spot it</b>Any <code>WHERE</code> that touches a left-joined table. Check whether the row count equals the left table's. Move the condition into <code>ON</code> if you meant to keep the spine.</div></li>
+        <li><div class="t">Inner join to an activity table</div><p>"Churn rate among customers" computed only over customers who appear in the transactions table.</p><div class="spot"><b>Spot it</b>Ask what the denominator is, and whether it equals the whole customer population.</div></li>
+        <li><div class="t">NULLs dropped by a comparison</div><p><code>status &lt;&gt; 'closed'</code> loses every account whose status is NULL. <code>NOT IN</code> with a NULL in the list returns nothing.</p><div class="spot"><b>Spot it</b>Run the filter and its opposite; if the counts don't sum to the total, NULLs are in the gap. Search for <code>NOT IN</code>.</div></li>
+        <li><div class="t">Averaging averages</div><p>Branch means averaged, monthly rates averaged, or a rate of rates.</p><div class="spot"><b>Spot it</b>Look for <code>AVG</code> applied to a column that is already an average or ratio. Recompute from sums and counts.</div></li>
+        <li><div class="t">Latest record without a tiebreaker</div><p>Two records share a timestamp and the "latest" one changes between runs.</p><div class="spot"><b>Spot it</b>Rerun the query twice, or check whether <code>ORDER BY</code> inside the window is unique per partition.</div></li>
+        <li><div class="t">Latest values on a historical training set</div><p>Today's risk rating, bureau score or segment joined to past events. The model looks wonderful in testing, then falls apart live.</p><div class="spot"><b>Spot it</b>For each feature ask: as of when? If it comes from a "current" table, it is leaking. Check for an availability lag too.</div></li>
+        <li><div class="t">Summing balances over time</div><p>A semi-additive measure summed across days: "total deposits" that depend on how many days are in the range.</p><div class="spot"><b>Spot it</b>The figure changes when the date range changes though the balance didn't. Use the closing value or the average per day.</div></li>
+        <li><div class="t">AI-generated SQL that runs and looks plausible</div><p>Typical signs: joins on the wrong key because two columns have similar names, a join to a history table without a date condition, <code>DISTINCT</code> sprinkled in, filters in <code>WHERE</code> on left-joined tables.</p><div class="spot"><b>Spot it</b>Apply the checklist in Part 2, and reconcile to a known figure. Language models write fluent SQL and don't know which of your tables are one-per-customer.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“The earlier figure counted customers with several accounts several times, so it was too high. I've rebuilt it so each customer is counted once and the customers without an account are shown, not hidden. It now reconciles to the core banking total. I'd suggest we agree the definition of the number in writing, one row per customer, so it can't drift again.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I begin by declaring the grain of every input and the output, then check key uniqueness before each join and reconcile row counts after it. I aggregate the many-side to the output grain before joining, left-join from the population of interest, and watch for NULLs in filters. For anything time-dependent I use an as-of join against availability time so features don't leak. And I reconcile the final figure to a source I trust.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“The query ran and the number looks reasonable. Why not just use it?”</summary><div class="ans"><p>Because the common errors don't fail and don't look absurd. A fanned-out sum is usually off by a factor that seems plausible. I'd check two things first: the row count after each join, and whether the total reconciles to a figure from a source we already trust. It takes five minutes and finds most problems.</p></div></details>
+        <details class="reveal"><summary>“Can't we just add DISTINCT to remove the duplicates?”</summary><div class="ans"><p>It makes the row count look right while hiding why there were duplicates. For counts of keys it may be fine. For sums it is dangerous, because distinct removes legitimate rows with equal values and doesn't fix the repeated values. The proper fix is to join at the right grain or aggregate before joining.</p></div></details>
+        <details class="reveal"><summary>“Why did our customer count drop when we added the product table?”</summary><div class="ans"><p>Most likely an inner join. Customers with no matching product row were removed. If we want all customers, with product details where they exist, it should be a left join from customers. The customers who were lost are worth a look in their own right: they are often the interesting ones.</p></div></details>
+        <details class="reveal"><summary>“Why not use the latest customer segment for the whole training set? It's simpler.”</summary><div class="ans"><p>Because the segment today may be a result of what happened after the event we're predicting. A customer labelled high-risk now might have been labelled so because they later defaulted. Using it gives the model the answer. We need the segment as it was on each application date, and, if the data arrives late, as the bank actually knew it then.</p></div></details>
+        <details class="reveal"><summary>“Could an LLM write our SQL and save the analysts' time?”</summary><div class="ans"><p>It can draft well and save a lot of typing, and I'd use it that way. The risk is in the checks it can't do for us: which tables are one row per customer, what a NULL means in this field, which clock a date column uses. Benchmarks on realistic enterprise warehouses show far lower accuracy than on clean ones. So an analyst should review the grain, joins and filters, and reconcile the result before anyone uses the number.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. SELF-CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones can be done in your head.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Five customers earn AED 20,000, 15,000, 30,000, 10,000 and 25,000 and hold 3, 1, 2, 0 and 2 accounts. What does <code>SUM(salary)</code> return after an inner join to accounts? After a left join? What is the true total?</summary><div class="ans"><p>True total: AED 100,000. Inner join: 3 × 20,000 + 15,000 + 2 × 30,000 + 2 × 25,000 = AED 185,000, and Yusuf (no account) is missing. Left join: the same plus Yusuf's one NULL row, 185,000 + 10,000 = AED 195,000. Both wrong; the fix is to aggregate accounts to one row per customer before joining, or sum salary from the customers table alone.</p></div></details>
+        <details class="reveal"><summary>2. A customer has transactions of AED 400 (1 Oct), then AED 150 and AED 250 both on 2 Oct. With <code>SUM(amount) OVER (ORDER BY date)</code> and no frame, what running totals do the 2 Oct rows show? What if the frame is <code>ROWS</code>?</summary><div class="ans"><p>Default frame is <code>RANGE</code>, so peers (same date) are included: both 2 Oct rows show 800. With <code>ROWS</code> and a tiebreaker, the first shows 550 and the second 800.</p></div></details>
+        <details class="reveal"><summary>3. Of 10 accounts, 5 are active, 2 dormant, 1 closed and 2 have NULL status. How many rows does <code>status &lt;&gt; 'active'</code> return? How many does <code>status NOT IN ('closed', NULL)</code> return?</summary><div class="ans"><p>The first returns 3 (dormant and closed); the NULL rows give UNKNOWN and are dropped, so 5 + 3 = 8, not 10. The second returns 0: for every row that isn't closed, the comparison with NULL makes the result UNKNOWN, and for the closed row it is FALSE.</p></div></details>
+        <details class="reveal"><summary>4. You left-join customers to October transactions and add <code>WHERE t.txn_month = '2026-10'</code>. What have you actually written, and how do you fix it?</summary><div class="ans"><p>An inner join in disguise: customers with no October transaction have NULL in <code>t.txn_month</code>, the comparison is UNKNOWN and the row is dropped. Move the condition into the <code>ON</code> clause (or write <code>t.txn_month = '2026-10' OR t.txn_month IS NULL</code> if you must filter after).</p></div></details>
+        <details class="reveal"><summary>5. Bureau scores are dated days 10, 80 and 150 and reach the warehouse 30 days later. An application is made on day 100. Which score does an as-of join on snapshot date pick? Which should it pick?</summary><div class="ans"><p>On snapshot date it picks the day-80 snapshot, but that only arrived on day 110, ten days after the application, so it is a leak. Using availability time, the scores available by day 100 are those dated day 10 (available day 40). That is the correct one.</p></div></details>
+        <details class="reveal"><summary>6. Your "latest address" query uses <code>ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY updated_at DESC)</code>, and next week's results differ for a few customers. Why?</summary><div class="ans"><p>Ties on <code>updated_at</code>. When two rows share the latest timestamp, <code>ROW_NUMBER</code> chooses between them arbitrarily. Add a unique tiebreaker, such as the record id, to the <code>ORDER BY</code>.</p></div></details>
+        <details class="reveal"><summary>7. Branch A has 100 customers with average balance AED 10,000, and branch B has 900 with AED 40,000. A dashboard shows the bank-wide average as AED 25,000. What is the real average, and what went wrong?</summary><div class="ans"><p>(100 × 10,000 + 900 × 40,000) / 1,000 = AED 37,000. The dashboard averaged the two branch averages, giving each branch equal weight despite a nine-to-one difference in size. Carry sums and counts, divide at the end.</p></div></details>
+      </div>
+    </section>
+
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>E. F. Codd. <a href="https://doi.org/10.1145/362384.362685">A Relational Model of Data for Large Shared Data Banks</a>. Communications of the ACM, 1970.</li>
+        <li>R. Kimball, M. Ross. <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/kimball-techniques/dimensional-modeling-techniques/">Dimensional Modeling Techniques</a>. Kimball Group. Grain, additive and semi-additive facts, slowly changing dimensions.</li>
+        <li>PostgreSQL documentation. <a href="https://www.postgresql.org/docs/current/tutorial-window.html">Window Functions (tutorial)</a> and <a href="https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS">Window Function Calls</a>, including frames and peers.</li>
+        <li>PostgreSQL documentation. <a href="https://www.postgresql.org/docs/current/functions-comparison.html">Comparison Functions and Operators</a>, covering NULL handling and <code>IS DISTINCT FROM</code>.</li>
+        <li>K. Kulkarni, J.-E. Michels. <a href="https://doi.org/10.1145/2380776.2380786">Temporal Features in SQL:2011</a>. ACM SIGMOD Record, 2012.</li>
+        <li>I. Ben-Gan. <i>T-SQL Window Functions: For Data Analysis and Beyond</i>. Microsoft Press, 2nd ed. 2019. The most thorough treatment of frames and window logic, useful beyond T-SQL.</li>
+        <li>DuckDB documentation. <a href="https://duckdb.org/docs/stable/guides/sql_features/asof_join.html">ASOF Join</a>.</li>
+        <li>Snowflake documentation. <a href="https://docs.snowflake.com/en/sql-reference/constructs/asof-join">ASOF JOIN</a>. See also the <a href="https://snowflake-labs.github.io/snowflake-featurestore-imp-guide/06_temporal_features/index.html">feature store guide on temporal features</a>.</li>
+        <li>Hopsworks. <a href="https://www.hopsworks.ai/dictionary/point-in-time-correct-joins">Point-in-time correct joins</a>. Glossary entry.</li>
+        <li>Apache Iceberg documentation. <a href="https://iceberg.apache.org/docs/latest/">Time travel and snapshot queries</a>.</li>
+        <li>F. Lei et al. <a href="https://arxiv.org/abs/2411.07763">Spider 2.0: Evaluating Language Models on Real-World Enterprise Text-to-SQL Workflows</a>. ICLR, 2025.</li>
+        <li>J. Li et al. <a href="https://bird-bench.github.io/">BIRD: A Big Bench for Large-Scale Database Grounded Text-to-SQLs</a>. NeurIPS, 2023.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Module F3 · Data science practice</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const kw = s => esc(s).replace(/\b(SELECT|FROM|LEFT JOIN|JOIN|ON|WHERE|GROUP BY|WITH|AS|OVER|PARTITION BY|ORDER BY|ASOF JOIN|MATCH_CONDITION|ROWS BETWEEN|RANGE|AND|COALESCE|FILTER|DESC)\b/g, '<span class="kw">$1</span>');
+  function setPressed(sel, el) { document.querySelectorAll(sel).forEach(b => b.setAttribute("aria-pressed", String(b === el))); }
+  // rows: [{cells:[string | {t, c}], cls}]
+  function tbl(head, rows, numCols) {
+    numCols = numCols || [];
+    const h = head.map((x, i) => `<th class="${numCols.includes(i) ? "num" : ""}">${x}</th>`).join("");
+    const b = rows.map(r => `<tr class="${r.cls || ""}">` + r.cells.map((c, i) => {
+      const o = typeof c === "object" ? c : { t: c };
+      const cl = [o.c || "", numCols.includes(i) ? "num" : ""].join(" ").trim();
+      return `<td class="${cl}">${o.t}</td>`;
+    }).join("") + "</tr>").join("");
+    return `<table class="data mini"><thead><tr>${h}</tr></thead><tbody>${b}</tbody></table>`;
+  }
+  const NUL = { t: "NULL", c: "nul" };
+  const AED = v => L.fmtAED(v);
+
+  // =====================================================================
+  // Simulation 1: fan-out
+  // =====================================================================
+  const CU = [["Fatima", 20000, 3, 2], ["Omar", 15000, 1, 1], ["Aisha", 30000, 2, 2], ["Yusuf", 10000, 0, 0], ["Hessa", 25000, 2, 1]];
+  const TRUE_SUM = CU.reduce((s, c) => s + c[1], 0);
+  const S1 = { join: "inner", cards: false };
+  function build1() {
+    const rows = [];
+    CU.forEach((c, i) => {
+      const [name, sal, na, nc] = c;
+      if (S1.join === "pre") { rows.push({ cust: i, name, sal, a: String(na), k: String(nc), first: true }); return; }
+      let A = Array.from({ length: na }, (_, k) => `ACC-${i + 1}${"abc"[k]}`);
+      let K = S1.cards ? Array.from({ length: nc }, (_, k) => `CRD-${i + 1}${"abc"[k]}`) : [null];
+      if (S1.join === "inner") {
+        if (!A.length) return;
+        if (S1.cards && !K.length) return;
+      } else {
+        if (!A.length) A = [null];
+        if (S1.cards && !K.length) K = [null];
+      }
+      let first = true;
+      A.forEach(a => K.forEach(k => { rows.push({ cust: i, name, sal, a, k, first }); first = false; }));
+    });
+    return rows;
+  }
+  function renderFan() {
+    const rows = build1();
+    const showK = S1.cards || S1.join === "pre";
+    const pre = S1.join === "pre";
+    const head = ["Customer", "salary (AED)", pre ? "n_accounts" : "account", ...(S1.cards ? [pre ? "n_cards" : "card"] : [])];
+    const tr = rows.map(r => {
+      const cells = [r.name, { t: L.fmtInt(r.sal), c: r.first ? "" : "dup" }];
+      cells.push(r.a === null ? NUL : r.a);
+      if (S1.cards) cells.push(r.k === null ? NUL : r.k);
+      return { cells };
+    });
+    $("s1-tbl").innerHTML = tbl(head, tr, [1]);
+    const sum = rows.reduce((s, r) => s + r.sal, 0);
+    const cust = new Set(rows.map(r => r.cust)).size;
+    $("st1-rows").textContent = rows.length;
+    $("st1-sum").textContent = AED(sum);
+    const diff = sum - TRUE_SUM;
+    $("st1-sum-s").textContent = diff === 0 ? "matches the true total" : (diff > 0 ? "+" : "−") + L.fmtInt(Math.abs(diff)) + " AED vs true (" + (100 * diff / TRUE_SUM).toFixed(0) + "%)";
+    $("st1-sum-b").className = "stat " + (diff === 0 ? "ok" : "bad");
+    $("st1-cust").textContent = cust;
+    $("st1-cust-b").className = "stat " + (cust === 5 ? "ok" : "bad");
+    let sql;
+    const kj = S1.cards ? "\nJOIN cards k ON k.customer_id = c.customer_id" : "";
+    const kl = S1.cards ? "\nLEFT JOIN cards k ON k.customer_id = c.customer_id" : "";
+    if (S1.join === "inner") sql = `SELECT SUM(c.salary)\nFROM customers c\nJOIN accounts a ON a.customer_id = c.customer_id${kj};`;
+    else if (S1.join === "left") sql = `SELECT SUM(c.salary)\nFROM customers c\nLEFT JOIN accounts a ON a.customer_id = c.customer_id${kl};`;
+    else sql = `WITH a AS (SELECT customer_id, COUNT(*) AS n_accounts FROM accounts GROUP BY 1)` +
+      (S1.cards ? `,\n     k AS (SELECT customer_id, COUNT(*) AS n_cards FROM cards GROUP BY 1)` : "") +
+      `\nSELECT SUM(c.salary)\nFROM customers c\nLEFT JOIN a USING (customer_id)` + (S1.cards ? `\nLEFT JOIN k USING (customer_id)` : "") + `;`;
+    $("s1-sql").innerHTML = kw(sql);
+    const v = $("s1-verdict");
+    if (pre) v.innerHTML = `<b>One row per customer, so the sum is right.</b> The account and card counts travel as columns instead of rows. The grain stayed at the customer, so the salary was never copied.`;
+    else if (diff === 0) v.innerHTML = `The total is right.`;
+    else v.innerHTML = `<b>The total is ${AED(Math.abs(diff))} ${diff > 0 ? "too high" : "too low"}.</b> The result has ${rows.length} rows for 5 customers, so salaries were copied onto each account${S1.cards ? " and card pairing" : ""}.${cust < 5 ? " The inner join also removed " + (5 - cust) + " customer" + (5 - cust > 1 ? "s" : "") + " with no match." : " The left join kept everyone, but that doesn't undo the copying."}`;
+  }
+  document.querySelectorAll("[data-join]").forEach(b => b.addEventListener("click", () => { setPressed("[data-join]", b); S1.join = b.dataset.join; renderFan(); }));
+  $("t-cards").addEventListener("click", e => { S1.cards = !S1.cards; e.currentTarget.setAttribute("aria-pressed", String(S1.cards)); renderFan(); });
+
+  // =====================================================================
+  // Simulation 2 (page order): NULL predicates
+  // =====================================================================
+  const AC = [["AE-4101", "active", 12000], ["AE-4102", "active", 8500], ["AE-4103", "active", 45000], ["AE-4104", "active", 3000], ["AE-4105", "active", 22000],
+    ["AE-4106", "dormant", 600], ["AE-4107", "dormant", 150], ["AE-4108", "closed", 0], ["AE-4109", null, 9000], ["AE-4110", null, 31000]];
+  const eq = (s, v) => (s === null ? null : s === v);
+  const not = x => (x === null ? null : !x);
+  const P3 = {
+    eq: { sql: "status = 'active'", f: s => eq(s, "active") },
+    ne: { sql: "status <> 'active'", f: s => not(eq(s, "active")) },
+    not: { sql: "NOT (status = 'active')", f: s => not(eq(s, "active")) },
+    dist: { sql: "status IS DISTINCT FROM 'active'", f: s => s !== "active" },
+    coal: { sql: "COALESCE(status, 'unknown') <> 'active'", f: s => (s === null ? "unknown" : s) !== "active" },
+    notin: { sql: "status NOT IN ('closed', NULL)", f: s => (s === "closed" ? false : null) }
+  };
+  const S3 = { p: "eq" };
+  $("s3-btns").innerHTML = Object.keys(P3).map(k => `<button class="btn" type="button" data-p3="${k}" aria-pressed="${k === S3.p}"><code style="background:none;padding:0;color:inherit">${esc(P3[k].sql)}</code></button>`).join("");
+  const tvName = x => (x === true ? "t" : x === false ? "f" : "u");
+  const tvText = x => (x === true ? "TRUE" : x === false ? "FALSE" : "UNKNOWN");
+  function renderNull() {
+    const P = P3[S3.p];
+    const res = AC.map(a => P.f(a[1]));
+    const tr = AC.map((a, i) => ({
+      cls: res[i] === true ? "keep" : "drop",
+      cells: [a[0], a[1] === null ? NUL : a[1], { t: L.fmtInt(a[2]), c: "" }, { t: `<span class="tv ${tvName(res[i])}">${tvText(res[i])}</span>` }]
+    }));
+    $("s3-tbl").innerHTML = tbl(["account", "status", "balance (AED)", "predicate"], tr, [2]);
+    const kept = AC.filter((a, i) => res[i] === true);
+    const unk = AC.filter((a, i) => res[i] === null);
+    $("st3-rows").textContent = kept.length;
+    $("st3-bal").textContent = AED(kept.reduce((s, a) => s + a[2], 0));
+    $("st3-u").textContent = unk.length;
+    $("st3-u-s").textContent = unk.length ? AED(unk.reduce((s, a) => s + a[2], 0)) + " in rows that are dropped" : "nothing is silently lost";
+    $("st3-u-b").className = "stat " + (unk.length ? "warn" : "ok");
+    $("s3-sql").innerHTML = kw(`SELECT account_id, balance_aed\nFROM accounts\nWHERE ${P.sql};`);
+    const v = $("s3-verdict");
+    const m = {
+      eq: `Five active accounts. Remember this number, and compare it with the next predicate.`,
+      ne: `This is "not active" and it returns 3, so 5 + 3 = 8. The other two accounts are the NULL-status ones: they are neither equal nor unequal to 'active'. They hold AED 40,000.`,
+      not: `Identical to <code>&lt;&gt;</code>. Negating UNKNOWN gives UNKNOWN, so the NULL rows still don't appear.`,
+      dist: `<b>Every non-active row is returned, including NULL.</b> <code>IS DISTINCT FROM</code> treats NULL as an ordinary value that differs from 'active'. 5 + 5 = 10.`,
+      coal: `Same result as <code>IS DISTINCT FROM</code> here, written so the reader sees the decision: NULL is treated as 'unknown'. Pick the label deliberately.`,
+      notin: `<b>Zero rows, with no error.</b> For any row that isn't closed, <code>x &lt;&gt; NULL</code> is UNKNOWN, so the whole <code>NOT IN</code> is UNKNOWN. One NULL in a list, or in a subquery, silences the filter.`
+    };
+    v.innerHTML = m[S3.p];
+  }
+  document.querySelectorAll("[data-p3]").forEach(b => b.addEventListener("click", () => { setPressed("[data-p3]", b); S3.p = b.dataset.p3; renderNull(); }));
+
+  // =====================================================================
+  // Simulation 3 (page order): window functions
+  // =====================================================================
+  const TX = [["t1", "A", 1, 400], ["t2", "A", 2, 150], ["t3", "A", 2, 250], ["t4", "A", 4, 900], ["t5", "A", 5, 100],
+    ["t6", "B", 1, 1200], ["t7", "B", 3, 300], ["t8", "B", 3, 500], ["t9", "B", 4, 80], ["t10", "B", 6, 220]]
+    .map(r => ({ id: r[0], c: r[1], d: r[2], a: r[3], n: +r[0].slice(1) }));
+  const MODES = [["group", "GROUP BY"], ["part", "Total per customer"], ["share", "Share of total"], ["run", "Running total"], ["ma", "3-row moving average"], ["rn", "Latest per customer"]];
+  const S2 = { mode: "group", part: true, frame: false }; // frame false = RANGE default
+  $("s2-btns").innerHTML = MODES.map(m => `<button class="btn" type="button" data-w="${m[0]}" aria-pressed="${m[0] === S2.mode}">${m[1]}</button>`).join("");
+  const cmp = (x, y) => x.d - y.d || x.n - y.n;
+  const dayTxt = d => d + " Oct";
+  function calc(t) {
+    const P = TX.filter(u => !S2.part || u.c === t.c);
+    const tot = P.reduce((s, u) => s + u.a, 0);
+    switch (S2.mode) {
+      case "part": return { t: L.fmtInt(tot) };
+      case "share": return { t: (100 * t.a / tot).toFixed(1) + "%" };
+      case "run": {
+        const s = P.filter(u => (S2.frame ? (u.d < t.d || (u.d === t.d && u.n <= t.n)) : u.d <= t.d)).reduce((q, u) => q + u.a, 0);
+        return { t: L.fmtInt(s), tie: !S2.frame && P.filter(u => u.d === t.d).length > 1 };
+      }
+      case "ma": {
+        const o = P.slice().sort(cmp), i = o.indexOf(t), w = o.slice(Math.max(0, i - 2), i + 1);
+        return { t: L.fmtInt(w.reduce((s, u) => s + u.a, 0) / w.length) };
+      }
+      case "rn": {
+        const o = P.slice().sort((x, y) => cmp(y, x));
+        return { t: String(o.indexOf(t) + 1), keep: o.indexOf(t) === 0 };
+      }
+    }
+  }
+  function renderWin() {
+    const m = S2.mode;
+    $("t-part").disabled = false;
+    $("t-frame").style.display = m === "run" ? "" : "none";
+    let html;
+    if (m === "group") {
+      const groups = S2.part ? ["A", "B"] : [null];
+      const tr = groups.map(g => {
+        const R = TX.filter(t => g === null || t.c === g);
+        return { cells: [g === null ? "(all)" : g, R.length, L.fmtInt(R.reduce((s, t) => s + t.a, 0))] };
+      });
+      html = tbl(["customer", "n_txns", "sum_amount (AED)"], tr, [1, 2]);
+    } else {
+      const heads = { part: "SUM(amount) OVER (…)", share: "amount / SUM(amount) OVER (…)", run: "running total", ma: "moving average", rn: "row_number" };
+      const sorted = TX.slice().sort((x, y) => x.c.localeCompare(y.c) || cmp(x, y));
+      const tr = sorted.map(t => {
+        const o = calc(t);
+        return { cls: (o.keep ? "keep " : "") + (o.tie ? "tie" : ""), cells: [t.id, t.c, dayTxt(t.d), L.fmtInt(t.a), { t: o.t, c: "out" }] };
+      });
+      html = tbl(["txn", "customer", "date", "amount (AED)", heads[m]], tr, [3, 4]);
+    }
+    $("s2-tbl").innerHTML = html;
+    const pp = S2.part ? "PARTITION BY customer " : "";
+    const w = {
+      group: `SELECT customer, COUNT(*) AS n_txns, SUM(amount) AS sum_amount\nFROM txns${S2.part ? "\nGROUP BY customer" : ""};`,
+      part: `SELECT *, SUM(amount) OVER (${pp.trim()}) AS cust_total\nFROM txns;`,
+      share: `SELECT *, amount / SUM(amount) OVER (${pp.trim()}) AS share\nFROM txns;`,
+      run: `SELECT *, SUM(amount) OVER (\n  ${pp}ORDER BY date${S2.frame ? ", txn_id\n  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" : ""}\n) AS running_total\nFROM txns;`,
+      ma: `SELECT *, AVG(amount) OVER (\n  ${pp}ORDER BY date, txn_id\n  ROWS BETWEEN 2 PRECEDING AND CURRENT ROW\n) AS moving_avg\nFROM txns;`,
+      rn: `SELECT * FROM (\n  SELECT *, ROW_NUMBER() OVER (\n    ${pp}ORDER BY date DESC, txn_id DESC\n  ) AS rn\n  FROM txns\n) WHERE rn = 1;`
+    }[m];
+    $("s2-sql").innerHTML = kw(w);
+    const v = {
+      group: S2.part ? `Ten rows in, two rows out. The individual transactions are gone: <code>GROUP BY</code> changes the grain from the transaction to the customer.` : `Without a key to group by, the whole table collapses into a single row: AED 4,100 across both customers.`,
+      part: S2.part ? `All ten rows survive, each carrying its customer's total (A: 1,800; B: 2,300). The grain is still the transaction.` : `Without <code>PARTITION BY</code>, the whole table is one partition, and every row shows AED 4,100. A forgotten clause turns a per-customer measure into a bank-wide one, and nothing errors.`,
+      share: S2.part ? `Each amount as a share of its own customer's total. The shares for customer A add up to 100%.` : `Divided by the grand total, so shares add up to 100% across both customers, not each customer.`,
+      run: S2.frame ? `<code>ROWS</code> gives every row its own step, so ties are split in the tiebreaker's order: A reaches 550 then 800 on 2 Oct.` : (S2.part ? `<b>Default frame: RANGE.</b> The two 2 Oct transactions are peers, so both show the same total, 800 for A and 2,000 for B on 3 Oct (highlighted). Switch to ROWS for one step per row.` : `Without <code>PARTITION BY</code> the running total mixes both customers in date order, so each row's total includes strangers' transactions.`),
+      ma: `Each row averages itself and the two rows before it in that customer's order. The first row has only one value to average, and the second has two. The average is partial there.`,
+      rn: S2.part ? `Row number 1 (highlighted) is each customer's most recent transaction: one row per customer, kept inside a table that still has all ten.` : `With no partition, only one row in the whole table gets number 1: the latest transaction overall.`
+    }[m];
+    $("s2-verdict").innerHTML = v;
+  }
+  document.querySelectorAll("[data-w]").forEach(b => b.addEventListener("click", () => { setPressed("[data-w]", b); S2.mode = b.dataset.w; renderWin(); }));
+  $("t-part").addEventListener("click", e => { S2.part = !S2.part; e.currentTarget.setAttribute("aria-pressed", String(S2.part)); renderWin(); });
+  $("t-frame").addEventListener("click", e => { S2.frame = !S2.frame; e.currentTarget.setAttribute("aria-pressed", String(S2.frame)); renderWin(); });
+
+  // =====================================================================
+  // Simulation 4: as-of joins
+  // =====================================================================
+  const SN = [[10, 720], [80, 705], [150, 640], [220, 590], [280, 560]];
+  const METH = [["latest", "Latest row"], ["exact", "Exact date"], ["asof", "As-of (snapshot date)"], ["avail", "As-of (date it was available)"]];
+  const S4 = { m: "latest", app: 175, lag: 30 };
+  $("s4-btns").innerHTML = METH.map(m => `<button class="btn" type="button" data-m4="${m[0]}" aria-pressed="${m[0] === S4.m}">${m[1]}</button>`).join("");
+  const lastWhere = f => { let r = null; SN.forEach(s => { if (f(s)) r = s; }); return r; };
+  function pick(m) {
+    if (m === "latest") return SN[SN.length - 1];
+    if (m === "exact") return lastWhere(s => s[0] === S4.app);
+    if (m === "asof") return lastWhere(s => s[0] <= S4.app);
+    return lastWhere(s => s[0] + S4.lag <= S4.app);
+  }
+  function renderAsof() {
+    const box = $("s4-chart");
+    box.innerHTML = "";
+    const W = 640, H = 170, x = L.scale(0, 330, 28, 620), ay = 112;
+    const svg = L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img", "aria-label": "Timeline of bureau snapshots and one loan application" }, box);
+    L.svg("rect", { x: x(S4.app), y: 22, width: Math.max(0, x(330) - x(S4.app)), height: ay - 22 + 28, class: "as-future" }, svg);
+    L.svg("line", { x1: x(0), x2: x(330), y1: ay, y2: ay, class: "as-axis" }, svg);
+    [0, 50, 100, 150, 200, 250, 300].forEach(d => {
+      L.svg("text", { x: x(d), y: ay + 28, "text-anchor": "middle" }, svg).textContent = d;
+    });
+    L.svg("text", { x: x(330), y: ay + 44, "text-anchor": "end" }, svg).textContent = "day of year";
+    const sel = pick(S4.m), truth = pick("avail");
+    SN.forEach(s => {
+      const xs = x(s[0]), xa = x(s[0] + S4.lag);
+      if (S4.lag > 0) {
+        L.svg("line", { x1: xs, y1: ay, x2: xa, y2: ay, class: "as-link", transform: "translate(0,-9)" }, svg);
+        L.svg("circle", { cx: xa, cy: ay, r: 5, class: "as-avail" }, svg);
+      }
+      L.svg("circle", { cx: xs, cy: ay, r: 6, class: "as-snap" }, svg);
+      L.svg("text", { x: xs, y: ay - 16, "text-anchor": "middle", class: "lbl-ink" }, svg).textContent = s[1];
+      if (sel && sel === s) {
+        const known = s[0] + S4.lag <= S4.app;
+        L.svg("circle", { cx: xs, cy: ay, r: 12, class: "as-pick " + (known ? "ok" : "bad") }, svg);
+      }
+    });
+    L.svg("line", { x1: x(S4.app), x2: x(S4.app), y1: 22, y2: ay + 10, class: "as-app" }, svg);
+    L.svg("text", { x: x(S4.app) + (S4.app > 250 ? -6 : 6), y: 34, "text-anchor": S4.app > 250 ? "end" : "start", class: "lbl-ink" }, svg).textContent = "application, day " + S4.app;
+    // stats
+    const known = sel && sel[0] + S4.lag <= S4.app;
+    $("st4-val").textContent = sel ? sel[1] : "NULL";
+    $("st4-val-s").textContent = sel ? "from the snapshot on day " + sel[0] : "no row matched";
+    $("st4-know").textContent = !sel ? "n/a" : known ? "Yes" : "No: leak";
+    $("st4-know-s").textContent = sel ? (known ? "reached the warehouse by day " + (sel[0] + S4.lag) : "arrives on day " + (sel[0] + S4.lag) + (sel[0] > S4.app ? ", and is dated after the application" : "")) : "";
+    $("st4-know-b").className = "stat " + (!sel ? "warn" : known ? "ok" : "bad");
+    $("st4-val-b").className = "stat " + (!sel ? "warn" : (truth && sel[1] === truth[1] && sel[0] === truth[0] ? "ok" : "bad"));
+    $("st4-true").textContent = truth ? truth[1] : "NULL";
+    $("st4-true-s").textContent = truth ? "snapshot of day " + truth[0] : "no score available yet";
+    const v = $("s4-verdict");
+    const same = (sel && truth && sel === truth) || (!sel && !truth);
+    if (same) v.innerHTML = `<b>This method returns the score the bank really had</b>${S4.m === "avail" ? "" : ", but only because the dates happen to line up"}. ${S4.m === "avail" ? "That is the one to build training sets with." : "Move the lag or the date and it will go wrong."}`;
+    else if (S4.m === "latest") v.innerHTML = `<b>Leakage.</b> The latest row is the day-280 score of 560, long after the application. A model trained like this sees the damage the future caused.`;
+    else if (S4.m === "exact") v.innerHTML = sel ? `The application happens to fall on a snapshot date. Move the date by five days and the join finds nothing.` : `<b>No match.</b> Equality joins on dates almost never hit. The feature is NULL for nearly every row, and an inner join would delete the application.`;
+    else v.innerHTML = `<b>Subtle leak.</b> The snapshot is dated before the application, so the date test passes, but it only reached the warehouse ${sel ? "on day " + (sel[0] + S4.lag) : "later"}. The bank could not have used it on day ${S4.app}.`;
+    const sql = {
+      latest: `SELECT a.*, b.score\nFROM applications a\nJOIN bureau_latest b USING (customer_id);`,
+      exact: `SELECT a.*, b.score\nFROM applications a\nLEFT JOIN bureau b\n  ON b.customer_id = a.customer_id\n AND b.snapshot_date = a.app_date;`,
+      asof: `SELECT a.*, b.score\nFROM applications a\nASOF LEFT JOIN bureau b\n  MATCH_CONDITION (a.app_date >= b.snapshot_date)\n  ON a.customer_id = b.customer_id;`,
+      avail: `SELECT a.*, b.score\nFROM applications a\nASOF LEFT JOIN bureau b\n  MATCH_CONDITION (a.app_date >= b.loaded_date)\n  ON a.customer_id = b.customer_id;\n-- loaded_date = snapshot_date + reporting lag`
+    }[S4.m];
+    $("s4-sql").innerHTML = kw(sql);
+  }
+  document.querySelectorAll("[data-m4]").forEach(b => b.addEventListener("click", () => { setPressed("[data-m4]", b); S4.m = b.dataset.m4; renderAsof(); }));
+  L.bind("s-app", v => "day " + v, v => { S4.app = v; renderAsof(); });
+  L.bind("s-lag", v => v + " days", v => { S4.lag = v; renderAsof(); });
+
+  renderFan(); renderNull(); renderWin(); renderAsof();
+})();
+</script>
+</body>
+</html>

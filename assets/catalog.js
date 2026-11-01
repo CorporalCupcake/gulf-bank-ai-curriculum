@@ -11,6 +11,12 @@ window.CATALOG = [
   { file: "f2-regression-glms.html", module: "F2", title: "Regression and Generalised Linear Models", codes: ["F2.5"], label: "F2.5", tier: "d", minutes: 50 },
   { file: "f2-confounding-simpson-selection.html", module: "F2", title: "Confounding, Simpson's Paradox and Selection Bias", codes: ["F2.6"], label: "F2.6", tier: "d", star: true, minutes: 40 },
   { file: "f2-survival-analysis.html", module: "F2", title: "Survival Analysis: Time to Default, Churn and Dormancy", codes: ["F2.8"], label: "F2.8", tier: "n", minutes: 40 },
+  { file: "f3-leakage-point-in-time.html", module: "F3", title: "Point-in-Time Correctness and Leakage", codes: ["F3.1"], label: "F3.1", tier: "d", star: true, minutes: 40 },
+  { file: "f3-eda-quality-visualisation.html", module: "F3", title: "Exploratory Analysis, Data Quality and Honest Charts", codes: ["F3.2", "F3.8"], label: "F3.2 · F3.8", tier: "d", minutes: 45 },
+  { file: "f3-sql-thinking.html", module: "F3", title: "SQL Thinking: Joins, Windows and Aggregation", codes: ["F3.3"], label: "F3.3", tier: "d", minutes: 45 },
+  { file: "f3-feature-engineering.html", module: "F3", title: "Feature Engineering: Behaviour, Encoding, Missingness and Scale", codes: ["F3.4", "F3.9"], label: "F3.4 · F3.9", tier: "d", minutes: 45 },
+  { file: "f3-imbalanced-data.html", module: "F3", title: "Imbalanced Data: When the Thing You Want Is Rare", codes: ["F3.5"], label: "F3.5", tier: "d", minutes: 35 },
+  { file: "f3-experiments-and-writeups.html", module: "F3", title: "Experiments, and Analyses That Survive Review", codes: ["F3.6", "F3.7"], label: "F3.6 · F3.7", tier: "d", minutes: 45 },
   { file: "f7-precision-recall-thresholds-calibration.html", module: "F7", title: "Precision, Recall, Thresholds and Calibration", codes: ["F7.1", "F7.2", "F7.3", "F7.4"], label: "F7.1 – F7.4", tier: "d", star: true, minutes: 35 },
   { file: "a1-know-your-agent.html", module: "A1", title: "Know Your Agent: How AI Agents Get Permission to Pay", codes: ["A1.1", "A1.2", "A1.3", "A1.4", "A1.5"], label: "A1.1 – A1.5", tier: "n", star: true, fast: true, minutes: 40 }
 ];

@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Imbalanced Data: When the Thing You Want Is Rare</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .bar-0 { fill: var(--neutral); }
+  .bar-1 { fill: var(--warn); fill-opacity: .8; }
+  .bar-2 { fill: var(--accent); }
+  .cv-ideal { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-curve.off { stroke: var(--bad); }
+  .cv-rule { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-opt { stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .cv-dot { fill: var(--bad); stroke: var(--surface); stroke-width: 2; }
+  .ob { fill: var(--neutral); fill-opacity: .55; }
+  .ob.surge { fill: var(--bad); fill-opacity: .55; }
+  .tl-true { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .emb { fill: var(--warn); fill-opacity: .14; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F3 · Data science practice</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F3.5</span>
+        <span class="pill d">Day one</span>
+        <span>About 35 minutes</span>
+      </div>
+      <h1>Imbalanced Data: When the Thing You Want Is Rare</h1>
+      <p class="dek">Why accuracy goes blind at 0.5% fraud, what resampling and class weights really do to your probabilities, why the threshold is the lever that matters, and how few positives you actually have.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Imbalance is a symptom: the real problems are that you have few positive examples, that missing one costs far more than a false alarm, and that the labels arrive late. Fix those with the threshold, honest splits and intervals, and treat rebalancing as a tool that shifts probabilities and must be undone before anyone uses them.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A card-fraud team at a Gulf bank screens 100,000 transactions a day. Five in every thousand, 0.5%, turn out to be fraud. A data scientist builds a model and reports <strong>accuracy of 98.9%</strong>. The head of fraud is pleased until someone points out that a program with one line, <em>"call everything legitimate"</em>, scores <strong>99.5%</strong>.</p>
+        <p>The program catches no fraud at all. It wins on accuracy because accuracy counts every transaction equally, and 99.5% of transactions are legitimate. Getting those right is easy and worth nothing. The 0.5% you care about hardly moves the number.</p>
+      </div>
+
+      <figure class="figure" id="fig-acc">
+        <div class="fig-head"><span class="fig-title">The accuracy paradox</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start at 0.5% fraud. The bars look almost identical, yet one model does nothing. Drag the fraud rate down and watch the useful models fall below "always legit". Drag it up past 2% and accuracy starts to behave. The table underneath is the honest view.</p>
+        <div class="chart-wrap" id="acc-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-prev">Share of transactions that are fraud <output for="s-prev"></output></label><input type="range" id="s-prev" min="-3.3" max="-1" step="0.05" value="-2.3"></div>
+        </div>
+        <div class="table-wrap"><div id="acc-table"></div></div>
+        <div class="verdict" id="s1-verdict"></div>
+        <p class="sim-note">Simulated: 100,000 transactions. The decent model catches 70% of fraud and wrongly flags 1% of legitimate transactions; the strong model catches 85% and flags 0.2%. Both rates stay fixed as the fraud share moves. Figures are expected values, no sampling noise. The slider is logarithmic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to take from it.</p>
+        <ul>
+          <li><strong>Judge a rare-event model on the rare class.</strong> What share of fraud did it catch (recall)? What share of its alerts were real (precision)? Both are about the minority. Accuracy mostly measures the majority. F7 builds these properly; here we only need the habit.</li>
+          <li><strong>"Imbalanced" is not the disease.</strong> A model is not broken because 99.5% of rows are one class. The trouble is what comes with it: very few positives to learn from, a lopsided cost of errors, and labels that show up weeks late. Most of this lesson is about those three.</li>
+          <li><strong>Rebalancing the data is a tool with a side effect.</strong> It can help a weak model find the minority class. It also changes the probabilities the model outputs, and nobody downstream knows unless you tell them. Part 2 shows exactly how far and how to undo it.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before touching the data, ask three questions. What does a missed positive cost against a false alarm? How many positives do I really have? How long until a label is trustworthy? The answers decide the metric, the threshold and the split. Resampling is usually the last thing to reach for.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-metrics">Why rare events defeat the usual numbers</h3>
+      <div class="prose">
+        <p>The base-rate arithmetic from F1.4 and F7 is the whole reason. Precision, the share of alerts that are real, depends on the fraud rate π as well as on the model:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>precision</mtext><mo>=</mo><mfrac><mrow><mi>π</mi><mo>·</mo><mi>TPR</mi></mrow><mrow><mi>π</mi><mo>·</mo><mi>TPR</mi><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>π</mi><mo stretchy="false">)</mo><mo>·</mo><mi>FPR</mi></mrow></mfrac></math>
+        <p class="where">TPR is recall (share of fraud caught) and FPR is the share of legitimate transactions wrongly flagged. With π = 0.5%, TPR = 70% and FPR = 1%: 0.0035 ÷ (0.0035 + 0.00995) = <strong>26%</strong>. Three in four alerts are false, from a model that looks excellent by its rates. The 99.5% legitimate transactions multiply even a small FPR into a large pile of false alarms.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>That is also why the choice between ROC and precision-recall curves matters here. The ROC curve plots TPR against FPR, and neither involves π, so ROC-AUC is unchanged when fraud goes from 5% to 0.05%. The precision-recall curve uses precision, which collapses as π falls, so <strong>PR-AUC</strong> (average precision) tracks the workload your team will actually face. A useless model has ROC-AUC 0.5 at any prevalence, but PR-AUC roughly equal to π, which is the right floor to compare against. F7 has the simulation and the nuance (ROC is still the right tool for comparing ranking quality across populations with different rates); <a href="f7-precision-recall-thresholds-calibration.html#m-curves">go there</a> rather than repeat it here.</p>
+        <p>One practical consequence: never compare PR-AUC across datasets with different fraud rates, or quote it without the rate beside it. A PR-AUC of 0.30 is a superb result at 0.05% prevalence and a poor one at 20%.</p>
+      </div>
+
+      <h3 class="sub" id="m-ess">Your real sample size is the number of positives</h3>
+      <div class="prose">
+        <p>A fraud table with five million rows feels like big data. For learning what fraud looks like, it isn't. Each legitimate row says a little about "normal"; the information about the boundary between fraud and not-fraud comes mostly from the fraud rows. As a rule of thumb, the <strong>effective sample size is closer to the number of positives than to the number of rows</strong>. In logistic regression this is literal: the uncertainty on the intercept and on most coefficients shrinks with the minority count, and adding more negatives helps little once you have enough of them (King and Zeng, 2001).</p>
+        <p>The same holds for evaluation. Recall is a proportion estimated from the positives in your test set, so its standard error is</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>SE</mi><mo stretchy="false">(</mo><mtext>recall</mtext><mo stretchy="false">)</mo><mo>≈</mo><msqrt><mfrac><mrow><mi>r</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>r</mi><mo stretchy="false">)</mo></mrow><msub><mi>n</mi><mn>1</mn></msub></mfrac></msqrt></math>
+        <p class="where"><i>r</i> is the measured recall and <i>n</i><sub>1</sub> the number of positives in the test set. A 95% interval is about ±2 standard errors (F2.1). At r = 0.8 this is ±0.78 ÷ √<i>n</i><sub>1</sub>: with 100 frauds in the test set you can only say recall is 80% give or take 8 points. The number of legitimate rows does not appear.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Problem</th><th>Rows</th><th>Positive rate</th><th>Positives</th><th>In a 20% test slice</th><th>95% interval on 80% recall</th></tr></thead>
+          <tbody>
+            <tr><td>Card-not-present fraud</td><td>5,000,000</td><td>0.02%</td><td>1,000</td><td>200</td><td>± 5.5 points</td></tr>
+            <tr><td>Retail card fraud, smaller bank</td><td>500,000</td><td>0.2%</td><td>1,000</td><td>200</td><td>± 5.5 points</td></tr>
+            <tr><td>Personal finance default</td><td>40,000</td><td>3%</td><td>1,200</td><td>240</td><td>± 5.1 points</td></tr>
+            <tr><td>Confirmed AML cases</td><td>2,000,000</td><td>0.01%</td><td>200</td><td>40</td><td>± 12.4 points</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Five million rows and half a million rows give exactly the same precision on recall, because both have 1,000 positives. The AML case is worse: with 40 confirmed cases in the test slice, the difference between two models at 78% and 84% recall is noise. This is the power calculation of F2.7 with positives as the sample size, and it should shape what you promise. Two corollaries:</p>
+        <ul>
+          <li><strong>Model complexity is limited by positives, not rows.</strong> An old rule of thumb asks for about ten events per candidate variable; newer work gives more careful criteria (Riley et al., 2020). Either way, 200 positives do not support a model with 300 features unless something regularises it hard.</li>
+          <li><strong>Report intervals.</strong> Bootstrap the test positives (F2.2) when you compare models, and say "the models are not distinguishable on 40 cases" when that is true.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-resample">Weights, undersampling, oversampling, SMOTE: what each really does</h3>
+      <div class="prose">
+        <p>All the standard fixes try to stop the model ignoring the minority class. They differ in mechanism, and the differences matter more than the folklore suggests.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Method</th><th>What it does</th><th>Effect on probabilities</th><th>Honest verdict</th></tr></thead>
+          <tbody>
+            <tr><td><b>Do nothing, pick the threshold</b></td><td>Train on the data as it is. Choose the alert cut-off from costs or review capacity.</td><td>None. Probabilities stay calibrated if the model is well fitted.</td><td>The default to beat. Strong tree ensembles often need nothing else.</td></tr>
+            <tr><td><b>Class weights</b> (cost-sensitive loss)</td><td>Each fraud row counts <i>w</i> times in the loss. In XGBoost: <code>scale_pos_weight</code>; in scikit-learn: <code>class_weight</code>.</td><td>Inflates probabilities. For a well-specified model the odds are multiplied by <i>w</i>.</td><td>Cheap, keeps all data. Fine if you correct afterwards or only use the ranking.</td></tr>
+            <tr><td><b>Random undersampling</b></td><td>Keep every fraud and a random fraction β of legitimate rows.</td><td>Inflates probabilities, odds multiplied by 1/β.</td><td>Useful for speed with hundreds of millions of rows. Throws away real information about hard negatives.</td></tr>
+            <tr><td><b>Random oversampling</b></td><td>Duplicate fraud rows.</td><td>Same shift as a class weight.</td><td>A class weight in disguise, with overfitting risk because it repeats exact rows.</td></tr>
+            <tr><td><b>SMOTE</b> and variants</td><td>Create synthetic fraud rows by interpolating between a real fraud and one of its nearest fraud neighbours: <i>x</i><sub>new</sub> = <i>x</i><sub>i</sub> + <i>u</i>·(<i>x</i><sub>nn</sub> − <i>x</i><sub>i</sub>), <i>u</i> between 0 and 1.</td><td>Same inflation, plus invented points in the gaps.</td><td>Evidence for gains with strong models is weak (Part 4). Awkward for categories, hard in high dimensions, and a leakage trap.</td></tr>
+            <tr><td><b>Focal loss, balanced ensembles</b></td><td>Down-weight easy examples in the loss, or train several models on balanced subsets.</td><td>Distorts probabilities in ways that are not a clean constant.</td><td>Helps neural nets on extreme imbalance; recalibrate on real data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="prose" style="margin-top:1.2em">
+        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">Why resampling inflates probabilities, and the fix</h4>
+        <p>Bayes' rule (F1.4) splits the posterior odds into two pieces: how much the evidence favours fraud (the likelihood ratio), times the prior odds. When you drop legitimate rows <em>at random, regardless of their features</em>, you change the prior odds in your training table and leave the likelihood ratio alone. So the model faithfully learns the likelihood ratio, but it multiplies by the wrong prior. Its odds come out too high by exactly the factor you altered the mix by.</p>
+        <p>Keep a fraction β of legitimate rows. The odds the model reports are <strong>1/β times the true odds</strong>. Undo it:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>p</mi><mo>=</mo><mfrac><mrow><mi>β</mi><mspace width="0.2em"></mspace><msub><mi>p</mi><mi>s</mi></msub></mrow><mrow><mi>β</mi><mspace width="0.2em"></mspace><msub><mi>p</mi><mi>s</mi></msub><mo>−</mo><msub><mi>p</mi><mi>s</mi></msub><mo>+</mo><mn>1</mn></mrow></mfrac></math>
+        <p class="where"><i>p<sub>s</sub></i> is the probability from the model trained on the undersampled data, β the share of legitimate rows kept, and <i>p</i> the corrected probability. This is the form given by Dal Pozzolo et al. (2015). In odds terms it is just "multiply by β". For a class weight <i>w</i> on the fraud rows, divide the odds by <i>w</i>: <i>p</i> = <i>p<sub>w</sub></i> ÷ (<i>p<sub>w</sub></i> + <i>w</i>(1 − <i>p<sub>w</sub></i>)). Example: keep 1 in 100 (β = 0.01), model says 33%: odds 0.49, times 0.01 gives 0.0049, so <strong>p ≈ 0.5%</strong>.</p>
+      </div>
+
+      <figure class="figure" id="fig-under">
+        <div class="fig-head"><span class="fig-title">Undersample, watch the probabilities inflate, then correct them</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> keep 1 in 100 legitimate rows and look at the red curve: when the model says 10%, the real fraud rate is about 0.1%. Then press <b>Apply prior correction</b> and the curve snaps to the diagonal. Look at what the bank's 10% alert rule does to alert volume and cost before and after.</p>
+        <div class="btns" role="group" aria-label="Correction">
+          <button class="btn" type="button" id="b-cor" aria-pressed="false">Apply prior correction</button>
+        </div>
+        <div class="chart-wrap" id="under-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Uncorrected probabilities</span>
+          <span><i style="background:var(--accent)"></i>Corrected</span>
+          <span><i style="background:var(--muted)"></i>Perfectly calibrated</span>
+          <span><i style="background:var(--warn)"></i>Bank rule: alert above 10%</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-pi2">True fraud rate <output for="s-pi2"></output></label><input type="range" id="s-pi2" min="-3.3" max="-1.3" step="0.05" value="-2.3"></div>
+          <div class="ctl"><label for="s-keep">Keep one in X legitimate rows <output for="s-keep"></output></label><input type="range" id="s-keep" min="0" max="3" step="0.05" value="2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Fraud share of the training sample</div><div class="v" id="st2-share"></div><div class="s">against the true rate</div></div>
+          <div class="stat" id="st2-risk-b"><div class="k">Probability shown for a 2% risk</div><div class="v" id="st2-risk"></div><div class="s">transaction that is truly 2% likely fraud</div></div>
+          <div class="stat" id="st2-alert-b"><div class="k">Alerts per 100,000 on the 10% rule</div><div class="v" id="st2-alert"></div><div class="s" id="st2-alert-s"></div></div>
+          <div class="stat" id="st2-cost-b"><div class="k">Cost per 100,000 transactions</div><div class="v" id="st2-cost"></div><div class="s" id="st2-cost-s"></div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: fraud and legitimate scores are normal with equal spread, the fraud mean 2.5 standard deviations higher (AUC about 0.96), so a perfectly fitted model's log-odds are linear in the score. Undersampling shifts those log-odds by ln X. Each alert costs AED 40 to review; each missed fraud costs AED 400. That makes 10% the break-even probability. Exact expected values.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The picture explains three things you will hear in meetings.</p>
+        <ul>
+          <li><strong>AUC did not change and the model was not worse.</strong> The ordering of transactions is the same. Only the labels on the probability axis moved. This is the undersampling failure from F7.4 seen from the inside.</li>
+          <li><strong>It bites when the probability is used as a number.</strong> A fixed cut such as "alert above 10%", an expected-loss calculation, a pricing or provisioning model (IFRS 9 probability of default), or a blend with another model's score all assume the number means what it says. If you only send the top 300 scores a day to analysts, calibration doesn't matter.</li>
+          <li><strong>The correction assumes a clean mechanism.</strong> It is exact when sampling depends on the label alone and the model is well specified. For boosted trees and neural nets under heavy resampling the shift is not a neat constant. The robust habit is to hold out an <em>untouched, representative</em> validation set and recalibrate on it (isotonic or Platt scaling, F7.4), whatever you did in training. Never evaluate on the resampled set: precision there is meaningless.</li>
+        </ul>
+        <p>On SMOTE specifically. It was a reasonable idea in 2002 for weak learners that cannot find a thin minority region, and it is still widely taught. The evidence since then is not kind to it with modern models: strong classifiers such as gradient boosting with a tuned threshold show little or no gain from it, and plain random oversampling does about as well. It also needs a distance, which is awkward for categorical fields like merchant category or channel, and it invents transactions that never happened. Above all, it must be applied <em>inside</em> each training fold only. Oversample before splitting and synthetic points built from test-set neighbours leak into training, and AUC jumps for entirely the wrong reason.</p>
+      </div>
+
+      <h3 class="sub" id="m-threshold">The threshold is the real lever</h3>
+      <div class="prose">
+        <p>Most of what people hope to get from rebalancing, a model that "pays attention" to fraud, is available more directly. A model produces a score. You choose where to draw the line. Moving the line trades missed fraud against false alarms along the same curve, and nothing about resampling creates a better curve for a well-fitted model.</p>
+        <p>If probabilities are calibrated, the cost-minimising rule is simple: alert when the expected loss avoided exceeds the cost of acting. With AED 400 at stake and AED 40 to review, alert when p × 400 > 40, so p > 10%. If review capacity is the binding limit, alert on the top <i>k</i> scores per day instead. Both are decisions about the threshold, made from business numbers. Neither needs a balanced training set. F7.3 builds this out; the simulation below shows the part that is specific to this lesson.</p>
+      </div>
+
+      <figure class="figure" id="fig-thr">
+        <div class="fig-head"><span class="fig-title">Weights move the label on the line, not the best place to cut</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> leave the weight at ×1 and press <b>Jump to best cut</b>. Now raise the class weight to ×50 or more: the cost curve does not move, but the probability the model shows at your cut climbs, and the "alert above 10%" rule (orange) slides away from the best cut and the cost explodes. The fix is the threshold, or the correction from Simulation 2.</p>
+        <div class="btns" role="group" aria-label="Cut shortcuts">
+          <button class="btn" type="button" id="b-opt">Jump to best cut</button>
+          <button class="btn" type="button" id="b-rule">Apply the 10% rule to the shown probability</button>
+        </div>
+        <div class="chart-wrap" id="thr-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Cost per 100,000 at each cut</span>
+          <span><i style="background:var(--accent)"></i>Best cut</span>
+          <span><i style="background:var(--warn)"></i>Where "shown probability above 10%" lands</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-cut">Your cut (score; higher flags fewer) <output for="s-cut"></output></label><input type="range" id="s-cut" min="-1" max="4.5" step="0.05" value="1.5"></div>
+          <div class="ctl"><label for="s-w">Class weight on fraud rows <output for="s-w"></output></label><input type="range" id="s-w" min="0" max="3" step="0.05" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Probability shown at your cut</div><div class="v" id="st3-shown"></div><div class="s">what the weighted model reports</div></div>
+          <div class="stat"><div class="k">Fraud rate really at your cut</div><div class="v" id="st3-true"></div><div class="s">among transactions scoring there</div></div>
+          <div class="stat"><div class="k">Alerts per 100,000</div><div class="v" id="st3-alert"></div><div class="s" id="st3-alert-s"></div></div>
+          <div class="stat" id="st3-cost-b"><div class="k">Cost per 100,000</div><div class="v" id="st3-cost"></div><div class="s" id="st3-cost-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: 0.5% fraud, same score model as Simulation 2, AED 40 per alert and AED 400 per missed fraud. A class weight w adds ln w to the model's log-odds, which is exact for a well-specified model. Flexible models also change shape under weights, so real gains and losses can differ. The cost axis is logarithmic. Exact expected values.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The orange line is the trap. A team sets class weights, leaves the old "alert above 10%" rule in place, and quietly floods the review queue, because the same score now maps to a larger shown probability. The remedy is either to move the threshold to the best cut, which depends only on costs and the true score distribution, or to correct the probabilities first so that 10% means 10%. Doing neither is the common failure.</p>
+        <p>When might weighting or resampling still help? When the learner is flexible and the minority class is so thin that, unweighted, it spends its capacity on the majority and never finds the small fraud pocket. Then weights act on the <em>shape</em> of the fit and the ranking improves, not just the labels. Treat that as an empirical question: compare against the plain model on an untouched, time-ordered test set, with intervals, using precision at your review capacity as the metric.</p>
+      </div>
+
+      <h3 class="sub" id="m-split">Splitting without fooling yourself</h3>
+      <div class="prose">
+        <p>With few positives, how you split matters as much as what you do to the training data.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Split</th><th>What it does</th><th>Use it for</th><th>Danger</th></tr></thead>
+          <tbody>
+            <tr><td><b>Random split</b></td><td>Rows land in train or test by chance.</td><td>Almost nothing in banking.</td><td>With 0.05% positives a fold can have too few frauds, and future fraud leaks into the past.</td></tr>
+            <tr><td><b>Stratified split / stratified k-fold</b></td><td>Keeps the fraud share equal in every fold.</td><td>Stable estimates when time does not matter: application scorecards on a snapshot, benchmarks of methods.</td><td>Fixes the count problem, not the time problem. It will still mix tomorrow into yesterday.</td></tr>
+            <tr><td><b>Temporal split</b></td><td>Train on months 1–9, validate on 10, test on 11–12.</td><td>Any live system. Fraud tactics, customer mix and rules change, and the model will face the future.</td><td>Fewer positives per slice, so wide intervals. Needs an embargo for label delay (next section).</td></tr>
+            <tr><td><b>Group split</b></td><td>All of a customer's, account's or device's rows go to one side.</td><td>Whenever one entity has many rows: the same card, the same mule account, the same complaint author.</td><td>If skipped, the model memorises the entity and test scores are fantasy.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The usual sound design is temporal and grouped, stratified where it can be, with repeated or rolling windows so you can see variation between periods, not one lucky number. Point-in-time correctness (F3.1) governs which features existed at each date; this is the same discipline applied to the labels.</p>
+      </div>
+
+      <h3 class="sub" id="m-delay">Label delay: the fraud you cannot see yet</h3>
+      <div class="prose">
+        <p>A card transaction is labelled fraud when the customer disputes it, an analyst confirms it, or a chargeback arrives. That takes days to months. A loan is labelled defaulted only after 90 days past due. So at any moment, the most recent transactions look cleaner than they are, and the missing frauds are exactly the newest ones, which are the ones the model most needs to learn.</p>
+        <p>If you treat "no fraud label yet" as "legitimate", recent weeks teach the model that the new pattern is normal. This is censoring, the same problem that survival analysis (F2.8) handles for time to default. In practice there are three remedies: leave an <strong>embargo</strong> so that training and evaluation only use periods old enough for most labels to have matured; use techniques that treat recent labels as incomplete; and monitor how the labelled rate of a given week keeps rising for months after it ends.</p>
+      </div>
+
+      <figure class="figure" id="fig-delay">
+        <div class="fig-head"><span class="fig-title">The newest weeks look clean, and they aren't</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> at a 45-day average delay, the surge of fraud in the last six weeks (red) is mostly invisible in the recorded labels. Shorten the delay and the gap closes. Then add an embargo: you drop the least mature weeks from training, the label noise falls, and you pay with fewer positives and a model that is further behind.</p>
+        <div class="chart-wrap" id="delay-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>True weekly fraud rate</span>
+          <span><i class="sq" style="background:var(--neutral);opacity:.6"></i>Rate recorded in labels today</span>
+          <span><i class="sq" style="background:var(--bad);opacity:.6"></i>Same, during the new attack</span>
+          <span><i class="sq" style="background:var(--warn);opacity:.3"></i>Embargoed weeks</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-del">Average label delay <output for="s-del"></output></label><input type="range" id="s-del" min="7" max="90" step="1" value="45"></div>
+          <div class="ctl"><label for="s-emb">Embargo: newest weeks left out <output for="s-emb"></output></label><input type="range" id="s-emb" min="0" max="12" step="1" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st4-surge-b"><div class="k">Of the new attack's fraud, labelled so far</div><div class="v" id="st4-surge"></div><div class="s">last six weeks</div></div>
+          <div class="stat"><div class="k">Newest week: recorded vs true</div><div class="v" id="st4-new"></div><div class="s">share of its fraud with a label</div></div>
+          <div class="stat" id="st4-noise-b"><div class="k">Fraud in the training window labelled legit</div><div class="v" id="st4-noise"></div><div class="s">label noise the model learns from</div></div>
+          <div class="stat"><div class="k">Fraud labels given up by the embargo</div><div class="v" id="st4-lost"></div><div class="s">of all labels available today</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: constant volume, true fraud rate 0.30% a week, rising from week 47 as a new attack grows to 0.78% in week 52. Each fraud is labelled after a delay drawn from an exponential distribution with the chosen mean, so the share labelled at age a is 1 − e<sup>−a/mean</sup>. Real delays have longer tails. Exact expected values.</p>
+      </figure>
+
+      <div class="prose">
+        <p>This is why a model can look excellent in back-testing and disappoint in its first month. The evaluation period had mature labels; the live period does not, and neither do its monitoring numbers. When the fraud team reports "recall fell in March", ask whether March's labels were still arriving. Dal Pozzolo and colleagues (2018) made this the centre of their fraud-detection design: train separately on fresh analyst feedback and on older delayed labels, and combine them.</p>
+        <p>Delay is not only a nuisance in the target. Alert-driven labels are also selective: you only confirm what you alerted on (F2.6, "selective labels"). Keep a small random sample of unflagged transactions reviewed, so you have an unbiased estimate of what you miss.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Imbalance sits where probability, evaluation and process meet. These are the places it comes back.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F7.1 – F7.4 · Precision, recall, thresholds, calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">The measuring side of this lesson</a></span><p>F7 teaches how to measure a rare-event model and how to calibrate it. This lesson is about what you do to the training data and why it changes what F7 measures.</p></div>
+        <div class="link-card"><span class="code">F1.4 · Bayes' rule and base rates</span><span class="t"><a href="f1-probability-bayes-distributions.html">Prior odds times evidence</a></span><p>The prior-shift correction is Bayes' rule with a different prior. Resampling edits the prior and leaves the evidence alone.</p></div>
+        <div class="link-card"><span class="code">F2.1 – F2.2 · Intervals and the bootstrap</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">Put an interval on recall</a></span><p>With 40 positives in a test slice, recall is a wide interval. Bootstrap the positives before declaring a winner.</p></div>
+        <div class="link-card"><span class="code">F2.3 · F2.4 · F2.7 · Tests and power</span><span class="t"><a href="f2-tests-pvalues-power.html">Power is about positives</a></span><p>How many frauds do you need to detect a 5-point recall gain? The answer is a count of positives, not of rows.</p></div>
+        <div class="link-card"><span class="code">F2.5 · Regression and GLMs</span><span class="t"><a href="f2-regression-glms.html">The intercept carries the prior</a></span><p>In logistic regression, resampling or weighting shifts the intercept and leaves the slopes roughly as they were. That is the algebra behind the correction.</p></div>
+        <div class="link-card"><span class="code">F2.6 · Selection bias</span><span class="t"><a href="f2-confounding-simpson-selection.html">Labels exist where someone looked</a></span><p>Fraud and AML labels come from alerts. A retrained model inherits the old rules' blind spots unless you keep a random review sample.</p></div>
+        <div class="link-card"><span class="code">F2.8 · Survival analysis</span><span class="t"><a href="f2-survival-analysis.html">Label delay is censoring</a></span><p>A loan that has not defaulted yet is not a good loan, it is an unfinished one. Survival methods use that information properly.</p></div>
+        <div class="link-card"><span class="code">F3.1 · F3.6 · Leakage and experiments</span><span class="t">Splits and proof</span><p>Resampling before splitting is leakage. And the only clean proof that a rebalanced model improved fraud losses is a controlled experiment, not a better offline score.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift monitoring</span><span class="t">Prevalence drift moves calibration</span><p>When the fraud rate shifts, ranking holds and calibration slips. The prior-shift formula is also the quick repair for a changed base rate.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Card and payment fraud.</strong> Rates of 0.02–0.5%, delayed chargeback labels, capacity-limited analysts. Thresholds and top-k precision dominate.</li>
+          <li><strong>AML transaction monitoring.</strong> Confirmed suspicious cases are rarer still and labelled only where an investigator looked. Intervals on tiny positive counts matter most here.</li>
+          <li><strong>Credit default.</strong> A few percent bad rate, labels only after 90 days past due, calibration needed for provisioning. Resampling for a scorecard must be corrected before it reaches an expected-loss model.</li>
+          <li><strong>Complaints and KYC text.</strong> The one complaint in 400 alleging unauthorised access, in Arabic or English, or the adverse-media hit among thousands of screenings. Rare classes in text models raise the same questions, with weights and thresholds per language.</li>
+          <li><strong>Collections and churn.</strong> Moderate imbalance, but the temporal split and the treatment effects of calling (F2.6) matter more than the ratio.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The core is settled. The live arguments are about whether the classic fixes are needed at all with modern models, how much they damage calibration, and how to handle label latency in streaming fraud systems.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 1 November 2026. Searches were light; items below are ones I could confirm.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2001</span><div><div class="t">Rare events and prior correction in logistic regression</div><p>King and Zeng showed that standard logistic regression underestimates the probability of rare events in small samples, and gave the prior correction and weighting for samples where positives were deliberately over-collected.</p><div class="src">King &amp; Zeng, Political Analysis, 2001</div></div></li>
+        <li><span class="yr">2002</span><div><div class="t">SMOTE</div><p>Synthetic minority oversampling by interpolation between neighbours. One of the most cited methods in machine learning, and the template for a large family of variants.</p><div class="src">Chawla et al., JAIR, 2002</div></div></li>
+        <li><span class="yr">2015</span><div><div class="t">The PR plot over ROC for imbalanced data, and the undersampling correction</div><p>Saito and Rehmsmeier argued, with simulations, that the precision-recall plot is more informative than ROC on imbalanced data. The same year, Dal Pozzolo et al. gave the probability correction after undersampling used in Simulation 2.</p><div class="src">Saito &amp; Rehmsmeier, PLoS ONE, 2015; Dal Pozzolo et al., IEEE SSCI, 2015</div></div></li>
+        <li><span class="yr">2017–19</span><div><div class="t">Loss-level answers for deep nets</div><p>Focal loss down-weights easy examples so that a flood of easy negatives does not dominate training. The class-balanced loss reweights by an "effective number" of samples per class that accounts for overlap between examples.</p><div class="src">Lin et al., ICCV 2017; Cui et al., CVPR 2019</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">Fraud detection with delayed feedback, on real card data</div><p>A realistic model of fraud streams: investigators label alerts quickly, other transactions are labelled late. The proposed strategy trains separate classifiers on feedback and on delayed labels and aggregates them. Tested on over 75 million transactions across three years.</p><div class="src">Dal Pozzolo et al., IEEE TNNLS, 2018</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Imbalance corrections harm calibration and do not help discrimination</div><p>In simulations with logistic regression, random under- and oversampling and SMOTE all led to poor calibration with strong overestimation of minority-class probabilities, and gave no gain in AUC. Simply shifting the threshold gave similar sensitivity and specificity trade-offs.</p><div class="src">van den Goorbergh et al., JAMIA, 2022</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Do strong classifiers need balancing?</div><p>Across 73 datasets, balancing did not help strong, consistent classifiers such as gradient boosting. It still helped weaker ones, and simple random oversampling worked about as well as SMOTE-style methods.</p><div class="src">Elor &amp; Averbuch-Elor, arXiv 2201.08528</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">The same finding at scale</div><p>A preprint testing SMOTE, random under- and oversampling on ten clinical datasets with over 600,000 patients found no positive effect on predictive performance, and consistently worse calibration, with shifted calibration intercepts and slopes. It is a preprint and medical rather than banking; the lesson transfers because the mechanism is the same.</p><div class="src">arXiv 2603.00208, 2026 (preprint; check for a published version)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Gradient boosting with class weights and a tuned threshold</b></td><td>The common baseline for fraud and default on tabular data, evaluated on precision and recall at the operating point.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Undersampling with probability correction</b></td><td>Used for training speed on very large transaction tables, with recalibration on a held-out, untouched set.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Temporal validation with label-maturity embargo</b></td><td>Test windows chosen so that most labels have arrived.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>SMOTE as a headline technique</b></td><td>Common in tutorials and student projects; reviewers increasingly ask for a no-resampling baseline.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Delayed-feedback learning, separate fresh and mature models</b></td><td>Published designs on large card-fraud streams; details of production systems are rarely disclosed.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Generative synthetic fraud data for augmentation</b></td><td>Research on GAN, diffusion or LLM-generated minority examples. Calibration and leakage tests are rarely reported.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Start with a strong model, honest time-ordered evaluation and a threshold set from costs. Add weights or resampling only if they beat that baseline with intervals, and if you use them, correct the probabilities before anyone relies on them.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in bank analyses and in AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Reporting accuracy, or F1 with no threshold stated</div><p>"The model is 99.4% accurate." Against a baseline of 99.5%, it is worse than nothing.</p><div class="spot"><b>Spot it</b>Ask for the do-nothing baseline's accuracy, and for precision and recall at a named threshold or alert volume.</div></li>
+        <li><div class="t">Resampling before the split</div><p>SMOTE or duplication on the full dataset, then a train-test split. Copies and neighbours of test rows sit in training. AUC jumps, live performance does not.</p><div class="spot"><b>Spot it</b>Ask where in the pipeline resampling happens. It must be inside the training fold only. An AUC above 0.99 on fraud is a prompt to check for this.</div></li>
+        <li><div class="t">Evaluating on the resampled set</div><p>Precision looks wonderful because the test set has 50% fraud.</p><div class="spot"><b>Spot it</b>Check the fraud rate in the test table. It should be the real rate, or a correctly weighted version of it.</div></li>
+        <li><div class="t">Using resampled probabilities as probabilities</div><p>Feeding them to a 10% alert rule, an expected-loss calculation, or a provisioning model.</p><div class="spot"><b>Spot it</b>Compare the average predicted probability on a representative holdout with the actual fraud rate. If the model's average is many times higher, the correction is missing.</div></li>
+        <li><div class="t">Random or stratified CV on drifting data</div><p>Neat folds, tight spread, then a poor first quarter live.</p><div class="spot"><b>Spot it</b>Ask for a forward-in-time test. If results drop sharply, the random split was borrowing from the future.</div></li>
+        <li><div class="t">Treating missing labels as negatives</div><p>Recent transactions with no fraud flag yet are labelled legitimate and used for training or monitoring.</p><div class="spot"><b>Spot it</b>Plot the labelled rate by week. If the last weeks slope down towards today, labels are still arriving. Add an embargo.</div></li>
+        <li><div class="t">Comparing models on a handful of positives</div><p>Model B beats model A by 3 points of recall on 60 cases.</p><div class="spot"><b>Spot it</b>Ask for the number of positives and an interval. At 60 cases the interval is about ±10 points.</div></li>
+        <li><div class="t">Splitting rows when entities repeat</div><p>The same customer, device or mule account appears in train and test.</p><div class="spot"><b>Spot it</b>Check whether any customer ID appears on both sides of the split.</div></li>
+        <li><div class="t">Comparing PR-AUC across different base rates</div><p>"Our complaints classifier has PR-AUC 0.45; the fraud model only 0.30, so it is worse."</p><div class="spot"><b>Spot it</b>Ask for the prevalence beside each PR-AUC, and compare each to its own no-skill floor.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Fraud is about one in two hundred transactions, so a headline accuracy of 99% tells us nothing; doing nothing scores 99.5%. What matters is how much fraud we stop and how many genuine customers we bother. Those are set by where we draw the alert line, using what a missed fraud costs against what a review costs. I'd show you both numbers at the line we'd run in practice, with a margin of error, because we have only a few hundred confirmed cases to test on.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd start with a strong gradient-boosted baseline and no resampling, evaluated forward in time with an embargo for label maturity, on precision and recall at the operating point plus precision at review capacity. Thresholds come from the cost ratio. If weights or undersampling beat that baseline with bootstrap intervals, I'd keep them but recalibrate on an untouched, representative validation set, or apply the prior correction, so downstream probabilities mean what they say. Resampling happens inside training folds only.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Should we balance the classes before training?”</summary><div class="ans"><p>Not by default. For a strong model, a tuned threshold usually does what balancing is meant to do, and balancing damages calibration. I'd try the plain model first, then weights or undersampling as experiments judged on a time-ordered test set. If I use them, I must undo the probability shift before anyone applies a threshold or computes expected loss.</p></div></details>
+        <details class="reveal"><summary>“Why not use SMOTE? Everyone does.”</summary><div class="ans"><p>It helps weak learners that cannot find a thin minority region. With boosted trees, studies across many datasets find little or no gain, and plain oversampling does about as well. It invents transactions, struggles with categorical fields, and when done before the split it leaks. I'd only keep it if it beats the baseline with intervals, and then recalibrate.</p></div></details>
+        <details class="reveal"><summary>“The AUC is 0.96 and the fraud team says the alerts are useless.”</summary><div class="ans"><p>AUC ignores the fraud rate. At 0.5% fraud, a 1% false positive rate means about 995 false alerts per 100,000 against maybe 350 real, so roughly three quarters of alerts are false. Show the team precision and alert volume at the operating point, and check the threshold was set from costs, not left at 0.5 or at a rebalanced default.</p></div></details>
+        <details class="reveal"><summary>“We only have 300 confirmed AML cases. Can we build a model?”</summary><div class="ans"><p>A simple, regularised one, yes, with a plain statement of its uncertainty: a 60-case test slice gives recall to about ±10 points. I'd keep the feature set small, use grouped temporal validation, consider unlabelled-data methods for ranking, and plan for more labels by feeding analyst outcomes back with a random review sample so we are not only learning the old rules.</p></div></details>
+        <details class="reveal"><summary>“Recall dropped last month. Is the model decaying?”</summary><div class="ans"><p>Maybe, but first check label maturity. Last month's fraud is still being confirmed, so its recorded recall is biased low until chargebacks land. Compare against the same age of label in earlier months, or re-evaluate once the labels have matured. Then look at drift in the inputs and the fraud rate.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the formulas in Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A model has recall 70% and a false positive rate of 1%. Fraud is 0.5% of transactions. What fraction of alerts are fraud, and why can "never flag anything" beat it on accuracy?</summary><div class="ans"><p>Precision = 0.0035 ÷ (0.0035 + 0.00995) ≈ 26%. Its error rate is 0.29π + 0.01 = 1.145%, against 0.5% for the do-nothing rule. The model only beats do-nothing on accuracy when the fraud rate is above about 1.4%.</p></div></details>
+        <details class="reveal"><summary>2. You trained on all fraud rows and a random 1 in 50 of the legitimate rows. The model says a transaction has a 40% fraud probability. What is the real probability?</summary><div class="ans"><p>Odds shown = 0.4 ÷ 0.6 = 0.667. Multiply by β = 1/50: 0.01333. Probability = 0.01333 ÷ 1.01333 ≈ <strong>1.3%</strong>. Using the formula: 0.02 × 0.4 ÷ (0.02 × 0.4 − 0.4 + 1) = 0.008 ÷ 0.608 ≈ 1.3%.</p></div></details>
+        <details class="reveal"><summary>3. A model trained with class weight 20 on fraud shows 30%. What does this correspond to without the weight?</summary><div class="ans"><p>p = 0.3 ÷ (0.3 + 20 × 0.7) = 0.3 ÷ 14.3 ≈ <strong>2.1%</strong>. The weight multiplied the odds by 20, so divide by 20.</p></div></details>
+        <details class="reveal"><summary>4. You have 2,000 rows of fraud in 10 million. You keep 25% for testing. How precisely can you measure recall around 80%, and does adding 100 million more legitimate rows help?</summary><div class="ans"><p>The test set has about 500 frauds: ±0.78 ÷ √500 ≈ ±3.5 points. More legitimate rows do not change the number of frauds, so they leave the recall interval unchanged. They would narrow the false-positive-rate estimate.</p></div></details>
+        <details class="reveal"><summary>5. Someone reports that SMOTE raised the AUC from 0.88 to 0.99. What do you ask first?</summary><div class="ans"><p>Whether oversampling was done before the train-test split or on the training fold only. A jump like this is the signature of synthetic points built from test neighbours, which leak the answer. Then ask whether the test set has the real fraud rate, and for a forward-in-time result.</p></div></details>
+        <details class="reveal"><summary>6. The average label delay on chargebacks is six weeks. You evaluate on transactions from the last two weeks and recall looks poor. What is a likely cause and what do you do?</summary><div class="ans"><p>Most of those weeks' frauds have not been labelled yet, so they count as legitimate in the data, and the model's catches appear as false positives while its misses go unseen. Leave out weeks younger than the label-maturity point (an embargo), or re-evaluate later, and track recall by label age.</p></div></details>
+        <details class="reveal"><summary>7. When do you not need to correct probabilities after resampling?</summary><div class="ans"><p>When only the ranking is used, for example sending the top 300 scores to analysts each day. Ordering is preserved. As soon as a number is compared with a fixed threshold, multiplied by an exposure, or blended with another model, correct or recalibrate.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>G. King, L. Zeng. <a href="https://doi.org/10.1093/oxfordjournals.pan.a004868">Logistic Regression in Rare Events Data</a>. Political Analysis, 2001.</li>
+        <li>C. Elkan. <a href="https://cseweb.ucsd.edu/~elkan/rescale.pdf">The Foundations of Cost-Sensitive Learning</a>. IJCAI, 2001. Why the cost-based threshold and the sample mix are the same lever.</li>
+        <li>N. Chawla, K. Bowyer, L. Hall, W. Kegelmeyer. <a href="https://doi.org/10.1613/jair.953">SMOTE: Synthetic Minority Over-sampling Technique</a>. JAIR, 2002.</li>
+        <li>H. He, E. Garcia. <a href="https://doi.org/10.1109/TKDE.2008.239">Learning from Imbalanced Data</a>. IEEE TKDE, 2009. The standard survey.</li>
+        <li>T. Saito, M. Rehmsmeier. <a href="https://doi.org/10.1371/journal.pone.0118432">The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets</a>. PLoS ONE, 2015.</li>
+        <li>A. Dal Pozzolo, O. Caelen, R. Johnson, G. Bontempi. <a href="https://doi.org/10.1109/SSCI.2015.33">Calibrating Probability with Undersampling for Unbalanced Classification</a>. IEEE SSCI, 2015.</li>
+        <li>A. Dal Pozzolo, G. Boracchi, O. Caelen, C. Alippi, G. Bontempi. <a href="https://boracchi.faculty.polimi.it/docs/2017_FraudsTNNLS.pdf">Credit Card Fraud Detection: A Realistic Modeling and a Novel Learning Strategy</a>. IEEE TNNLS, 2018.</li>
+        <li>T.-Y. Lin et al. <a href="https://arxiv.org/abs/1708.02002">Focal Loss for Dense Object Detection</a>. ICCV, 2017.</li>
+        <li>Y. Cui et al. <a href="https://arxiv.org/abs/1901.05555">Class-Balanced Loss Based on Effective Number of Samples</a>. CVPR, 2019.</li>
+        <li>R. van den Goorbergh et al. <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC9382395">The harm of class imbalance corrections for risk prediction models: illustration and simulation using logistic regression</a>. JAMIA, 2022.</li>
+        <li>Y. Elor, H. Averbuch-Elor. <a href="https://arxiv.org/abs/2201.08528">To SMOTE, or not to SMOTE?</a> arXiv, 2022.</li>
+        <li>R. Riley et al. <a href="https://doi.org/10.1136/bmj.m441">Calculating the sample size required for developing a clinical prediction model</a>. BMJ, 2020.</li>
+        <li><a href="https://arxiv.org/abs/2603.00208">Tipping the Balance: Impact of Class Imbalance Correction on the Performance of Clinical Risk Prediction Models</a>. arXiv 2603.00208, 2026 (preprint).</li>
+        <li><a href="https://imbalanced-learn.org/stable/">imbalanced-learn documentation</a>. Practical reference for resampling methods and the leakage-safe pipeline pattern.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F3: A/B testing and experimental design (F3.6)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const MU = 2.5, N = 100000, LOGIT = L.logit, SIG = L.sigmoid;
+  const Q = x => 1 - L.normCdf(x);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  const aed = v => "AED " + L.fmtInt(v);
+  const logPct = v => { const p = 100 * Math.pow(10, v); return (p < 1 ? p.toFixed(2) : p.toFixed(1)) + "%"; };
+  const tStar = pi => (LOGIT(0.1) - LOGIT(pi) + MU * MU / 2) / MU;
+  function econ(t, pi) {
+    const tp = N * pi * Q(t - MU), fp = N * (1 - pi) * Q(t), alerts = tp + fp, missed = N * pi - tp;
+    return { alerts, tp, missed, cost: 40 * alerts + 400 * missed, prec: alerts > 0 ? tp / alerts : 0, rec: tp / (N * pi) };
+  }
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: accuracy paradox
+  // =====================================================================
+  const S1 = { v: -2.3 };
+  const M1 = [["Always says legit", 0, 0], ["Decent model", 0.70, 0.01], ["Strong model", 0.85, 0.002]];
+  const accBox = $("acc-chart");
+  function renderAcc() {
+    const pi = Math.pow(10, S1.v);
+    const rows = M1.map(([n, tpr, fpr]) => {
+      const tp = N * pi * tpr, fn = N * pi - tp, fp = N * (1 - pi) * fpr;
+      return { n, tp, fp, acc: 1 - (fp + fn) / N, prec: tp + fp > 0 ? tp / (tp + fp) : null, alerts: tp + fp };
+    });
+    const W = Math.max(300, accBox.clientWidth), H = 170, m = { l: 116, r: 64, t: 10, b: 28 };
+    const svg = mk(accBox, W, H, "Accuracy of three models");
+    const X = L.scale(0, 1, m.l, W - m.r);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(v), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" });
+    });
+    const bh = 26, gap = (H - m.t - m.b - 3 * bh) / 4;
+    rows.forEach((r, i) => {
+      const y = m.t + gap * (i + 1) + bh * i;
+      L.svg("rect", { x: X(0), y, width: X(r.acc) - X(0), height: bh, rx: 3, class: "bar-" + i }, svg);
+      tx(svg, m.l - 8, y + bh / 2 + 4, r.n, { "text-anchor": "end", class: "lbl-ink" });
+      tx(svg, X(r.acc) + 6, y + bh / 2 + 5, (100 * r.acc).toFixed(2) + "%", { class: "lbl-strong" });
+    });
+    let html = '<table class="data"><thead><tr><th>Model</th><th>Accuracy</th><th>Fraud caught</th><th>Alerts per 100,000</th><th>Share of alerts that are fraud</th></tr></thead><tbody>';
+    rows.forEach((r, i) => {
+      html += `<tr><td><b>${r.n}</b></td><td>${(100 * r.acc).toFixed(2)}%</td><td>${L.fmtInt(r.tp)} of ${L.fmtInt(N * pi)}</td><td>${L.fmtInt(r.alerts)}</td><td>${r.prec === null ? "no alerts" : pct(r.prec, 0)}</td></tr>`;
+    });
+    $("acc-table").innerHTML = html + "</tbody></table>";
+    const lines = [];
+    if (rows[0].acc > rows[1].acc) lines.push("By accuracy, <b>doing nothing beats the decent model</b>. At this fraud rate the decent model's false alarms cost more accuracy than its catches earn.");
+    else lines.push("The decent model now beats doing nothing on accuracy, but only because fraud is common enough (above about 1.4%) for its catches to outweigh its false alarms.");
+    if (rows[0].acc > rows[2].acc) lines.push("Even the <b>strong</b> model loses to doing nothing on accuracy (below about 0.23% fraud).");
+    lines.push("Share of alerts that are fraud: <b>" + (rows[1].prec === null ? "-" : pct(rows[1].prec, 0)) + "</b> for the decent model, <b>" + pct(rows[2].prec, 0) + "</b> for the strong one.");
+    $("s1-verdict").innerHTML = "<ul><li>" + lines.join("</li><li>") + "</li></ul>";
+  }
+  L.bind("s-prev", logPct, v => { S1.v = v; renderAcc(); });
+
+  // =====================================================================
+  // Simulation 2: undersampling and prior correction
+  // =====================================================================
+  const S2 = { v: -2.3, k: 2, cor: false };
+  const underBox = $("under-chart");
+  const keepFmt = k => { const X = Math.pow(10, k); return "1 in " + (X < 10 ? X.toFixed(1) : L.fmtInt(X)); };
+  function renderUnder() {
+    const pi = Math.pow(10, S2.v), X = Math.pow(10, S2.k), lnX = Math.log(X), cor = S2.cor;
+    const W = Math.max(300, underBox.clientWidth), H = 300, m = { l: 46, r: 12, t: 16, b: 44 };
+    const svg = mk(underBox, W, H, "Probability the model shows against the real fraud rate");
+    const x = L.scale(0, 1, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+      tx(svg, x(v), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" });
+    });
+    L.svg("line", { x1: x(0), y1: y(0), x2: x(1), y2: y(1), class: "cv-ideal" }, svg);
+    L.svg("line", { x1: x(0.1), x2: x(0.1), y1: m.t, y2: H - m.b, class: "cv-rule" }, svg);
+    tx(svg, x(0.1) + 5, m.t + 10, "10% rule", { class: "lbl-warn" });
+    const pts = [];
+    for (let s = -2; s <= 6.001; s += 0.05) {
+      const tp = SIG(LOGIT(pi) + MU * s - MU * MU / 2), dp = SIG(LOGIT(pi) + lnX + MU * s - MU * MU / 2);
+      pts.push([x(cor ? tp : dp), y(tp)]);
+    }
+    L.svg("path", { d: L.path(pts), class: "cv-curve" + (cor ? "" : " off") }, svg);
+    const trueAt = cor ? 0.1 : ((0.1 / 0.9) / X) / (1 + (0.1 / 0.9) / X);
+    L.svg("circle", { cx: x(0.1), cy: y(trueAt), r: 5.5, class: "cv-dot" }, svg);
+    tx(svg, Math.min(x(0.1) + 10, W - m.r - 4), Math.max(y(trueAt) - 10, m.t + 26), "really " + pct(trueAt, trueAt < 0.01 ? 2 : 1) + " fraud", { class: "lbl-ink", "text-anchor": x(0.1) > W * 0.7 ? "end" : "start" });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Probability the model shows", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Share really fraud", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+
+    const share = pi / (pi + (1 - pi) / X);
+    const shows = cor ? 0.02 : SIG(LOGIT(0.02) + lnX);
+    const tcut = (LOGIT(0.1) - LOGIT(pi) - (cor ? 0 : lnX) + MU * MU / 2) / MU;
+    const e = econ(tcut, pi), best = econ(tStar(pi), pi);
+    $("st2-share").textContent = pct(share, share < 0.1 ? 2 : 1);
+    $("st2-risk").textContent = pct(shows, 1); cls($("st2-risk-b"), shows > 0.04 ? "bad" : "ok");
+    $("st2-alert").textContent = L.fmtInt(e.alerts); $("st2-alert-s").textContent = "best possible: " + L.fmtInt(best.alerts);
+    $("st2-cost").textContent = aed(e.cost); $("st2-cost-s").textContent = "best possible: " + aed(best.cost);
+    const ratio = e.cost / best.cost;
+    cls($("st2-alert-b"), e.alerts > 1.5 * best.alerts ? "bad" : "ok");
+    cls($("st2-cost-b"), ratio > 1.15 ? "bad" : "ok");
+    $("s2-verdict").innerHTML = X < 1.05
+      ? "No undersampling: the shown probabilities are the true ones and the 10% rule is already the best rule. Raise the slider."
+      : cor
+        ? "Corrected: the shown probability equals the real fraud rate, so the 10% rule lands on the cost-minimising cut. The ranking, and the AUC, never changed."
+        : "Uncorrected, the model shows <b>" + pct(shows, 1) + "</b> for a transaction that is really 2% likely fraud. The 10% rule now alerts on <b>" + L.fmtInt(e.alerts) + "</b> transactions per 100,000 instead of " + L.fmtInt(best.alerts) + ", and costs <b>" + ratio.toFixed(1) + " times</b> the best rule.";
+  }
+  L.bind("s-pi2", logPct, v => { S2.v = v; renderUnder(); });
+  L.bind("s-keep", keepFmt, v => { S2.k = v; renderUnder(); });
+  $("b-cor").addEventListener("click", e => { S2.cor = !S2.cor; e.currentTarget.setAttribute("aria-pressed", String(S2.cor)); renderUnder(); });
+
+  // =====================================================================
+  // Simulation 3: weights and threshold
+  // =====================================================================
+  const PI3 = 0.005, S3 = { t: 1.5, k: 0 };
+  const thrBox = $("thr-chart");
+  const T0 = -1, T1 = 4.5;
+  const wFmt = k => { const w = Math.pow(10, k); return "×" + (w < 10 ? w.toFixed(1) : L.fmtInt(w)); };
+  const ruleT = () => (LOGIT(0.1) - LOGIT(PI3) - S3.k * Math.LN10 + MU * MU / 2) / MU;
+  let cutCtl;
+  function renderThr() {
+    const W = Math.max(300, thrBox.clientWidth), H = 280, m = { l: 56, r: 12, t: 20, b: 44 };
+    const svg = mk(thrBox, W, H, "Cost per 100,000 transactions against the score cut");
+    const x = L.scale(T0, T1, m.l, W - m.r), lo = Math.log10(1e5), hi = Math.log10(4e6);
+    const y = v => L.scale(lo, hi, H - m.b, m.t)(Math.log10(Math.min(Math.max(v, 1e5), 4e6)));
+    [[1e5, "100k"], [3e5, "300k"], [1e6, "1M"], [3e6, "3M"]].forEach(([v, s]) => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, s, { "text-anchor": "end" });
+    });
+    [-1, 0, 1, 2, 3, 4].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Score cut (flag if score is above it)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "AED per 100,000", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const ts = tStar(PI3), tr = L.clamp(ruleT(), T0, T1);
+    const vline = (t, c, label, row) => {
+      L.svg("line", { x1: x(t), x2: x(t), y1: m.t, y2: H - m.b, class: c }, svg);
+      tx(svg, x(t) + (x(t) > W * 0.6 ? -5 : 5), m.t + 9 + row * 13, label, { class: c === "cv-opt" ? "lbl-acc" : "lbl-warn", "text-anchor": x(t) > W * 0.6 ? "end" : "start" });
+    };
+    vline(ts, "cv-opt", "best cut", 0);
+    vline(tr, "cv-rule", "10% rule on shown p", 1);
+    const pts = [];
+    for (let t = T0; t <= T1 + 1e-9; t += 0.05) pts.push([x(t), y(econ(t, PI3).cost)]);
+    L.svg("path", { d: L.path(pts), class: "tl-true" }, svg);
+    L.svg("circle", { cx: x(S3.t), cy: y(econ(S3.t, PI3).cost), r: 6, class: "cv-now" }, svg);
+
+    const e = econ(S3.t, PI3), best = econ(ts, PI3);
+    const lg = LOGIT(PI3) + MU * S3.t - MU * MU / 2;
+    $("st3-shown").textContent = pct(SIG(lg + S3.k * Math.LN10), 1);
+    $("st3-true").textContent = pct(SIG(lg), 2);
+    $("st3-alert").textContent = L.fmtInt(e.alerts); $("st3-alert-s").textContent = "recall " + pct(e.rec, 0) + ", precision " + pct(e.prec, 0);
+    $("st3-cost").textContent = aed(e.cost); $("st3-cost-s").textContent = "best: " + aed(best.cost);
+    cls($("st3-cost-b"), e.cost > 1.15 * best.cost ? "bad" : "ok");
+    const dRule = Math.abs(S3.t - ruleT()) < 0.03;
+    $("s3-verdict").innerHTML = S3.k < 0.02
+      ? "Weight ×1: the shown probability is the true one, so the 10% rule and the best cut coincide (score " + ts.toFixed(2) + ")."
+      : "The best cut stays at score <b>" + ts.toFixed(2) + "</b> whatever the weight. But the weighted model shows <b>" + pct(SIG(LOGIT(PI3) + MU * ts - MU * MU / 2 + S3.k * Math.LN10), 0) + "</b> at that cut, so the rule 'alert above 10%' lands at score <b>" + ruleT().toFixed(2) + "</b>" + (dRule ? ", where you are now, costing " + aed(e.cost) + " per 100,000 against " + aed(best.cost) + "." : ".");
+  }
+  cutCtl = L.bind("s-cut", v => v.toFixed(2), v => { S3.t = v; renderThr(); });
+  L.bind("s-w", wFmt, v => { S3.k = v; renderThr(); });
+  $("b-opt").addEventListener("click", () => { S3.t = Math.round(tStar(PI3) * 20) / 20; cutCtl.set(S3.t); renderThr(); });
+  $("b-rule").addEventListener("click", () => { S3.t = Math.round(L.clamp(ruleT(), T0, T1) * 20) / 20; cutCtl.set(S3.t); renderThr(); });
+
+  // =====================================================================
+  // Simulation 4: label delay
+  // =====================================================================
+  const S4 = { d: 45, e: 0 };
+  const delayBox = $("delay-chart");
+  const rate = i => 0.003 + (i >= 46 ? 0.0008 * (i - 45) : 0);
+  const lab = (i, tauW) => 1 - Math.exp(-((51 - i) + 0.5) / tauW);
+  function renderDelay() {
+    const tau = S4.d / 7, E = S4.e;
+    const W = Math.max(300, delayBox.clientWidth), H = 280, m = { l: 46, r: 10, t: 22, b: 40 };
+    const svg = mk(delayBox, W, H, "True and recorded weekly fraud rate over 52 weeks");
+    const x = L.scale(0, 52, m.l, W - m.r), y = L.scale(0, 0.009, H - m.b, m.t);
+    [0, 0.003, 0.006, 0.009].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100).toFixed(1) + "%", { "text-anchor": "end" });
+    });
+    if (E > 0) L.svg("rect", { x: x(52 - E), y: m.t, width: x(52) - x(52 - E), height: H - m.b - m.t, class: "emb" }, svg);
+    const bw = (x(52) - x(0)) / 52;
+    const line = [];
+    for (let i = 0; i < 52; i++) {
+      const r = rate(i), o = r * lab(i, tau);
+      L.svg("rect", { x: x(i) + 1, y: y(o), width: Math.max(1, bw - 2), height: y(0) - y(o), class: "ob" + (i >= 46 ? " surge" : "") }, svg);
+      line.push([x(i) + bw / 2, y(r)]);
+    }
+    L.svg("path", { d: L.path(line), class: "tl-true" }, svg);
+    tx(svg, x(0), H - 22, "week 1", {});
+    tx(svg, x(52), H - 22, "week 52 (today)", { "text-anchor": "end" });
+    tx(svg, x(46), m.t - 6, "new attack", { "text-anchor": "end", class: "lbl-ink" });
+    if (E > 0) tx(svg, x(52 - E) + 4, H - m.b - 6, "embargo", { class: "lbl-warn" });
+
+    let sNum = 0, sDen = 0, nNum = 0, nDen = 0, lostN = 0, allN = 0;
+    for (let i = 0; i < 52; i++) {
+      const r = rate(i), L_ = lab(i, tau);
+      if (i >= 46) { sNum += r * L_; sDen += r; }
+      nDen += r;
+      if (i < 52 - E) nNum += r * (1 - L_);
+      allN += r * L_;
+      if (i >= 52 - E) lostN += r * L_;
+    }
+    const surge = sNum / sDen, newest = lab(51, tau), noise = nNum / nDen, lost = lostN / allN;
+    $("st4-surge").textContent = pct(surge, 0); cls($("st4-surge-b"), surge < 0.5 ? "bad" : "warn");
+    $("st4-new").textContent = pct(newest, 0);
+    $("st4-noise").textContent = pct(noise, 1); cls($("st4-noise-b"), noise > 0.1 ? "bad" : "ok");
+    $("st4-lost").textContent = pct(lost, 1);
+    $("s4-verdict").innerHTML = "Only <b>" + pct(surge, 0) + "</b> of the new attack's fraud has a label, so a model trained now sees little of it" +
+      (E === 0 ? ", and treats the unlabelled rest as legitimate: <b>" + pct(noise, 1) + "</b> of all fraud in the training window is mislabelled." : ". With the newest " + E + " weeks left out, label noise falls to <b>" + pct(noise, 1) + "</b>, at the price of " + pct(lost, 1) + " of the labels available and a model that is " + E + " weeks behind the attack.");
+  }
+  L.bind("s-del", v => v + " days", v => { S4.d = v; renderDelay(); });
+  L.bind("s-emb", v => v + (v === 1 ? " week" : " weeks"), v => { S4.e = v; renderDelay(); });
+
+  function renderAll() { renderAcc(); renderUnder(); renderThr(); renderDelay(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

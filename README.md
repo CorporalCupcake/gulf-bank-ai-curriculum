@@ -15,6 +15,12 @@ Open `index.html` in a browser to see the full topic map. Topics marked **Lesson
 - **F2 – Regression and generalised linear models** (F2.5): `lessons/f2-regression-glms.html`
 - **F2 – Confounding, Simpson's paradox and selection bias** (F2.6): `lessons/f2-confounding-simpson-selection.html`
 - **F2 – Survival analysis** (F2.8): `lessons/f2-survival-analysis.html`
+- **F3 – Point-in-time correctness and leakage** (F3.1): `lessons/f3-leakage-point-in-time.html`
+- **F3 – Exploratory analysis, data quality and honest charts** (F3.2, F3.8): `lessons/f3-eda-quality-visualisation.html`
+- **F3 – SQL thinking** (F3.3): `lessons/f3-sql-thinking.html`
+- **F3 – Feature engineering** (F3.4, F3.9): `lessons/f3-feature-engineering.html`
+- **F3 – Imbalanced data** (F3.5): `lessons/f3-imbalanced-data.html`
+- **F3 – Experiments and analyses that survive review** (F3.6, F3.7): `lessons/f3-experiments-and-writeups.html`
 - **F7 – Precision, recall, thresholds and calibration**: `lessons/f7-precision-recall-thresholds-calibration.html`
 - **A1 – Know Your Agent: agent identity and permissions for payments** (status checked 26 October 2026): `lessons/a1-know-your-agent.html`
 

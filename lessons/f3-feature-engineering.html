@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Feature Engineering: Behaviour, Encoding, Missingness and Scale</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  pre { margin: 0; max-width: var(--measure); padding: 14px 16px; background: var(--sunk); border-radius: 10px; overflow-x: auto; font-size: 13px; line-height: 1.55; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .prose pre + p, .prose p + pre { margin-top: 1.05em; }
+
+  /* Sim 1 */
+  .l-raw { stroke: var(--neutral); stroke-width: 2.4; fill: none; }
+  .l-ratio { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .d-raw { fill: var(--neutral); } .d-ratio { fill: var(--accent); }
+  .sel-line { stroke: var(--ink); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .tl-step { stroke: var(--accent); stroke-width: 2; fill: none; }
+  .tl-thr { stroke: var(--warn); stroke-width: 1.6; stroke-dasharray: 5 4; }
+  .tk-legit { fill: var(--neutral); } .tk-fraud { fill: var(--bad); }
+  .tl-band { fill: var(--accent); fill-opacity: .08; }
+  .two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+  /* Sim 2 */
+  .te-dot { fill: var(--accent); fill-opacity: .75; }
+  .te-dot.rare { fill: var(--bad); fill-opacity: .8; }
+  .te-true { fill: var(--ink); }
+  .te-whisk { stroke: var(--line); stroke-width: 1.2; }
+  .te-prior { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+  /* Sim 3 */
+  .hs-true { fill: none; stroke: var(--ink); stroke-width: 1.6; }
+  .hs-obs { fill: var(--accent); fill-opacity: .55; }
+  .bar-track { fill: var(--sunk); }
+  .bar-a { fill: var(--accent); } .bar-n { fill: var(--neutral); } .bar-w { fill: var(--warn); } .bar-o { fill: var(--ink); fill-opacity: .55; }
+  /* Sim 4 */
+  .share { display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: var(--sunk); }
+  .share i { display: block; height: 100%; transition: width .2s; }
+  .share .sa { background: var(--accent); } .share .sb { background: var(--warn); }
+  .share-cap { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); font-family: var(--font-mono); margin-top: 4px; }
+  @media (max-width: 760px) { .two-col { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.85em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F3 · Data science practice</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F3.4 · F3.9</span>
+        <span class="pill d">Day one</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Feature Engineering: Behaviour, Encoding, Missingness and Scale</h1>
+      <p class="dek">How to turn a customer's raw history into numbers a model can use: what they did lately, how that compares with their own normal, how to encode a merchant list without cheating, what a blank field is telling you, and which models care about units.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model can only learn from what you show it, so show it behaviour relative to the customer's own baseline, encode categories using only information the row wouldn't have leaked, treat "missing" as something that may carry signal, and match your scaling to the model you use.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>At 2:10 a.m. a debit card is used for a AED 380 purchase at an electronics retailer in another emirate. Is that fraud? On its own, the transaction tells you almost nothing. The amount is ordinary, the merchant is real, the card is valid.</p>
+        <p>Now add context. In the last 40 minutes the same card made five other purchases, each at a different merchant. In the previous 90 days it averaged 1.4 purchases a <em>day</em>. Three of the five merchants were ones this customer had never used. Suddenly the picture is clear, and none of it was in the single row.</p>
+        <p>That is feature engineering. The raw table has one row per event. The model needs one row per decision, with columns that summarise the <strong>history around that decision</strong>. Most of the accuracy of a bank's fraud, credit and churn models comes from this step, not from the choice of algorithm.</p>
+        <p>Four lessons run through everything below.</p>
+        <ul>
+          <li><strong>Behaviour beats attributes.</strong> Age and segment change slowly. What a customer did in the last hour, week and quarter is where the signal sits, especially <em>relative to their own normal</em>. AED 9,000 of spend is alarming for one customer and a quiet Tuesday for another.</li>
+          <li><strong>Encoding is a place where you can cheat without noticing.</strong> A merchant seen once, in a fraud case, looks like "100% fraud". Encode that naively and the model memorises its training set, then fails on new data.</li>
+          <li><strong>A blank is data.</strong> Whether a customer left the income field empty is often related to their income, and so to their risk. Filling the blank with the average throws that away.</li>
+          <li><strong>Units matter to some models and not to others.</strong> Put balance in dirhams next to "number of transactions" and a distance-based model will listen almost only to the balance.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Every feature is an answer to the question "what would we have known about this customer, at this moment, that helps predict what happens next?" The words "at this moment" are what keep the model honest (F3.1), and the words "about this customer" are why ratios to their own baseline work so well.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-rfm">Recency, frequency, monetary value and time since last event</h3>
+      <div class="prose">
+        <p><strong>RFM</strong> is the oldest behavioural feature set in retail banking, and it still earns its place. For each customer, at a chosen date:</p>
+        <ul>
+          <li><strong>Recency:</strong> how long since the last event (transaction, login, branch visit, salary credit).</li>
+          <li><strong>Frequency:</strong> how many events in a window (say 30, 90, 365 days).</li>
+          <li><strong>Monetary value:</strong> how much, in total and on average, in the same windows.</li>
+        </ul>
+        <p>Why does such a simple summary work? Because behaviour is persistent and it decays. A customer who transacted yesterday is very likely to transact tomorrow. One who went quiet five weeks ago is on a path that often ends in an inactive or closed account. Recency measures where they are on that path, frequency measures how strong the habit was, and monetary value measures what is at stake.</p>
+        <p>Time since last event deserves more care than its simple definition suggests.</p>
+        <ul>
+          <li><strong>It needs a reference time.</strong> "Days since last salary credit" is only defined as of a particular date. Compute it as of the decision (the application date, the transaction time, the month-end snapshot), never as of "today" when you build the table. This is the point-in-time rule from <a href="f3-leakage-point-in-time.html">F3.1</a>.</li>
+          <li><strong>Compare it with the customer's own rhythm.</strong> Thirty days since the last transaction is normal for someone who transacts monthly and a red flag for someone who transacts daily. A better feature is recency divided by the customer's typical gap between events.</li>
+          <li><strong>It is a censored quantity.</strong> If you haven't seen an event yet, the true gap is "at least this long". That is the structure that survival analysis handles properly (<a href="f2-survival-analysis.html">F2.8</a>). In a feature table, a log or capped version (<code>log1p(days)</code>) is the practical compromise.</li>
+          <li><strong>Never-seen needs a value.</strong> A customer with no events has no "last event". Use a missing value plus an indicator (see the missingness section), not zero days. Zero would mean "just transacted", the opposite.</li>
+        </ul>
+        <p>RFM also has a probabilistic cousin. The BG/NBD family of models (Fader, Hardie and Lee, 2005) uses just recency and frequency to estimate, for each customer, the probability they are still "alive" and how many more transactions to expect. It is a good example of a few well-chosen behavioural numbers beating a large pile of attributes.</p>
+      </div>
+
+      <h3 class="sub" id="m-windows">Rolling windows, velocity and ratios to the customer's own baseline</h3>
+      <div class="prose">
+        <p>A <strong>rolling window feature</strong> counts or sums events over the last <em>w</em> minutes, hours or days before the decision. <strong>Velocity</strong> is the same idea, named for how fast things are happening: transactions per hour, distinct merchants per day, total AED out in the last 15 minutes, failed PIN attempts in the last 10 minutes.</p>
+        <p>Three design choices decide whether such a feature works.</p>
+        <ul>
+          <li><strong>Which window.</strong> Too short and an ordinary shopping trip looks like an attack. Too long and the burst is diluted by days of normal activity. The right answer depends on the attack: card testing happens in minutes, account takeover over hours, mule activity over days. In practice you build several windows (5 minutes, 1 hour, 24 hours, 7 days, 30 days) and let the model pick.</li>
+          <li><strong>What to count.</strong> Raw events are the start. Distinct counts are often sharper: distinct merchants, distinct countries, distinct devices in the window. Add "first time" flags: first time at this merchant, first time in this country, first use of this device.</li>
+          <li><strong>Relative to what.</strong> This is the one that matters most. Compare the recent window with the same customer's own longer history.</li>
+        </ul>
+        <p>The standard form is a <strong>ratio to own baseline</strong>:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>ratio</mi><mo>=</mo><mfrac><mrow><mtext>events in the last </mtext><mi>w</mi></mrow><mrow><mtext>(customer's usual rate)</mtext><mo>×</mo><mi>w</mi><mo>+</mo><mi>c</mi></mrow></mfrac></math>
+        <p class="where">The top is what happened in the window. The bottom is what you would <em>expect</em> from this customer over the same time given their past 60 to 90 days, plus a small constant <i>c</i> so a nearly dormant customer doesn't give a division by almost zero. A ratio of 1 is business as usual, 4 means four times their normal. Spend works the same way: this week's spend over the weekly average of the previous 90 days. The baseline must come from <em>before</em> the window, otherwise the burst contaminates its own yardstick.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Why does the ratio help? Customers differ enormously in how active they are. A raw count of "six transactions in three hours" flags the heavy card user every Friday and misses the quiet pensioner whose card suddenly buzzes. Dividing by the customer's own rate turns a population-wide threshold into a personal one. Simulation 1 shows this directly.</p>
+        <p>Other forms of the same idea:</p>
+        <ul>
+          <li><strong>Z-scores against own history:</strong> (this week's spend − own mean) ÷ own standard deviation. Sharper than a ratio for customers with steady habits, but fragile when history is short. A robust version uses the median and the median absolute deviation.</li>
+          <li><strong>Exponentially weighted counts:</strong> instead of a hard cut-off, weight each event by <code>0.5^(age / half-life)</code>. This removes the cliff where an event drops out of the window, and one number can carry "mostly the last day, with a long tail".</li>
+          <li><strong>Trends:</strong> 30-day spend divided by the previous 30-day spend, or the slope of monthly balance. Declining salary credits and balances are among the best early signs of financial stress and of attrition.</li>
+          <li><strong>Cyclic time:</strong> hour of day and day of week are circular, so 23:00 is next to 00:00. Encode them as sine and cosine, or better for fraud, as a distribution of the customer's usual hours (Bahnsen et al., 2016, fit a von Mises distribution per customer) and ask how unusual this hour is for them.</li>
+          <li><strong>Ratios between features:</strong> spend over income, balance over limit (credit utilisation), debt service over salary. Models struggle to learn division from raw columns, so supplying the ratio directly is often the single biggest gain.</li>
+        </ul>
+        <p>The SQL is a window function over the customer's own rows. A concrete example, count and sum in the previous hour, excluding nothing at the decision time itself:</p>
+        <pre><code>SELECT txn_id, card_id, txn_ts, amount_aed,
+  COUNT(*) OVER w1h                       AS txn_count_1h,
+  SUM(amount_aed) OVER w1h                AS spend_1h,
+  AVG(amount_aed) OVER w90d_before        AS avg_amount_90d
+FROM transactions
+WINDOW
+  w1h AS (PARTITION BY card_id ORDER BY txn_ts
+          RANGE BETWEEN INTERVAL '1 hour' PRECEDING AND CURRENT ROW),
+  w90d_before AS (PARTITION BY card_id ORDER BY txn_ts
+          RANGE BETWEEN INTERVAL '90 days' PRECEDING AND INTERVAL '1 day' PRECEDING);</code></pre>
+        <p>Two details in that query carry most of the risk. The 90-day baseline stops one day before the transaction, so a burst can't inflate its own baseline. And the one-hour window ends at <code>CURRENT ROW</code>, which is fine for scoring a transaction as it arrives, but wrong for a feature used to predict something <em>after</em> the transaction. More on this in <a href="f3-sql-thinking.html">F3.3</a> and <a href="f3-leakage-point-in-time.html">F3.1</a>.</p>
+      </div>
+
+      <figure class="figure" id="fig-velocity">
+        <div class="fig-head"><span class="fig-title">Card fraud velocity: choosing the window</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start on <b>ratio to own baseline</b> with a 30-minute window, the best for this feature. Drag the window down to 5 minutes: bursts slip through the gaps between transactions, and the catch rate falls. Drag it to 3 days: the burst is lost in normal activity. Then switch to <b>raw count</b> and watch the heavy users swamp the alarm. Use <b>Next compromised card</b> to see the burst on a different customer.</p>
+        <div class="btns" role="group" aria-label="Feature">
+          <button class="btn" type="button" id="m-raw" aria-pressed="false">Raw count in window</button>
+          <button class="btn" type="button" id="m-ratio" aria-pressed="true">Ratio to own baseline</button>
+          <button class="btn" type="button" id="m-next">Next compromised card</button>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-win">Window length <output for="s-win"></output></label><input type="range" id="s-win" min="0" max="9" step="1" value="2"></div>
+        </div>
+        <div class="two-col">
+          <div>
+            <div class="chart-wrap" id="v-recall"></div>
+            <div class="legend"><span><i style="background:var(--neutral)"></i>Raw count</span><span><i style="background:var(--accent)"></i>Ratio to own baseline</span></div>
+          </div>
+          <div>
+            <div class="chart-wrap" id="v-tl"></div>
+            <div class="legend"><span><i class="sq" style="background:var(--neutral);border-radius:50%;width:8px;height:8px"></i>Genuine purchase</span><span><i class="sq" style="background:var(--bad);border-radius:50%;width:8px;height:8px"></i>Fraud</span><span><i style="background:var(--accent)"></i>Feature value</span><span><i style="background:var(--warn)"></i>Alert threshold</span></div>
+          </div>
+        </div>
+        <div class="stats">
+          <div class="stat ok"><div class="k">Fraud transactions caught</div><div class="v" id="st1-rec"></div><div class="s" id="st1-rec-s"></div></div>
+          <div class="stat warn"><div class="k">Genuine transactions flagged</div><div class="v" id="st1-fa"></div><div class="s" id="st1-fa-s"></div></div>
+          <div class="stat"><div class="k">Alert threshold</div><div class="v" id="st1-thr"></div><div class="s" id="st1-thr-s"></div></div>
+          <div class="stat"><div class="k">Best possible for this feature</div><div class="v" id="st1-max"></div><div class="s">the first fraud in each burst can't be seen</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: 300 cards over 30 days, with genuine purchases arriving at random (heavy and light users, plus short "shopping trips" of 2 to 3 purchases). Days 1 to 25 are history for each card's baseline rate; days 26 to 30 are scored. 40 cards are compromised once, each with a burst of 4 to 8 fraud transactions roughly 9 minutes apart. The alert threshold is set so about 1% of genuine transactions are flagged. These are random draws from a fixed seed, so the pattern is reproducible but the exact percentages are illustrative.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to notice in that picture. First, the best window is neither the shortest nor the longest: it matches the time scale of the attack. Second, the ratio does best exactly where raw counts struggle, because raw counts can't tell a busy customer from a compromised one. Third, no window recovers the first fraud transaction of each burst, since at that moment there is no burst yet. Velocity features catch the repeat, not the first. That is why they sit alongside features that judge a single transaction, such as a new merchant, a new country, or an unusual amount for this customer.</p>
+      </div>
+
+      <h3 class="sub" id="m-encode">Encoding categories: one-hot, target encoding and high cardinality</h3>
+      <div class="prose">
+        <p>Models need numbers, and a bank's data is full of labels: merchant, merchant category code (MCC), branch, nationality, employer, product, device model, country. The treatment depends on how many distinct values there are (the <strong>cardinality</strong>).</p>
+        <ul>
+          <li><strong>Low cardinality (up to roughly 20 values), such as product type or channel.</strong> <strong>One-hot encoding</strong>: one 0/1 column per value. It is simple, interpretable, and works with every model. Watch for linear models: keep one level out (or use regularisation) so the columns don't sum to a constant.</li>
+          <li><strong>Ordered categories, such as risk grade A to E or education level.</strong> Map to integers 1 to 5 if the steps are roughly even, or keep one-hot if not. Don't give unordered labels integer codes for a linear model: it will treat "Dubai = 3" as bigger than "Sharjah = 2".</li>
+          <li><strong>High cardinality: merchants, employers, postcodes, device IDs.</strong> One-hot would give tens of thousands of mostly empty columns. Options are below.</li>
+        </ul>
+        <p>For high-cardinality features, the main approaches are:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Method</th><th>How it works</th><th>Strength</th><th>Risk</th></tr></thead>
+          <tbody>
+            <tr><td><b>Group the rare ones</b></td><td>Keep the top 50 merchants; map the rest to "other", or group by MCC, or by region.</td><td>Simple, safe, interpretable.</td><td>Throws away the long tail, which is often where fraud lives.</td></tr>
+            <tr><td><b>Frequency encoding</b></td><td>Replace each value with how often it appears (or its share of the data).</td><td>Never touches the label, so no label leakage. Rare merchants are a signal in themselves.</td><td>Two different merchants with the same count get the same number.</td></tr>
+            <tr><td><b>Target encoding</b></td><td>Replace each value with the average outcome for that value in training data (for example, fraud rate for this merchant).</td><td>One column, directly predictive, works with any model.</td><td>Leaks the label unless done carefully. See below.</td></tr>
+            <tr><td><b>Hashing</b></td><td>Hash the label into one of, say, 1,024 buckets.</td><td>Fixed size, no lookup table, handles new values.</td><td>Unrelated values collide; hard to interpret.</td></tr>
+            <tr><td><b>Learned embeddings</b></td><td>A neural net learns a short vector per value (Guo and Berkhahn, 2016), as for words.</td><td>Captures similarity between values; scales to millions.</td><td>Needs enough data per value, and a pipeline for training and serving.</td></tr>
+            <tr><td><b>Native handling</b></td><td>CatBoost's ordered target statistics; LightGBM's categorical splits.</td><td>Best-practice default for boosted trees; leakage handled inside.</td><td>Tied to that library; still needs rare-value care.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Target encoding</strong> (also called mean encoding or likelihood encoding) is the most powerful of these and the most dangerous. The idea is natural: if a merchant had a 3% fraud rate in training, give every transaction at that merchant the value 0.03. The model then gets a ready-made risk score for the category.</p>
+        <p>The danger is a statistical one. For a merchant with 500 transactions, the observed rate is a good estimate of its true rate. For a merchant with 2 transactions, one of them fraud, the observed rate is 50%, and that number is mostly noise. Worse, if you compute the encoding from the same rows you train on, <strong>each row's own label is part of its own feature</strong>. A merchant seen once, in a fraud case, gets the value 1.0 on exactly the row where the answer is 1. The model learns "high value means fraud" and looks brilliant on training data. On new data, where the merchant's value no longer includes the row's own label, the magic vanishes.</p>
+        <p>Two standard fixes, usually used together:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>enc</mi><mi>c</mi></msub><mo>=</mo><mfrac><mrow><msub><mi>n</mi><mi>c</mi></msub><mo>·</mo><msub><mover><mi>y</mi><mo>¯</mo></mover><mi>c</mi><mo>+</mo><mi>m</mi><mo>·</mo><mover><mi>y</mi><mo>¯</mo></mover></mrow><mrow><msub><mi>n</mi><mi>c</mi></msub><mo>+</mo><mi>m</mi></mrow></mfrac></math>
+        <p class="where"><b>Smoothing (shrinkage).</b> <i>n<sub>c</sub></i> is how many rows the category has and <i>ȳ<sub>c</sub></i> its observed outcome rate; <i>ȳ</i> is the overall rate and <i>m</i> is a strength you choose. This is a weighted average of the category's own rate and the global rate, where the category's weight grows with its sample size. A merchant with 2 transactions, 1 fraud, an overall fraud rate of 3% and <i>m</i> = 20 gets (1 + 20 × 0.03) ÷ 22 = 7.3%, not 50%. A merchant with 2,000 transactions barely moves. It is the same shrinkage idea as a Bayesian prior (<a href="f1-probability-bayes-distributions.html">F1.4</a>) and as ridge regression.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Out-of-fold (cross-fitted) encoding.</strong> Split the training data into, say, five folds. Encode each row using statistics computed from the <em>other four</em> folds, so a row's own label never reaches its own feature. For the test or live data, use statistics from the whole training set. This is what scikit-learn's <code>TargetEncoder</code> does by default when fitting (since version 1.3), and it is the right default.</p>
+        <p>Two further points:</p>
+        <ul>
+          <li><strong>Smoothing alone isn't enough.</strong> It reduces the leak but doesn't remove it: a singleton merchant still carries a small share of its own label. Out-of-fold removes it. Simulation 2 lets you see the gap between a feature that looks good in training and one that is good on new data.</li>
+          <li><strong>Time matters too.</strong> In a bank, out-of-fold with random folds is not enough if merchants change behaviour over time or if labels arrive late (a fraud label may take 30 to 90 days). Build the encoding only from rows whose labels were known at the time, which is point-in-time correctness again.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-te">
+        <div class="fig-head"><span class="fig-title">Target encoding a merchant list</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> with <b>naive</b> encoding, note the training AUC and the new-data AUC. The gap is the leak. Look at the red dots: rare merchants sit at exactly 0 or far above the truth. Switch to <b>smoothing</b> and raise the strength. Then switch to <b>out-of-fold</b>: the training score drops to something honest. Finally, set <b>real merchant differences</b> to zero: every merchant has the same fraud rate, so any training "skill" is pure overfitting.</p>
+        <div class="btns" role="group" aria-label="Encoding method">
+          <button class="btn" type="button" data-te="naive" aria-pressed="true">Naive (in-sample)</button>
+          <button class="btn" type="button" data-te="smooth" aria-pressed="false">With smoothing</button>
+          <button class="btn" type="button" data-te="oof" aria-pressed="false">Out-of-fold + smoothing</button>
+        </div>
+        <div class="chart-wrap" id="te-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--accent);border-radius:50%;width:8px;height:8px"></i>Encoded value the model receives for the merchant</span>
+          <span><i class="sq" style="background:var(--bad);border-radius:50%;width:8px;height:8px"></i>Same, for merchants with 5 or fewer training rows</span>
+          <span><i class="sq" style="background:var(--ink);border-radius:50%;width:6px;height:6px"></i>True fraud rate</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-teSig">Real differences between merchants <output for="s-teSig"></output></label><input type="range" id="s-teSig" min="0" max="1" step="0.05" value="0.3"></div>
+          <div class="ctl"><label for="s-teM">Smoothing strength m <output for="s-teM"></output></label><input type="range" id="s-teM" min="0" max="100" step="1" value="20"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">AUC on training rows</div><div class="v" id="st2-tr"></div><div class="s">what you'd see in development</div></div>
+          <div class="stat" id="st2-te-b"><div class="k">AUC on new data</div><div class="v" id="st2-te"></div><div class="s">what you'd get in production</div></div>
+          <div class="stat" id="st2-gap-b"><div class="k">Gap (the leak)</div><div class="v" id="st2-gap"></div><div class="s">training minus new data</div></div>
+          <div class="stat"><div class="k">Best achievable on new data</div><div class="v" id="st2-or"></div><div class="s">knowing every true merchant rate</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: 250 merchants with a long tail (a few take most of the traffic, about 130 have 5 or fewer training rows), 12,000 training and 12,000 new transactions, base fraud rate 4%. Each merchant's true rate is drawn around 4%, with spread set by the first slider. AUC is computed exactly from the simulated rows with the encoded value as the only score. Random draws come from a fixed seed.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Why does the gap appear even though the AUC here is only a ranking measure? Because on training rows, the singleton merchant with a fraud has value 1.0 and the singleton with no fraud has value 0.0. Those extremes line up with the labels perfectly, by construction. Out-of-fold encoding breaks that alignment, and the training score falls to match reality. If your cross-validation score is much higher than your held-out score and you used target encoding, this is the first thing to suspect.</p>
+        <p>One more subtlety. Even with a correct encoding, a merchant that appears for the first time <em>after</em> training has no history. It gets the global rate, which is the right fallback. But in fraud, "never seen before" is itself informative, so also give the model a count or frequency feature so it can tell "average merchant" from "unknown merchant".</p>
+      </div>
+
+      <h3 class="sub" id="m-missing">Missing values: why a blank is information</h3>
+      <div class="prose">
+        <p>Data can be missing for very different reasons, and the reason determines what you can safely do. The standard classification (Rubin, 1976; Little and Rubin) has three cases.</p>
+        <ul>
+          <li><strong>Missing completely at random (MCAR).</strong> Whether a value is missing has nothing to do with the data. A system outage on one afternoon wipes the field for whoever applied then. Rare in practice. Dropping or averaging is harmless apart from losing information.</li>
+          <li><strong>Missing at random (MAR).</strong> Missingness depends on other things you <em>have</em>. Customers aged under 25 skip the "years at employer" field more often, and you know their age. You can correct for it by modelling the field using the other columns.</li>
+          <li><strong>Missing not at random (MNAR).</strong> Missingness depends on the missing value itself. Self-employed applicants leave income blank because it is low or irregular. Customers with undisclosed debt leave the "other loans" field empty. Here, no information in the observed data fully corrects the problem, and the blank itself is a signal.</li>
+        </ul>
+        <p>Bank data is full of MNAR. A blank in an income field, a bureau field that returned "no file", an address with no landlord or employer: each is a behaviour. The consequences are specific.</p>
+        <ul>
+          <li><strong>The observed values are a biased sample.</strong> If low earners skip the income field, the average of the filled-in values overstates the average income. Any statistic on the complete rows is wrong in a predictable direction (the selection problem from <a href="f2-confounding-simpson-selection.html">F2.6</a>).</li>
+          <li><strong>Imputing the mean hides the signal.</strong> Every blank becomes "average income", so applicants who are probably low earners are scored as average. The model can't tell them apart from genuine average earners.</li>
+          <li><strong>Dropping incomplete rows is the same bias, worse.</strong> You train only on the people who fill in forms, then score everyone.</li>
+        </ul>
+        <p>The practical toolkit, from simple to sophisticated:</p>
+        <ul>
+          <li><strong>Add a missingness indicator.</strong> A 0/1 column "income was blank", alongside the imputed value. This costs almost nothing, lets the model use the blank as a signal, and is the single most useful move. It is nearly always worth adding for columns where the blank rate is more than a percent or two. (The Missing Indicator Method has been studied at scale; Van Ness et al., 2023, show it helps most when missingness is informative.)</li>
+          <li><strong>Impute sensibly.</strong> Median instead of mean for skewed amounts. Group medians (income by job category and nationality group) are better than a global one. Model-based imputation (iterative regression, nearest neighbours) uses the other columns. Multiple imputation (several plausible fills, results combined) also gives honest uncertainty, and is the standard in statistics, though rarely in production scoring.</li>
+          <li><strong>Let the model handle it.</strong> XGBoost, LightGBM and CatBoost learn, at each split, which side the missing values should go. This lets the tree treat "blank" as its own behaviour. It is a strong default for tabular banking data, but you still need to check that the pattern of blanks is the same in training and live data.</li>
+          <li><strong>A sentinel value</strong> such as −1 for trees. It works, but only for tree models, and it hides the fact that the value is missing from anyone reading the data.</li>
+          <li><strong>Think about the cause.</strong> If a field is blank because the process doesn't collect it for some products, then "blank" is a product flag. If it is blank because of a data-migration bug, that is a data-quality issue to fix, not a feature. Ask the data owner before modelling.</li>
+        </ul>
+        <p>A governance point: the indicator is only safe if the <em>reason</em> for the blank is stable. If the bank changes the application form so that income becomes mandatory, the indicator goes quiet and the model's behaviour shifts. Track the missing rate of every feature in production as a drift metric (F7 and the monitoring lessons later).</p>
+      </div>
+
+      <figure class="figure" id="fig-miss">
+        <div class="fig-head"><span class="fig-title">What to do with a blank income field</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> set <b>low earners skip the field</b> to zero: the blanks are random, and all four approaches look about the same. Now raise it. The observed average income climbs above the true average, and approaches that ignore the blank lose ground to the one that keeps it. Raise the overall blank rate too. The indicator's advantage grows with how informative the blank is.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-mrate">Share of applicants with income blank (at average income) <output for="s-mrate"></output></label><input type="range" id="s-mrate" min="5" max="60" step="1" value="30"></div>
+          <div class="ctl"><label for="s-mnar">How strongly low earners skip the field <output for="s-mnar"></output></label><input type="range" id="s-mnar" min="0" max="2" step="0.05" value="1"></div>
+        </div>
+        <div class="two-col">
+          <div class="chart-wrap" id="ms-hist"></div>
+          <div class="chart-wrap" id="ms-bars"></div>
+        </div>
+        <div class="legend">
+          <span><i class="sq" style="background:none;box-shadow:inset 0 0 0 1.6px var(--ink)"></i>All applicants</span>
+          <span><i class="sq" style="background:var(--accent);opacity:.55"></i>Applicants who filled in income</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">True average income</div><div class="v" id="st3-true"></div><div class="s">all applicants</div></div>
+          <div class="stat" id="st3-obs-b"><div class="k">Average of filled-in values</div><div class="v" id="st3-obs"></div><div class="s" id="st3-obs-s"></div></div>
+          <div class="stat"><div class="k">Default rate, income filled in</div><div class="v" id="st3-d0"></div><div class="s">&nbsp;</div></div>
+          <div class="stat" id="st3-d1-b"><div class="k">Default rate, income blank</div><div class="v" id="st3-d1"></div><div class="s" id="st3-d1-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: 4,000 training and 4,000 new applicants. Monthly income is log-normal around AED 14,000 (mean about AED 16,000). Default probability falls with income (about 9% at average income). Each applicant's chance of leaving income blank depends on the slider settings. Models are one-variable logistic regressions fitted on the training set, with AUC measured on the new applicants. "Oracle" sees the true income, which no one has. Random draws come from a fixed seed.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The oracle line marks the best any approach could do if the blank weren't hiding anything. The gap between it and the others is the information lost to missingness, and the indicator recovers only the part that the <em>fact</em> of being blank carries. It cannot recover the actual income. That is the honest limit of MNAR: you can use the blank, but you can't un-hide what it hides.</p>
+      </div>
+
+      <h3 class="sub" id="m-scale">Scaling, transforms, and which models care</h3>
+      <div class="prose">
+        <p>Scale is the least glamorous topic in this lesson and the source of a surprising number of silent failures. The principle is simple. A model that uses <strong>distances, dot products, gradients or penalties</strong> is affected by the units of its inputs. A model that only asks <strong>"is this value above a threshold?"</strong> is not.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Model family</th><th>Does scale matter?</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td><b>k-nearest neighbours, k-means, clustering, SVM with RBF kernel</b></td><td><b>Strongly</b></td><td>They are built on distances. A feature measured in the tens of thousands (AED) drowns a feature measured in single digits. See Simulation 4. The geometry of F1.1 applies.</td></tr>
+            <tr><td><b>Neural networks (MLPs, embeddings, transformers on tabular inputs)</b></td><td><b>Strongly</b></td><td>Gradient descent behaves badly when inputs have very different sizes: the loss surface becomes a long narrow valley (F1.3), initialisation assumes inputs near zero with unit spread, and large inputs saturate activations.</td></tr>
+            <tr><td><b>Linear and logistic regression with a penalty (ridge, lasso, elastic net)</b></td><td><b>For the penalty</b></td><td>Predictions are unchanged by rescaling, but the penalty is not: a feature in small units needs a large coefficient and is shrunk more. Standardise before regularising or the penalty picks winners by units.</td></tr>
+            <tr><td><b>Plain linear and logistic regression, no penalty</b></td><td>Only for convenience</td><td>The fit is equivalent under rescaling. But standardising makes coefficients comparable and the optimiser stable, and centring makes the intercept meaningful.</td></tr>
+            <tr><td><b>PCA and other variance-based methods</b></td><td><b>Strongly</b></td><td>The first component will point along the largest-variance feature, which is just the one with the biggest units.</td></tr>
+            <tr><td><b>Decision trees, random forests, gradient-boosted trees</b></td><td><b>No</b></td><td>A split on "balance &gt; 12,400" gives the same partition as "balance in thousands &gt; 12.4". Any strictly increasing transform (log, square root, rank) leaves the splits unchanged.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The common transformations:</p>
+        <ul>
+          <li><strong>Standardisation (z-score):</strong> subtract the mean, divide by the standard deviation. The default for neural nets and penalised models. Sensitive to outliers: one AED 50 million corporate transfer in the sample stretches the scale for everyone.</li>
+          <li><strong>Min–max scaling</strong> to 0–1: simple, but even more sensitive to outliers, since one extreme value squashes the rest into a sliver.</li>
+          <li><strong>Log transform</strong> (<code>log1p</code>) for amounts, balances and counts. Money is multiplicative: the difference between AED 100 and 200 matters about as much as that between 10,000 and 20,000. After a log transform, a heavily right-skewed variable becomes roughly bell-shaped and far better behaved. This one is worth reaching for first on any money field.</li>
+          <li><strong>Robust scaling:</strong> subtract the median, divide by the interquartile range. Not thrown by outliers.</li>
+          <li><strong>Rank or quantile transform:</strong> replace each value with its percentile. Tames outliers completely, at the cost of discarding exact magnitudes.</li>
+          <li><strong>Winsorising / capping:</strong> clip at, say, the 1st and 99th percentiles. Common for the raw tail, though for fraud the tail is sometimes exactly the signal, so check before clipping.</li>
+        </ul>
+        <p>Two disciplines that apply to every scaler. <strong>Fit it on training data only</strong>, then apply the same numbers (mean, standard deviation, quantiles) to validation, test and live data. Computing the mean on the full dataset lets test information leak into training (F3.1). And <strong>version the scaler with the model</strong>: a model deployed without the exact scaling parameters it was trained with is a model silently producing nonsense.</p>
+        <p>There is a useful asymmetry to remember. Giving a tree model standardised or logged inputs does no harm and sometimes helps interpretability, but it does not change the splits. Giving a distance-based or gradient-based model raw inputs can ruin it. When in doubt, scale.</p>
+      </div>
+
+      <figure class="figure" id="fig-scale">
+        <div class="fig-head"><span class="fig-title">The units you pick change the answer</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> start with the balance in plain dirhams (slider on the right): the nearest-neighbour model is no better than a coin flip, because balance sets almost the whole distance. Drag left to express balance in thousands, then standardise (button). Accuracy climbs towards the tree stump, which never cared. Change <b>k</b> and note the shape persists.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-sc">Unit of balance: multiply AED by <output for="s-sc"></output></label><input type="range" id="s-sc" min="-5" max="0" step="0.1" value="0"></div>
+          <div class="ctl"><label for="s-k">Neighbours k <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="31" step="2" value="15"></div>
+        </div>
+        <div class="btns"><button class="btn" type="button" id="sc-std">Standardise both features</button><button class="btn" type="button" id="sc-aed">Back to plain AED</button></div>
+        <div class="chart-wrap" id="sc-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>k-NN accuracy on new customers</span>
+          <span><i style="background:var(--ink);opacity:.6"></i>Decision stump on transactions (unaffected by units)</span>
+          <span><i style="background:var(--muted);opacity:.6"></i>Coin flip</span>
+        </div>
+        <div>
+          <div class="share" aria-label="Share of distance"><i class="sa" id="sh-a"></i><i class="sb" id="sh-b"></i></div>
+          <div class="share-cap"><span id="sh-a-t"></span><span id="sh-b-t"></span></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st4-acc-b"><div class="k">k-NN accuracy at this scale</div><div class="v" id="st4-acc"></div><div class="s">new customers, by majority vote</div></div>
+          <div class="stat"><div class="k">Decision stump accuracy</div><div class="v" id="st4-stump"></div><div class="s">same at every scale</div></div>
+          <div class="stat"><div class="k">Balance's share of distance</div><div class="v" id="st4-share"></div><div class="s">of squared distance between customers</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: 300 training and 300 new customers in two classes (for example "will churn" and "will stay"). Transactions per month is clearly informative (class means 22 and 14, standard deviation 8). Account balance is only weakly informative (means AED 30,000 and 34,000, standard deviation AED 25,000). Accuracy is measured on the new customers for the chosen unit. Random draws come from a fixed seed.</p>
+      </figure>
+
+      <div class="prose">
+        <p>This is Simulation 4's lesson in one line: with plain dirhams, "similar customer" means "similar balance" and the informative feature is nearly invisible. Nothing in the data changed, only the unit. The same distortion hides inside any model that adds up weighted inputs without regard to their size.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTIONS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Feature engineering sits between raw data and models, so it touches almost everything. These are the links worth knowing.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F3.1 · built</span><span class="t"><a href="f3-leakage-point-in-time.html">Point-in-time correctness and leakage</a></span><p>Every window, baseline and target encoding in this lesson must use only what was known at the decision time. Leakage is the main way good-looking features go wrong.</p></div>
+        <div class="link-card"><span class="code">F3.3 · built</span><span class="t"><a href="f3-sql-thinking.html">SQL thinking: joins, windows and aggregation</a></span><p>The practical machinery behind rolling windows, as-of joins and per-customer baselines.</p></div>
+        <div class="link-card"><span class="code">F3.5 · built</span><span class="t"><a href="f3-imbalanced-data.html">Imbalanced data</a></span><p>Rare labels make target encoding noisier (few positives per category) and make the 1% false-alarm budget in Simulation 1 a real constraint.</p></div>
+        <div class="link-card"><span class="code">F2.5 · built</span><span class="t"><a href="f2-regression-glms.html">Regression and GLMs</a></span><p>Dummy variables, interaction terms, log transforms and regularisation are all feature engineering decisions that change what a linear model can say.</p></div>
+        <div class="link-card"><span class="code">F2.6 · built</span><span class="t"><a href="f2-confounding-simpson-selection.html">Confounding and selection bias</a></span><p>MNAR missingness is a selection problem: the rows with a filled field are a chosen subset. Also note: a feature measured after the treatment is a bad control.</p></div>
+        <div class="link-card"><span class="code">F2.8 · built</span><span class="t"><a href="f2-survival-analysis.html">Survival analysis</a></span><p>Recency and time-since-last-event are partial observations of a waiting time. Survival models treat the censoring properly.</p></div>
+        <div class="link-card"><span class="code">F1.1 · built</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Vectors, matrices and geometry</a></span><p>Why distance-based models depend on units: a feature's scale sets its pull in the geometry. Embeddings for categories are the same idea.</p></div>
+        <div class="link-card"><span class="code">F1.3 · built</span><span class="t"><a href="f1-gradients-optimisation.html">Gradients and optimisation</a></span><p>Unscaled inputs create the long, narrow loss valleys that make gradient descent slow or unstable.</p></div>
+        <div class="link-card"><span class="code">F7.1–F7.4 · built</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Precision, recall, thresholds, calibration</a></span><p>A velocity threshold is a precision/recall trade-off. And a target-encoded feature can distort calibration if it overfits.</p></div>
+      </div>
+      <div class="prose" style="margin-top:20px">
+        <p>Where this appears in a bank, in rough order of how often you will meet it:</p>
+        <ul>
+          <li><strong>Card and payment fraud.</strong> Velocity, distinct counts, first-time flags and ratios to baseline, computed in real time from a feature store. Latency budget: tens of milliseconds, which limits the windows you can afford to compute on the fly.</li>
+          <li><strong>Credit scoring and behavioural scores.</strong> Utilisation, months since last delinquency, trend in balance and in salary credits, bureau features with many structural blanks (the "no file" customers). Regulators expect you to explain every transformation.</li>
+          <li><strong>Collections and early warning.</strong> Recency of payment, ratio of payment to minimum due, change in inflows.</li>
+          <li><strong>AML transaction monitoring.</strong> Velocity of cash deposits, counts of distinct counterparties, round-amount flags, dormancy followed by a burst. Compare with the customer's declared profile (KYC) as a baseline.</li>
+          <li><strong>Churn and next-best-product.</strong> RFM, product holdings, channel mix, and complaints (counted, or embedded from Arabic and English text).</li>
+          <li><strong>Islamic products.</strong> The same features apply to murabaha, ijara and tawarruq customers. Be careful with product-specific blanks (for example profit-rate fields that don't exist for some contracts): they are structural, not informative.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The core techniques here are old and stable. What has changed in the last few years is how much of the work models absorb themselves, and a more careful, less folkloric understanding of encoding and missing values. In short: boosted trees remain hard to beat, neural methods have caught up with careful preprocessing, and pretrained "tabular foundation models" are strong on small data.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 1 November 2026. Items marked "from search summary" I confirmed only from the search result text, not by reading the paper.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2001</span><div><div class="t">The original target-encoding scheme</div><p>Micci-Barreca's preprocessing for high-cardinality attributes, which blends a category's rate with the overall rate by sample size. It is the shrinkage formula in Part 2.</p><div class="src">Micci-Barreca, SIGKDD Explorations, 2001</div></div></li>
+        <li><span class="yr">2005</span><div><div class="t">Recency and frequency, done probabilistically</div><p>The BG/NBD model estimates each customer's chance of still being active from just frequency and recency. Still a baseline for customer-lifetime and attrition work.</p><div class="src">Fader, Hardie &amp; Lee, Marketing Science, 2005</div></div></li>
+        <li><span class="yr">2016</span><div><div class="t">Feature engineering for card fraud</div><p>Adding aggregated velocity features and periodic (von Mises) time-of-day features measurably improved cost savings over raw transaction fields, on real card data.</p><div class="src">Bahnsen et al., Expert Systems with Applications, 2016</div></div></li>
+        <li><span class="yr">2016</span><div><div class="t">Entity embeddings for categories</div><p>Learned dense vectors for categorical inputs, used in a winning solution of a retail sales competition, with the vectors capturing meaningful similarity between categories.</p><div class="src">Guo &amp; Berkhahn, arXiv 1604.06737</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">CatBoost's ordered target statistics</div><p>Names the "target leakage" problem in standard target encoding and avoids it by encoding each row using only rows earlier in a random permutation.</p><div class="src">Prokhorenkova et al., NeurIPS 2018</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Why trees still win on tabular data</div><p>On a benchmark of mid-sized tabular datasets, tree-based models beat deep learning, and the paper attributes it to trees' robustness to uninformative features and to non-smooth targets. Preprocessing and rotation invariance are part of the story.</p><div class="src">Grinsztajn, Oyallon &amp; Varoquaux, NeurIPS 2022</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Regularised target encoding wins on high cardinality</div><p>A large comparison found regularised target encoding (smoothing, cross-fitting, noise) outperformed one-hot, ordinal and unregularised encodings on high-cardinality features.</p><div class="src">Pargent et al., Computational Statistics, 2022</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Better numerical embeddings</div><p>Showed that embedding each numeric feature (for example through piecewise-linear or periodic encodings) lets simple neural networks match or approach boosted trees, making numeric preprocessing a first-class design choice.</p><div class="src">Gorishniy, Rubachev &amp; Babenko, NeurIPS 2022</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Cross-fitted target encoding enters scikit-learn</div><p>The library's <code>TargetEncoder</code> uses cross-fitting during <code>fit_transform</code> and smoothing, making the safe version the default in the most widely used toolkit.</p><div class="src">scikit-learn 1.3 documentation</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">The missing indicator, studied properly</div><p>An analysis of when adding an indicator helps and how it behaves in high dimensions. Informative missingness is where it earns its keep.</p><div class="src">Van Ness et al., KDD 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Supervised learning with missing values</div><p>Shows that with a flexible enough learner, impute-then-fit can be consistent for prediction, and that tree models that route missing values natively are a principled alternative. The caveat: this is about prediction, not about estimating effects.</p><div class="src">Josse et al., arXiv 1902.06931 (published in Statistical Papers, 2024)</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Tabular foundation models and a living benchmark</div><p>TabPFN v2, a transformer pretrained on synthetic tabular tasks, gives strong predictions on small datasets without tuning and handles raw categorical and missing values itself. TabArena, a continuously updated benchmark, found boosted trees still strong and tuned, ensembled neural nets competitive; foundation models excel on smaller data.</p><div class="src">Hollmann et al., Nature, 2025; Erickson et al., NeurIPS 2025 (TabArena)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">The feature-engineering gap in benchmarks</div><p>A paper (TabPrep) argues that standard tabular benchmarks understate what good feature engineering can achieve, and reports cross-validated target encodings as consistently strong baselines on high-cardinality features. <em>From search summary.</em></p><div class="src">arXiv 2606.02384</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Encoders for high-cardinality fraud data</div><p>A study on the public IEEE-CIS fraud dataset compares interpretable and learned encoders, using five-fold cross-fitted, Bayesian-smoothed target encoding (m = 30) as the interpretable arm, with a permutation test to confirm no leakage. <em>From search summary.</em></p><div class="src">arXiv 2607.00477</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Windowed velocity and ratio-to-baseline features</b></td><td>Computed in a feature store, served in real time, several windows per feature.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Missing indicators and native missing handling in boosted trees</b></td><td>Standard in scorecard-style and ML models, with missing-rate monitoring.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Cross-fitted, smoothed target encoding</b></td><td>For merchants, employers and postcodes in boosted-tree and neural models.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Weight of evidence (WoE) binning</b></td><td>The long-standing scorecard version of target encoding: bin, then use log-odds of each bin. Often required for regulatory scorecards.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Learned embeddings for merchants and counterparties</b></td><td>Trained with a neural model or graph; used as input to a downstream detector.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Tabular foundation models (TabPFN-style)</b></td><td>Tried on small-data problems such as niche portfolios; constraints on data size and governance of a pretrained model.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Automated feature generation and LLM-suggested features</b></td><td>Search over transformations, or prompting a model to propose domain features. Output must still be checked for leakage.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Let boosted trees or a well-built neural net do the fitting, but spend your time on the behaviour features, the point-in-time correctness and the monitoring. Tools that generate features automatically are useful for ideas and dangerous without a leakage check.</div>
+    </section>
+
+    <!-- ============================== 5. FAILURES ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These are the errors that turn up in reviews. Each comes with the quickest way to catch it.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Target encoding computed on the training rows themselves</div><p>Training AUC looks superb, held-out AUC is mediocre. Rare categories carry their own labels.</p><div class="spot"><b>Spot it</b>Compare cross-validated and held-out scores. Ask whether the encoding is fitted inside each fold. Check the correlation of the encoded feature with the label on training versus new data.</div></li>
+        <li><div class="t">Windows that include the future</div><p>A "transactions in the last 7 days" feature that, for historical rows, is computed with a window centred on the row, or uses today's date as the reference.</p><div class="spot"><b>Spot it</b>Recompute the feature for a few cases by hand as of the decision time. Check that offline and live values match. A feature far stronger offline than live is the classic sign.</div></li>
+        <li><div class="t">A baseline contaminated by the event</div><p>Ratio to a 90-day average that includes the burst you're trying to detect, shrinking the ratio.</p><div class="spot"><b>Spot it</b>Check the baseline window ends before the feature window starts.</div></li>
+        <li><div class="t">Wrong window for the problem</div><p>Only a 30-day window for card-testing attacks that last 10 minutes, or only a 1-hour window for mule activity that unfolds over weeks.</p><div class="spot"><b>Spot it</b>Plot feature value for known cases across several windows, as in Simulation 1. If cases only separate at a window you didn't build, add it.</div></li>
+        <li><div class="t">Zero used for "never happened"</div><p>Days since last transaction = 0 for customers with no transaction, which reads as "just transacted".</p><div class="spot"><b>Spot it</b>Look at the distribution for a spike at zero. Ask what the code does when there is no prior event.</div></li>
+        <li><div class="t">Mean imputation hiding informative blanks</div><p>Income, employer, or a bureau score blank for specific groups, replaced by the average, with no indicator.</p><div class="spot"><b>Spot it</b>Compare the outcome rate for blank versus filled. If they differ, the blank carries signal that has been discarded.</div></li>
+        <li><div class="t">Missing pattern changes between training and live</div><p>A form change makes a field mandatory, or an upstream feed starts sending a default value instead of a null. The model sees a different world.</p><div class="spot"><b>Spot it</b>Monitor the missing rate and the distribution of every feature in production against training. Alert on shifts.</div></li>
+        <li><div class="t">Silent sentinel values</div><p>−1, 9999 or "01/01/1900" in the data, treated as real numbers by a scaler or a linear model.</p><div class="spot"><b>Spot it</b>Look for impossible values and spikes at round extremes in every column's histogram (F3.2).</div></li>
+        <li><div class="t">Scaler fitted on all the data</div><p>Mean and standard deviation (or quantiles) computed before the train/test split.</p><div class="spot"><b>Spot it</b>Check that scaling lives inside the training pipeline and is refit per fold.</div></li>
+        <li><div class="t">Unscaled inputs to a distance or gradient model</div><p>k-NN, clustering, PCA or a neural net fed dirhams next to counts. Results are driven by whichever feature has the largest numbers.</p><div class="spot"><b>Spot it</b>Look at feature standard deviations side by side. If they differ by orders of magnitude and the model isn't a tree, scale.</div></li>
+        <li><div class="t">Outliers distorting standardisation</div><p>One huge value stretches the scale so everyone else is squashed to near zero.</p><div class="spot"><b>Spot it</b>Check the min, max and 99th percentile. Use a log transform or robust scaling for money fields.</div></li>
+        <li><div class="t">Proxy features for protected attributes</div><p>High-cardinality encodings (postcode, employer, device, merchant) can carry nationality, religion or gender through the back door. Target encoding makes the proxy as strong as the data allows.</p><div class="spot"><b>Spot it</b>Try predicting the protected attribute from the engineered features; examine outcomes by group (see <a href="f2-confounding-simpson-selection.html">F2.6</a>).</div></li>
+        <li><div class="t">Hundreds of auto-generated features, no stories</div><p>A feature set nobody can explain to a model validator or regulator. Some turn out to be leaks.</p><div class="spot"><b>Spot it</b>For every top-importance feature, ask for its definition, its as-of time, and why it should predict the outcome.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“The biggest gain in our fraud model won't come from a fancier algorithm. It will come from giving it each customer's own normal. A card that suddenly makes six purchases in an hour is suspicious for a quiet customer and routine for a busy one. If we compare each customer with their own history, we catch more fraud with fewer false alarms on loyal customers. The cost is a real-time feature pipeline, and I'd start with the three or four windows that match the attack patterns we see.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I build behavioural features as ratios to the customer's own baseline over several windows, with the baseline ending before the window and everything computed as of the decision time. For high-cardinality categoricals I use smoothed, out-of-fold target encoding, or the boosted tree's own ordered statistics, plus frequency so the model can tell unknown from average. Blanks get an indicator, and I check whether they're informative before choosing imputation. Scalers are fit on training data only and versioned with the model. I'd also test the feature set for leakage and proxy power before it goes to validation.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just give the model the raw transactions and let it learn the patterns?”</summary><div class="ans"><p>Standard tabular models take one row per decision and cannot look across a customer's history. Sequence models can, and some banks are moving that way, but they need more data, more engineering and more explanation. Even then, ratios and baselines help. For most production fraud and credit systems today, hand-built behavioural features feeding a boosted tree remain the strongest and the most explainable approach.</p></div></details>
+        <details class="reveal"><summary>“Target encoding looks like it's cheating, since it uses the label. Is it safe?”</summary><div class="ans"><p>It uses the label, so it is safe only if done properly: statistics from other rows, shrunk towards the overall rate for rare categories, and fitted inside each cross-validation fold. Done that way it is standard and effective. Done naively it makes training scores look great and live scores disappoint. I'd always show the training and held-out gap when I present one.</p></div></details>
+        <details class="reveal"><summary>“Can't we just drop the rows with missing income?”</summary><div class="ans"><p>We'd lose the information in the blank, and we'd train only on customers who fill in forms. If low earners skip the field, the model would never see the people it will need to score. The better route is to keep the rows, impute simply, and add an indicator. And I'd ask why it's blank, since a structural blank and a customer choice mean different things.</p></div></details>
+        <details class="reveal"><summary>“Do we need to scale features for XGBoost?”</summary><div class="ans"><p>No. Tree splits only depend on the ordering of values, so scaling or any monotone transform leaves the model unchanged. We do need to scale for neural networks, k-NN, clustering and penalised regression. If we compare model families, we should give each its appropriate preprocessing, otherwise the comparison is unfair to the ones that need scaling.</p></div></details>
+        <details class="reveal"><summary>“The feature is hugely predictive offline. Why is it weaker in production?”</summary><div class="ans"><p>First suspect: the offline value isn't what we'd know at decision time. A window that includes the transaction's aftermath, an encoding fitted with the row's own label, or a field filled in after the outcome. I'd recompute a sample of live cases offline and compare values, and check training versus live distributions and missing rates.</p></div></details>
+        <details class="reveal"><summary>“Could an LLM generate our features?”</summary><div class="ans"><p>It can suggest good candidates quickly, such as ratios, windows and flags, especially when given the data dictionary. But it doesn't know what's available at decision time, and it will happily write a feature that uses a column filled in after the event. Every suggestion needs an as-of check and a validator-readable definition before it goes near a model.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. SELF-CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A customer's average weekly card spend over the previous 90 days is AED 540. This week they spent AED 2,700. A second customer averages AED 6,000 a week and spent AED 7,500. Compare the raw weekly spends and the ratios to baseline. Who looks more unusual?</summary><div class="ans"><p>The ratios are 2,700 ÷ 540 = <strong>5.0</strong> and 7,500 ÷ 6,000 = <strong>1.25</strong>. In raw terms the second customer spent far more (7,500 against 2,700), but the first is five times their own norm. The ratio says the first customer is the unusual one. (In practice add a small constant to the denominator and also look at the number of transactions and merchants.)</p></div></details>
+        <details class="reveal"><summary>2. A merchant has 5 training transactions, 2 of them fraud. The overall fraud rate is 2%, and you smooth with m = 25. What is the encoded value, and what would naive encoding give?</summary><div class="ans"><p>Naive: 2 ÷ 5 = <strong>40%</strong>. Smoothed: (2 + 25 × 0.02) ÷ (5 + 25) = 2.5 ÷ 30 = <strong>8.3%</strong>. The smoothed value stays near the overall rate because five transactions is very little evidence. It would move further as the merchant's volume grows.</p></div></details>
+        <details class="reveal"><summary>3. Your model trained with target encoding scores AUC 0.91 in cross-validation but 0.74 on the next month's data. Name two causes to check, in order.</summary><div class="ans"><p>First, <strong>in-sample or leaky encoding</strong>: was the encoding fitted using the same rows it was then evaluated on, rather than inside each fold? Second, <strong>time</strong>: random folds mix future and past, so merchant behaviour and label availability in cross-validation differ from the real forward-looking case. Also check for other leaks (windows, fields filled after the event) and for genuine drift.</p></div></details>
+        <details class="reveal"><summary>4. In a personal-finance application form, 25% of applicants leave "monthly income" blank, and their default rate is 14% against 7% for those who fill it in. What does this tell you, and what do you do?</summary><div class="ans"><p>The blank is informative, so the missingness is not random: it relates to risk, probably through income itself or through applicant type (self-employed, irregular income). Add a missing indicator and impute with a group median (or let a boosted tree route the blanks). Don't drop the rows, and don't impute the global mean alone. Also ask the business why the field is blank, and monitor the blank rate in production.</p></div></details>
+        <details class="reveal"><summary>5. Why does ridge regression need standardised inputs, though ordinary least squares does not?</summary><div class="ans"><p>Rescaling a feature in ordinary least squares just rescales its coefficient, so predictions are unchanged. Ridge adds a penalty on the size of coefficients. A feature in small units (balance in AED) needs a tiny coefficient and is barely penalised, while one in large units (ratio, 0 to 1) needs a big coefficient and is penalised heavily. The penalty then favours features because of their units, not their usefulness. Standardising puts all coefficients on a common footing.</p></div></details>
+        <details class="reveal"><summary>6. Does a log transform change the predictions of a random forest? Does it change the predictions of a k-NN model?</summary><div class="ans"><p><strong>Random forest: no</strong> (apart from tiny differences from tie-breaking), since a log is strictly increasing and leaves the order of values, and so every possible split, unchanged. <strong>k-NN: yes</strong>, because it changes the distances, and with it which customers count as neighbours. It compresses large values, so one huge transaction no longer dominates.</p></div></details>
+        <details class="reveal"><summary>7. A velocity feature with the best window you can find still misses 17% of fraud transactions in your test set, however you tune it. Is this a bug?</summary><div class="ans"><p>Probably not. The first transaction of each fraud burst has no earlier burst activity to count, so a velocity feature can't flag it. If bursts average about six transactions, about one in six is the first. That is what the roughly 83% ceiling in Simulation 1 reflects. To catch the first, you need features that judge a transaction on its own: a new merchant, an unusual amount for this customer, a new device or location.</p></div></details>
+        <details class="reveal"><summary>8. You put a feature "days since last salary credit" in a model that predicts loan default over the next 12 months. The code computes it as of the date the table was built, not as of each loan's start date. What goes wrong?</summary><div class="ans"><p>It uses information from after the loan began. A borrower who later defaulted may have lost their job and stopped salary credits, so "days since last credit" is large <em>because</em> of the default. The feature looks very predictive offline and is unavailable, or means something else, at decision time. Recompute every behavioural feature as of each loan's application date.</p></div></details>
+      </div>
+    </section>
+
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>M. Kuhn, K. Johnson. <a href="https://bookdown.org/max/FES/">Feature Engineering and Selection: A Practical Approach for Predictive Models</a>. CRC Press, 2019. Free online; the best general reference, with chapters on encoding and missing data.</li>
+        <li>R. Little, D. Rubin. <em>Statistical Analysis with Missing Data</em>, 3rd edition. Wiley, 2019. The standard text on MCAR, MAR and MNAR.</li>
+        <li>D. Rubin. <a href="https://doi.org/10.1093/biomet/63.3.581">Inference and Missing Data</a>. Biometrika, 1976.</li>
+        <li>D. Micci-Barreca. <a href="https://doi.org/10.1145/507533.507538">A Preprocessing Scheme for High-Cardinality Categorical Attributes in Classification and Prediction Problems</a>. SIGKDD Explorations, 2001.</li>
+        <li>P. Fader, B. Hardie, K. L. Lee. <a href="https://doi.org/10.1287/mksc.1040.0098">"Counting Your Customers" the Easy Way: An Alternative to the Pareto/NBD Model</a>. Marketing Science, 2005.</li>
+        <li>A. Correa Bahnsen, D. Aouada, A. Stojanovic, B. Ottersten. <a href="https://doi.org/10.1016/j.eswa.2015.12.030">Feature Engineering Strategies for Credit Card Fraud Detection</a>. Expert Systems with Applications, 2016.</li>
+        <li>C. Guo, F. Berkhahn. <a href="https://arxiv.org/abs/1604.06737">Entity Embeddings of Categorical Variables</a>. arXiv, 2016.</li>
+        <li>L. Prokhorenkova et al. <a href="https://arxiv.org/abs/1706.09516">CatBoost: Unbiased Boosting with Categorical Features</a>. NeurIPS, 2018.</li>
+        <li>J. Josse, N. Prost, E. Scornet, G. Varoquaux. <a href="https://arxiv.org/abs/1902.06931">On the Consistency of Supervised Learning with Missing Values</a>. Statistical Papers, 2024.</li>
+        <li>L. Grinsztajn, E. Oyallon, G. Varoquaux. <a href="https://arxiv.org/abs/2207.08815">Why Do Tree-Based Models Still Outperform Deep Learning on Typical Tabular Data?</a> NeurIPS, 2022.</li>
+        <li>Y. Gorishniy, I. Rubachev, A. Babenko. <a href="https://arxiv.org/abs/2203.05556">On Embeddings for Numerical Features in Tabular Deep Learning</a>. NeurIPS, 2022.</li>
+        <li>M. Pargent, F. Pfisterer, J. Thomas, B. Bischl. <a href="https://doi.org/10.1007/s00180-022-01207-6">Regularized Target Encoding Outperforms Traditional Methods in Supervised Machine Learning with High Cardinality Features</a>. Computational Statistics, 2022.</li>
+        <li>scikit-learn. <a href="https://scikit-learn.org/stable/modules/preprocessing.html#target-encoder">Preprocessing data: TargetEncoder</a>. Documentation, version 1.3 onwards.</li>
+        <li>J. Van Ness, J. Bosschieter, R. Halpin-Gregorio, M. Udell. <a href="https://arxiv.org/abs/2211.09259">The Missing Indicator Method: From Low to High Dimensions</a>. KDD, 2023.</li>
+        <li>N. Hollmann et al. <a href="https://doi.org/10.1038/s41586-024-08328-6">Accurate Predictions on Small Data with a Tabular Foundation Model</a>. Nature, 2025.</li>
+        <li>N. Erickson et al. <a href="https://arxiv.org/abs/2506.16791">TabArena: A Living Benchmark for Machine Learning on Tabular Data</a>. NeurIPS Datasets and Benchmarks, 2025.</li>
+        <li><a href="https://arxiv.org/pdf/2606.02384">TabPrep: Closing the Feature Engineering Gap in Tabular Benchmarks</a>. arXiv 2606.02384, 2026. Read only through a search summary.</li>
+        <li><a href="https://arxiv.org/pdf/2607.00477">Interpretable vs Learned Encoders for High-Cardinality Fraud Detection</a>. arXiv 2607.00477, 2026. Read only through a search summary.</li>
+        <li>Feast. <a href="https://docs.feast.dev/">Feature store documentation</a>. On point-in-time joins and online/offline consistency.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F3: imbalanced data (F3.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const MINUS = "−";
+  const sgn = (v, d = 1) => { if (Math.abs(v) < 0.5 * Math.pow(10, -d)) v = 0; return (v >= 0 ? "+" : MINUS) + Math.abs(v).toFixed(d); };
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  function setPressed(sel, el) { document.querySelectorAll(sel).forEach(b => b.setAttribute("aria-pressed", String(b === el))); }
+  function mulberry(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function normal(r) { let u = 0; while (!u) u = r(); const v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+  function auc(s, y) {
+    const n = s.length, idx = Array.from({ length: n }, (_, i) => i).sort((a, b) => s[a] - s[b]);
+    let rs = 0, np = 0, i = 0;
+    while (i < n) { let j = i; while (j + 1 < n && s[idx[j + 1]] === s[idx[i]]) j++; const avg = (i + j) / 2 + 1; for (let k = i; k <= j; k++) if (y[idx[k]]) { rs += avg; np++; } i = j + 1; }
+    const nn = n - np; return (rs - np * (np + 1) / 2) / (np * nn);
+  }
+  function svgIn(box, H, label) {
+    const W = Math.max(280, box.clientWidth); box.innerHTML = "";
+    const svg = L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+    return { svg, W };
+  }
+
+  // =====================================================================
+  // Simulation 1: velocity windows
+  // =====================================================================
+  const WIN = [5 / 60, 15 / 60, 0.5, 1, 3, 6, 12, 24, 48, 72];
+  const WLAB = ["5 min", "15 min", "30 min", "1 hour", "3 hours", "6 hours", "12 hours", "1 day", "2 days", "3 days"];
+  const S1 = { wi: 2, mode: "ratio", fc: 0 };
+  const HIST = 600, END = 720, NC = 300;
+  const cards = [];
+  (function gen() {
+    const r = mulberry(7);
+    for (let c = 0; c < NC; c++) {
+      const lam = Math.min(20, Math.exp(Math.log(1.2) + 0.8 * normal(r)));
+      const gap = 24 * 1.375 / lam, ev = [];
+      let t = -Math.log(1 - r()) * gap;
+      while (t < END) {
+        ev.push({ t, y: 0 });
+        if (r() < 0.25) { const k = r() < 0.5 ? 2 : 1; for (let q = 0; q < k; q++) { const tt = t + (5 + 55 * r()) / 60; if (tt < END) ev.push({ t: tt, y: 0 }); } }
+        t += -Math.log(1 - r()) * gap;
+      }
+      cards.push({ ev, fraud: false });
+    }
+    const ids = Array.from({ length: NC }, (_, i) => i);
+    for (let i = NC - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }
+    ids.slice(0, 40).forEach(id => {
+      const cd = cards[id]; cd.fraud = true;
+      let t = HIST + 12 + r() * (END - HIST - 18); const n = 4 + Math.floor(r() * 5);
+      cd.burst = t;
+      for (let k = 0; k < n; k++) { if (t < END) cd.ev.push({ t, y: 1 }); t += -Math.log(1 - r()) * 0.15; }
+    });
+    cards.forEach(cd => {
+      cd.ev.sort((a, b) => a.t - b.t);
+      cd.rate = cd.ev.filter(e => e.t < HIST && !e.y).length / HIST;
+      cd.f = WIN.map(w => {
+        const raw = [], ratio = []; let j = 0;
+        for (let i = 0; i < cd.ev.length; i++) {
+          while (cd.ev[j].t <= cd.ev[i].t - w) j++;
+          const c = i - j + 1; raw.push(c); ratio.push(c / (cd.rate * w + 0.3));
+        }
+        return { raw, ratio };
+      });
+    });
+  })();
+  const RES = WIN.map((w, wi) => {
+    const out = {};
+    ["raw", "ratio"].forEach(mode => {
+      const leg = [], fr = [];
+      cards.forEach(cd => cd.ev.forEach((e, i) => { if (e.t >= HIST) (e.y ? fr : leg).push(cd.f[wi][mode][i]); }));
+      leg.sort((a, b) => a - b);
+      const thr = leg[Math.min(leg.length - 1, Math.floor(0.99 * leg.length))];
+      out[mode] = { thr, fa: leg.filter(v => v > thr).length / leg.length, nfl: leg.filter(v => v > thr).length, nl: leg.length, rec: fr.filter(v => v > thr).length / fr.length, nfr: fr.length, ncaught: fr.filter(v => v > thr).length };
+    });
+    return out;
+  });
+  const fraudCards = cards.map((c, i) => c.fraud ? i : -1).filter(i => i >= 0);
+  const vRecall = $("v-recall"), vTl = $("v-tl");
+  function drawRecall() {
+    const H = 250, m = { l: 36, r: 10, t: 12, b: 44 };
+    const { svg, W } = svgIn(vRecall, H, "Share of fraud transactions caught by window length");
+    const X = i => m.l + (i + 0.5) / WIN.length * (W - m.l - m.r), Y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), class: "grid" }, svg); L.svg("text", { x: m.l - 5, y: Y(v) + 4, "text-anchor": "end" }, svg).textContent = (v * 100) + "%"; });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0), class: "ax" }, svg);
+    ["raw", "ratio"].forEach(mode => {
+      L.svg("path", { d: L.path(WIN.map((_, i) => [X(i), Y(RES[i][mode].rec)])), class: mode === "raw" ? "l-raw" : "l-ratio" }, svg);
+      WIN.forEach((_, i) => L.svg("circle", { cx: X(i), cy: Y(RES[i][mode].rec), r: i === S1.wi ? 5 : 2.8, class: mode === "raw" ? "d-raw" : "d-ratio" }, svg));
+    });
+    L.svg("line", { x1: X(S1.wi), x2: X(S1.wi), y1: m.t, y2: Y(0), class: "sel-line" }, svg);
+    [0, 3, 5, 7, 9].forEach(i => L.svg("text", { x: X(i), y: H - m.b + 15, "text-anchor": "middle" }, svg).textContent = WLAB[i]);
+    L.svg("text", { x: (m.l + W - m.r) / 2, y: H - 6, "text-anchor": "middle" }, svg).textContent = "Window length (fraud caught at about 1% false alarms)";
+  }
+  function drawTl() {
+    const H = 250, m = { l: 36, r: 10, t: 12, b: 44 };
+    const { svg, W } = svgIn(vTl, H, "One compromised card: feature value over time");
+    const cd = cards[fraudCards[S1.fc]], b0 = cd.burst, t0 = b0 - 24, t1 = b0 + 8;
+    const R = RES[S1.wi][S1.mode], thr = R.thr;
+    const pts = [];
+    cd.ev.forEach((e, i) => { if (e.t >= t0 && e.t <= t1) pts.push({ t: e.t, y: e.y, v: cd.f[S1.wi][S1.mode][i] }); });
+    const vmax = Math.max(thr * 1.3, ...pts.map(p => p.v), 1) * 1.1;
+    const X = L.scale(t0, t1, m.l, W - m.r), Y = L.scale(0, vmax, H - m.b - 22, m.t);
+    [0, 0.5, 1].forEach(f => { const v = vmax * f / 1.1; L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), class: "grid" }, svg); L.svg("text", { x: m.l - 5, y: Y(v) + 4, "text-anchor": "end" }, svg).textContent = v >= 10 ? v.toFixed(0) : v.toFixed(1); });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0), class: "ax" }, svg);
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(thr), y2: Y(thr), class: "tl-thr" }, svg);
+    let d = "";
+    pts.forEach((p, i) => { d += (i ? "L" + X(p.t).toFixed(1) + "," + Y(pts[i - 1].v).toFixed(1) : "M" + X(p.t).toFixed(1) + "," + Y(p.v).toFixed(1)) + "L" + X(p.t).toFixed(1) + "," + Y(p.v).toFixed(1); });
+    if (d) L.svg("path", { d, class: "tl-step" }, svg);
+    pts.forEach(p => L.svg("circle", { cx: X(p.t), cy: H - m.b - 8, r: p.y ? 4 : 3, class: p.y ? "tk-fraud" : "tk-legit" }, svg));
+    [-24, -12, 0, 8].forEach(h => L.svg("text", { x: X(b0 + h), y: H - m.b + 12, "text-anchor": "middle" }, svg).textContent = (h > 0 ? "+" : h < 0 ? MINUS : "") + Math.abs(h) + "h");
+    L.svg("text", { x: (m.l + W - m.r) / 2, y: H - 6, "text-anchor": "middle" }, svg).textContent = `Card ${S1.fc + 1} of ${fraudCards.length} compromised, time relative to first fraud`;
+    return pts.filter(p => p.y).length;
+  }
+  function renderVel() {
+    const R = RES[S1.wi][S1.mode];
+    drawRecall(); const nf = drawTl();
+    const rawBest = Math.max(...RES.map(x => x[S1.mode].rec));
+    $("st1-rec").textContent = pct(R.rec, 0); $("st1-rec-s").textContent = `${R.ncaught} of ${R.nfr} fraud transactions`;
+    $("st1-fa").textContent = pct(R.fa, 2); $("st1-fa-s").textContent = `${R.nfl} of ${L.fmtInt(R.nl)} genuine`;
+    $("st1-thr").textContent = S1.mode === "raw" ? ">" + R.thr : ">" + R.thr.toFixed(1); $("st1-thr-s").textContent = S1.mode === "raw" ? "transactions in the window" : "times own normal rate";
+    $("st1-max").textContent = pct(1 - 40 / R.nfr, 0);
+    const other = S1.mode === "raw" ? "ratio" : "raw", RO = RES[S1.wi][other];
+    $("s1-verdict").innerHTML = `At <b>${WLAB[S1.wi]}</b> the <b>${S1.mode === "raw" ? "raw count" : "ratio"}</b> catches <b>${pct(R.rec)}</b> of fraud at ${pct(R.fa, 1)} false alarms. The ${other === "raw" ? "raw count" : "ratio"} would catch ${pct(RO.rec)}. The best window for this feature catches ${pct(rawBest)}.`;
+  }
+  $("s-win") && L.bind("s-win", v => WLAB[v], v => { S1.wi = v; renderVel(); });
+  $("m-raw").addEventListener("click", e => { S1.mode = "raw"; setPressed("#m-raw,#m-ratio", e.currentTarget); renderVel(); });
+  $("m-ratio").addEventListener("click", e => { S1.mode = "ratio"; setPressed("#m-raw,#m-ratio", e.currentTarget); renderVel(); });
+  $("m-next").addEventListener("click", () => { S1.fc = (S1.fc + 1) % fraudCards.length; renderVel(); });
+
+  // =====================================================================
+  // Simulation 2: target encoding
+  // =====================================================================
+  const M2 = 250, N2 = 12000, K2 = 5;
+  const S2 = { method: "naive", sig: 0.3, m: 20 };
+  const D2 = (function () {
+    const r = mulberry(11), w = [];
+    let tot = 0; for (let i = 0; i < M2; i++) { w.push(Math.pow(i + 1, -1.4)); tot += w[i]; }
+    const cum = []; let c = 0; w.forEach(x => { c += x / tot; cum.push(c); });
+    const pick = u => { let lo = 0, hi = M2 - 1; while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid] >= u) hi = mid; else lo = mid + 1; } return lo; };
+    const z = Array.from({ length: M2 }, () => normal(r));
+    const mk = () => { const m = [], u = []; for (let i = 0; i < N2; i++) { m.push(pick(r())); u.push(r()); } return { m, u }; };
+    return { z, tr: mk(), te: mk() };
+  })();
+  const teBox = $("te-chart");
+  function renderTE() {
+    const sig = S2.sig, M = S2.method === "naive" ? 0 : S2.m;
+    const rate = D2.z.map(z => Math.min(0.5, 0.04 * Math.exp(sig * z - sig * sig / 2)));
+    const ytr = D2.tr.u.map((u, i) => u < rate[D2.tr.m[i]] ? 1 : 0), yte = D2.te.u.map((u, i) => u < rate[D2.te.m[i]] ? 1 : 0);
+    const n = new Array(M2).fill(0), s = new Array(M2).fill(0);
+    const nf = Array.from({ length: K2 }, () => new Array(M2).fill(0)), sf = Array.from({ length: K2 }, () => new Array(M2).fill(0));
+    let tot = 0;
+    for (let i = 0; i < N2; i++) { const m = D2.tr.m[i], f = i % K2; n[m]++; s[m] += ytr[i]; nf[f][m]++; sf[f][m] += ytr[i]; tot += ytr[i]; }
+    const prior = tot / N2;
+    const enc = (ss, nn) => (nn + M) > 0 ? (ss + M * prior) / (nn + M) : prior;
+    const full = n.map((nn, m) => enc(s[m], nn));
+    const trEnc = D2.tr.m.map((m, i) => { if (S2.method === "oof") { const f = i % K2; return enc(s[m] - sf[f][m], n[m] - nf[f][m]); } return full[m]; });
+    const teEnc = D2.te.m.map(m => full[m]);
+    const aTr = auc(trEnc, ytr), aTe = auc(teEnc, yte), aOr = auc(D2.te.m.map(m => rate[m]), yte);
+    // chart
+    const H = 270, mg = { l: 40, r: 10, t: 12, b: 44 };
+    const { svg, W } = svgIn(teBox, H, "Encoded value per merchant against how many training rows it has");
+    const X = L.scale(0, Math.log10(2400), mg.l, W - mg.r), Y = L.scale(0, 1, H - mg.b, mg.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: mg.l, x2: W - mg.r, y1: Y(v), y2: Y(v), class: "grid" }, svg); L.svg("text", { x: mg.l - 5, y: Y(v) + 4, "text-anchor": "end" }, svg).textContent = (v * 100) + "%"; });
+    L.svg("line", { x1: mg.l, x2: W - mg.r, y1: Y(0), y2: Y(0), class: "ax" }, svg);
+    L.svg("line", { x1: mg.l, x2: W - mg.r, y1: Y(prior), y2: Y(prior), class: "te-prior" }, svg);
+    for (let m = 0; m < M2; m++) {
+      const x = X(Math.log10(n[m] + 1)) + ((m * 37) % 11 - 5) * 0.5;
+      L.svg("line", { x1: x, x2: x, y1: Y(full[m]), y2: Y(rate[m]), class: "te-whisk" }, svg);
+      L.svg("circle", { cx: x, cy: Y(rate[m]), r: 1.6, class: "te-true" }, svg);
+      L.svg("circle", { cx: x, cy: Y(full[m]), r: 3, class: "te-dot" + (n[m] <= 5 ? " rare" : "") }, svg);
+    }
+    [0, 1, 10, 100, 1000].forEach(v => L.svg("text", { x: X(Math.log10(v + 1)), y: H - mg.b + 15, "text-anchor": "middle" }, svg).textContent = v);
+    L.svg("text", { x: (mg.l + W - mg.r) / 2, y: H - 6, "text-anchor": "middle" }, svg).textContent = "Training rows for the merchant (log scale)";
+    $("st2-tr").textContent = aTr.toFixed(2); $("st2-te").textContent = aTe.toFixed(2);
+    $("st2-gap").textContent = sgn(aTr - aTe, 2); $("st2-or").textContent = aOr.toFixed(2);
+    $("st2-gap-b").className = "stat " + (aTr - aTe > 0.08 ? "bad" : aTr - aTe > 0.03 ? "warn" : "ok");
+    const rare = n.filter(x => x <= 5).length;
+    $("s2-verdict").innerHTML = `${rare} of ${M2} merchants have 5 or fewer training rows. ` + (S2.method === "naive" ? `Naive encoding scores <b>${aTr.toFixed(2)}</b> on the rows it was built from but <b>${aTe.toFixed(2)}</b> on new ones.` : S2.method === "smooth" ? `Smoothing pulls rare merchants towards ${pct(prior, 1)}, but each row still carries part of its own label: training <b>${aTr.toFixed(2)}</b>, new data <b>${aTe.toFixed(2)}</b>.` : `Out-of-fold keeps each row's label out of its own feature: training <b>${aTr.toFixed(2)}</b>, new data <b>${aTe.toFixed(2)}</b>, so what you see is what you get.`) + (sig === 0 ? " With no real merchant differences the honest answer is about 0.50." : "");
+  }
+  L.bind("s-teSig", v => v.toFixed(2), v => { S2.sig = v; renderTE(); });
+  L.bind("s-teM", v => v, v => { S2.m = v; renderTE(); });
+  document.querySelectorAll("[data-te]").forEach(b => b.addEventListener("click", () => { setPressed("[data-te]", b); S2.method = b.dataset.te; renderTE(); }));
+
+  // =====================================================================
+  // Simulation 3: missing income
+  // =====================================================================
+  const N3 = 4000, S3 = { rate: 0.30, mnar: 1 };
+  const D3 = (function () {
+    const r = mulberry(23), mk = () => { const z = [], um = [], uy = []; for (let i = 0; i < N3; i++) { z.push(normal(r)); um.push(r()); uy.push(r()); } return { z, um, uy }; };
+    return { tr: mk(), te: mk() };
+  })();
+  const INC = z => 14000 * Math.exp(0.5 * z);
+  function fitLogit(X, y) {
+    const d = X[0].length, b = new Array(d).fill(0);
+    for (let it = 0; it < 14; it++) {
+      const g = new Array(d).fill(0), Hm = Array.from({ length: d }, () => new Array(d).fill(0));
+      for (let i = 0; i < X.length; i++) {
+        let z = 0; for (let j = 0; j < d; j++) z += b[j] * X[i][j];
+        const p = L.sigmoid(z), w = p * (1 - p) + 1e-9;
+        for (let j = 0; j < d; j++) { g[j] += (p - y[i]) * X[i][j]; for (let k = 0; k < d; k++) Hm[j][k] += w * X[i][j] * X[i][k]; }
+      }
+      for (let j = 0; j < d; j++) Hm[j][j] += 1e-6;
+      // solve Hm * delta = g
+      const A = Hm.map((row, j) => row.concat([g[j]]));
+      for (let c = 0; c < d; c++) {
+        let p = c; for (let r2 = c + 1; r2 < d; r2++) if (Math.abs(A[r2][c]) > Math.abs(A[p][c])) p = r2;
+        [A[c], A[p]] = [A[p], A[c]];
+        for (let r2 = 0; r2 < d; r2++) if (r2 !== c) { const f = A[r2][c] / A[c][c]; for (let k = c; k <= d; k++) A[r2][k] -= f * A[c][k]; }
+      }
+      for (let j = 0; j < d; j++) b[j] -= A[j][d] / A[j][j];
+    }
+    return b;
+  }
+  const scoreLogit = (b, X) => X.map(x => x.reduce((a, v, j) => a + v * b[j], 0));
+  const msHist = $("ms-hist"), msBars = $("ms-bars");
+  function renderMiss() {
+    const base = L.logit(S3.rate), k = S3.mnar;
+    const prep = D => { const miss = D.z.map((z, i) => D.um[i] < L.sigmoid(base - k * z) ? 1 : 0); const y = D.z.map((z, i) => D.uy[i] < L.sigmoid(-2.3 - 0.9 * z) ? 1 : 0); return { miss, y }; };
+    const tr = prep(D3.tr), te = prep(D3.te), ztr = D3.tr.z, zte = D3.te.z;
+    let so = 0, no = 0; ztr.forEach((z, i) => { if (!tr.miss[i]) { so += z; no++; } });
+    const m0 = so / no;
+    const xTr = ztr.map((z, i) => tr.miss[i] ? m0 : z), xTe = zte.map((z, i) => te.miss[i] ? m0 : z);
+    const oracleB = fitLogit(ztr.map(z => [1, z]), tr.y), a1 = auc(scoreLogit(oracleB, zte.map(z => [1, z])), te.y);
+    const idxObs = ztr.map((_, i) => i).filter(i => !tr.miss[i]);
+    const ccB = fitLogit(idxObs.map(i => [1, ztr[i]]), idxObs.map(i => tr.y[i])), a2 = auc(scoreLogit(ccB, xTe.map(x => [1, x])), te.y);
+    const miB = fitLogit(xTr.map(x => [1, x]), tr.y), a3 = auc(scoreLogit(miB, xTe.map(x => [1, x])), te.y);
+    const inB = fitLogit(xTr.map((x, i) => [1, x, tr.miss[i]]), tr.y), a4 = auc(scoreLogit(inB, xTe.map((x, i) => [1, x, te.miss[i]])), te.y);
+    // histogram
+    {
+      const H = 230, mg = { l: 12, r: 10, t: 12, b: 40 }, nb = 24, lo = -3, hi = 3;
+      const { svg, W } = svgIn(msHist, H, "Income distribution: all applicants and those who filled it in");
+      const ca = new Array(nb).fill(0), co = new Array(nb).fill(0);
+      ztr.forEach((z, i) => { const b = Math.min(nb - 1, Math.max(0, Math.floor((z - lo) / (hi - lo) * nb))); ca[b]++; if (!tr.miss[i]) co[b]++; });
+      const mx = Math.max(...ca), bw = (W - mg.l - mg.r) / nb, Y = L.scale(0, mx, H - mg.b, mg.t);
+      for (let b = 0; b < nb; b++) {
+        L.svg("rect", { x: mg.l + b * bw + 1, y: Y(co[b]), width: bw - 2, height: Y(0) - Y(co[b]), class: "hs-obs" }, svg);
+        L.svg("rect", { x: mg.l + b * bw + 1, y: Y(ca[b]), width: bw - 2, height: Y(0) - Y(ca[b]), class: "hs-true" }, svg);
+      }
+      L.svg("line", { x1: mg.l, x2: W - mg.r, y1: Y(0), y2: Y(0), class: "ax" }, svg);
+      [-2, 0, 2].forEach(z => L.svg("text", { x: mg.l + (z - lo) / (hi - lo) * (W - mg.l - mg.r), y: H - mg.b + 15, "text-anchor": "middle" }, svg).textContent = "AED " + L.fmtInt(Math.round(INC(z) / 100) * 100));
+      L.svg("text", { x: (mg.l + W - mg.r) / 2, y: H - 6, "text-anchor": "middle" }, svg).textContent = "Monthly income";
+    }
+    // bars
+    {
+      const H = 230, mg = { l: 10, r: 10, t: 12, b: 14 };
+      const { svg, W } = svgIn(msBars, H, "AUC by missing-value strategy");
+      const items = [["Oracle: sees true income", a1, "bar-o"], ["Drop incomplete rows, mean-fill at scoring", a2, "bar-n"], ["Mean-impute", a3, "bar-w"], ["Mean-impute + blank indicator", a4, "bar-a"]];
+      const rowH = (H - mg.t - mg.b) / items.length, lo = 0.5, hi = Math.max(0.8, a1 + 0.02), X = L.scale(lo, hi, mg.l, W - mg.r);
+      items.forEach((it, i) => {
+        const y = mg.t + i * rowH;
+        L.svg("text", { x: mg.l, y: y + 14, class: "lbl-ink" }, svg).textContent = it[0];
+        L.svg("rect", { x: mg.l, y: y + 20, width: W - mg.l - mg.r, height: 16, rx: 4, class: "bar-track" }, svg);
+        L.svg("rect", { x: mg.l, y: y + 20, width: Math.max(2, X(Math.max(lo, it[1])) - mg.l), height: 16, rx: 4, class: it[2] }, svg);
+        L.svg("text", { x: Math.min(W - mg.r - 4, X(it[1]) + 6), y: y + 33, class: "lbl-ink", "text-anchor": X(it[1]) + 40 > W - mg.r ? "end" : "start", style: X(it[1]) + 40 > W - mg.r ? "fill:var(--bg)!important" : "" }, svg).textContent = it[1].toFixed(3);
+      });
+    }
+    const tMean = ztr.reduce((a, z) => a + INC(z), 0) / N3, oMean = idxObs.reduce((a, i) => a + INC(ztr[i]), 0) / idxObs.length;
+    let dm = 0, nm = 0, dobs = 0; tr.miss.forEach((m, i) => { if (m) { nm++; dm += tr.y[i]; } else dobs += tr.y[i]; });
+    $("st3-true").textContent = L.fmtAED(tMean); $("st3-obs").textContent = L.fmtAED(oMean);
+    $("st3-obs-s").textContent = `${sgn(100 * (oMean / tMean - 1), 1)}% vs truth; ${pct(nm / N3, 0)} blank`;
+    $("st3-obs-b").className = "stat " + (oMean / tMean > 1.05 ? "warn" : "");
+    $("st3-d0").textContent = pct(dobs / (N3 - nm), 1); $("st3-d1").textContent = pct(dm / nm, 1);
+    $("st3-d1-s").textContent = k > 0.05 ? "blanks are riskier" : "blanks look like everyone else";
+    $("st3-d1-b").className = "stat " + (dm / nm > 1.3 * dobs / (N3 - nm) ? "bad" : "");
+    $("s3-verdict").innerHTML = `Mean-fill scores <b>${a3.toFixed(3)}</b>; adding the indicator gives <b>${a4.toFixed(3)}</b> (${sgn(a4 - a3, 3)}). The oracle, which sees the hidden income, reaches ${a1.toFixed(3)}. ` + (k < 0.05 ? "The blanks are random, so there is nothing for the indicator to find." : "The indicator recovers what the blank reveals, but not the income itself.");
+  }
+  L.bind("s-mrate", v => v + "%", v => { S3.rate = v / 100; renderMiss(); });
+  L.bind("s-mnar", v => v.toFixed(2), v => { S3.mnar = v; renderMiss(); });
+
+  // =====================================================================
+  // Simulation 4: scaling and k-NN
+  // =====================================================================
+  const N4 = 300, S4 = { p: 0, k: 15 };
+  const D4 = (function () {
+    const r = mulberry(5), mk = () => { const A = [], B = [], y = []; for (let i = 0; i < N4; i++) { const c = i % 2; y.push(c); A.push((c ? 14 : 22) + 8 * normal(r)); B.push(Math.max(0, (c ? 34000 : 30000) + 25000 * normal(r))); } return { A, B, y }; };
+    return { tr: mk(), te: mk() };
+  })();
+  const sd = a => { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) * (y - m), 0) / a.length); };
+  const sdA = sd(D4.tr.A), sdB = sd(D4.tr.B), pStd = Math.log10(sdA / sdB);
+  function knn(sB, k) {
+    const { tr, te } = D4; let ok = 0; const idx = Array.from({ length: N4 }, (_, i) => i), d = new Array(N4);
+    for (let t = 0; t < N4; t++) {
+      for (let j = 0; j < N4; j++) { const a = te.A[t] - tr.A[j], b = (te.B[t] - tr.B[j]) * sB; d[j] = a * a + b * b; }
+      idx.sort((p, q) => d[p] - d[q]);
+      let v = 0; for (let j = 0; j < k; j++) v += tr.y[idx[j]];
+      if ((v * 2 > k ? 1 : 0) === te.y[t]) ok++;
+    }
+    return ok / N4;
+  }
+  const STUMP = (function () {
+    let best = -1, bt = 0;
+    D4.tr.A.forEach(th => { let c = 0; D4.tr.A.forEach((a, i) => { if ((a < th ? 1 : 0) === D4.tr.y[i]) c++; }); if (c > best) { best = c; bt = th; } });
+    return D4.te.A.reduce((c, a, i) => c + ((a < bt ? 1 : 0) === D4.te.y[i] ? 1 : 0), 0) / N4;
+  })();
+  const PS = L.range(-5, 0, 26);
+  let curve = null, curveK = -1;
+  const scBox = $("sc-chart");
+  function renderScale() {
+    if (curveK !== S4.k) { curve = PS.map(p => knn(Math.pow(10, p), S4.k)); curveK = S4.k; }
+    const acc = knn(Math.pow(10, S4.p), S4.k);
+    const H = 240, mg = { l: 40, r: 10, t: 12, b: 44 };
+    const { svg, W } = svgIn(scBox, H, "k-NN accuracy by unit of balance");
+    const X = L.scale(-5, 0, mg.l + 6, W - mg.r - 6), Y = L.scale(0.4, 0.8, H - mg.b, mg.t);
+    [0.4, 0.5, 0.6, 0.7, 0.8].forEach(v => { L.svg("line", { x1: mg.l, x2: W - mg.r, y1: Y(v), y2: Y(v), class: "grid" }, svg); L.svg("text", { x: mg.l - 5, y: Y(v) + 4, "text-anchor": "end" }, svg).textContent = (v * 100) + "%"; });
+    L.svg("line", { x1: mg.l, x2: W - mg.r, y1: Y(0.5), y2: Y(0.5), stroke: "var(--muted)", "stroke-opacity": .6, "stroke-width": 1.2 }, svg);
+    L.svg("line", { x1: mg.l, x2: W - mg.r, y1: Y(STUMP), y2: Y(STUMP), stroke: "var(--ink)", "stroke-opacity": .6, "stroke-width": 1.6, "stroke-dasharray": "5 4" }, svg);
+    L.svg("path", { d: L.path(PS.map((p, i) => [X(p), Y(Math.max(0.4, curve[i]))])), class: "l-ratio" }, svg);
+    L.svg("line", { x1: X(pStd), x2: X(pStd), y1: mg.t, y2: Y(0.4), stroke: "var(--warn)", "stroke-width": 1.4, "stroke-dasharray": "3 3" }, svg);
+    L.svg("text", { x: X(pStd) + 4, y: mg.t + 10 }, svg).textContent = "z-score";
+    L.svg("line", { x1: X(S4.p), x2: X(S4.p), y1: mg.t, y2: Y(0.4), class: "sel-line" }, svg);
+    L.svg("circle", { cx: X(S4.p), cy: Y(Math.max(0.4, acc)), r: 5, class: "d-ratio" }, svg);
+    [[-5, "×0.00001"], [-3, "thousands"], [0, "plain AED"]].forEach(([p, t]) => L.svg("text", { x: X(p), y: H - mg.b + 15, "text-anchor": p === -5 ? "start" : p === 0 ? "end" : "middle" }, svg).textContent = t);
+    L.svg("text", { x: (mg.l + W - mg.r) / 2, y: H - 6, "text-anchor": "middle" }, svg).textContent = "Balance multiplied by (transactions left in their own units)";
+    const vA = sdA * sdA, vB = Math.pow(10, 2 * S4.p) * sdB * sdB, shB = vB / (vA + vB);
+    $("sh-a").style.width = (100 * (1 - shB)) + "%"; $("sh-b").style.width = (100 * shB) + "%";
+    $("sh-a-t").textContent = `Transactions ${pct(1 - shB)}`; $("sh-b-t").textContent = `Balance ${pct(shB)}`;
+    $("st4-acc").textContent = pct(acc, 1); $("st4-stump").textContent = pct(STUMP, 1); $("st4-share").textContent = pct(shB, 1);
+    $("st4-acc-b").className = "stat " + (acc < 0.56 ? "bad" : acc > STUMP - 0.04 ? "ok" : "warn");
+    $("s4-verdict").innerHTML = shB > 0.9 ? `Balance supplies <b>${pct(shB, 0)}</b> of the distance, so "nearest customer" means "nearest balance". Accuracy is <b>${pct(acc, 0)}</b>, barely above chance.` : shB < 0.1 ? `Now balance supplies only ${pct(shB, 0)} of the distance, so transactions decide who is nearest. Accuracy is <b>${pct(acc, 0)}</b>. Shrink it further and balance would be ignored altogether.` : `Both features contribute (balance ${pct(shB, 0)} of distance). Accuracy <b>${pct(acc, 0)}</b> against the unit-free stump at ${pct(STUMP, 0)}.`;
+  }
+  const scOut = L.bind("s-sc", p => p === 0 ? "1 (plain AED)" : "10^" + p.toFixed(1).replace("-", MINUS), p => { S4.p = p; renderScale(); });
+  L.bind("s-k", v => v, v => { S4.k = v; renderScale(); });
+  $("sc-std").addEventListener("click", () => { S4.p = pStd; scOut.set(pStd); renderScale(); });
+  $("sc-aed").addEventListener("click", () => { S4.p = 0; scOut.set(0); renderScale(); });
+
+  // =====================================================================
+  function renderAll() { renderVel(); renderTE(); renderMiss(); renderScale(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
