@@ -38,12 +38,12 @@ window.PROGRESS = (function () {
 // Theme: auto (follow the system), light or dark. Stored per viewer.
 window.THEME = (function () {
   const KEY = "gbac.theme";
-  const get = () => { try { return localStorage.getItem(KEY) || "auto"; } catch (e) { return "auto"; } };
+  const get = () => { try { return localStorage.getItem(KEY) || "dark"; } catch (e) { return "dark"; } };
   const apply = t => { if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", t); };
   apply(get());
   return {
     get, apply,
-    cycle() { const order = ["auto", "light", "dark"]; const t = order[(order.indexOf(get()) + 1) % 3]; try { localStorage.setItem(KEY, t); } catch (e) {} apply(t); return t; },
+    cycle() { const order = ["dark", "light", "auto"]; const t = order[(order.indexOf(get()) + 1) % 3]; try { localStorage.setItem(KEY, t); } catch (e) {} apply(t); return t; },
     label: t => ({ auto: "Theme: auto", light: "Theme: light", dark: "Theme: dark" })[t]
   };
 })();
