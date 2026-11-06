@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Why Gradient Descent Finds Good Solutions, and What a Prompt Might Be Doing Inside the Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 13px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .ln-sol { stroke: var(--accent); stroke-width: 3; fill: none; }
+  .ln-dir { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .ln-path { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .pt-init { fill: var(--surface); stroke: var(--ink); stroke-width: 2.4; }
+  .pt-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .pt-min { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .land { stroke: var(--ink); stroke-width: 2.4; fill: none; }
+  .land-fill { fill: var(--warn); fill-opacity: .10; }
+  .it-dot { fill: var(--bad); fill-opacity: .55; }
+  .it-now { fill: var(--bad); stroke: var(--surface); stroke-width: 2; }
+  .bar-0 { fill: var(--neutral); }
+  .bar-1 { fill: var(--accent); }
+  .bar-2 { fill: var(--warn); fill-opacity: .85; }
+  .bar-3 { fill: var(--muted); fill-opacity: .55; }
+  .cv-tgt { stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 4 4; fill: none; }
+  .cv-a { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .cv-b { stroke: var(--warn); stroke-width: 2.4; fill: none; }
+  .cv-c { stroke: var(--ink); stroke-width: 2.4; fill: none; }
+  .cv-d { stroke: var(--bad); stroke-width: 2.4; fill: none; }
+  .vline { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track R · Research frontier: AI, ML and data science</span>
+    <span>Module R6 · Deep learning theory</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>R6.3 · R6.4</span>
+        <span class="pill e">Edge</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Why Gradient Descent Finds Good Solutions, and What a Prompt Might Be Doing Inside the Model</h1>
+      <p class="dek">Lottery tickets, the shape of the loss surface and the quiet biases of the optimiser, then the theory that a prompt's examples act like training steps run inside a single forward pass.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A modern network has far more parameters than it needs, so there are countless ways to fit the training data, and gradient descent does not pick one at random: it has built-in preferences (nearby, small, flat, simple) that explain much of why it generalises, and one influential theory says that when you put examples in a prompt, the network quietly runs a small gradient-descent-like procedure on them, which is a useful picture and an unfinished one.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A credit-risk team has 20 labelled borrowers and fits a model with 1,000 free numbers. The textbook says this cannot work: with more knobs than examples you can match the 20 labels in a huge number of ways, most of them nonsense on a 21st borrower. Classical statistics would stop you.</p>
+        <p>Yet in deep learning this is the normal situation, and the models work. Image and language networks have more parameters than training examples, can fit pure noise if you ask them to (Zhang et al., 2017), and still predict well on data they never saw. Something other than "fits the data" must be choosing among the fits. The question this lesson is about is: <strong>what is gradient descent choosing, and why is the choice usually good?</strong></p>
+        <p>Picture a landscape. Every setting of the parameters is a point, and the height is the training loss. In a huge model the bottom of the landscape is not a single pit. It is a vast flat valley floor where the loss is zero, full of different solutions. Gradient descent rolls downhill from wherever it starts and stops at <em>some</em> point on that floor. Which point depends on where it started, how big its steps were, which optimiser it used and when it stopped. Those choices act as an unwritten regulariser. That is <strong>implicit regularisation</strong>: preferences nobody added to the loss, built into the way we search.</p>
+      </div>
+
+      <figure class="figure" id="fig-min">
+        <div class="fig-head"><span class="fig-title">One example, two parameters, infinitely many perfect fits</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> leave the start at (0, 0) and drag <b>Steps taken</b> from 0 to 40. Gradient descent walks in a straight line and lands on the green point: of all the perfect solutions, the one closest to the origin. Now move the start somewhere else and rerun. It still lands on the solution line, but at the point closest to <em>where it started</em>, not to the origin.</p>
+        <div class="btns" role="group" aria-label="Start positions">
+          <button class="btn" type="button" id="b-orig">Start at (0, 0)</button>
+          <button class="btn" type="button" id="b-off1">Start at (−2, 2)</button>
+          <button class="btn" type="button" id="b-off2">Start at (2.5, 2.5)</button>
+        </div>
+        <div class="chart-wrap" id="min-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>All settings that fit the single example exactly</span>
+          <span><i style="background:var(--ink)"></i>Path of gradient descent</span>
+          <span><i style="background:var(--muted)"></i>Direction of the data, (2, 1)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-w1">Start, weight 1 <output for="s-w1"></output></label><input type="range" id="s-w1" min="-3" max="3" step="0.1" value="0"></div>
+          <div class="ctl"><label for="s-w2">Start, weight 2 <output for="s-w2"></output></label><input type="range" id="s-w2" min="-3" max="3" step="0.1" value="0"></div>
+          <div class="ctl"><label for="s-st">Steps taken <output for="s-st"></output></label><input type="range" id="s-st" min="0" max="40" step="1" value="40"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Where it is now</div><div class="v" id="st1-pos"></div><div class="s">(weight 1, weight 2)</div></div>
+          <div class="stat" id="st1-loss-b"><div class="k">Squared error on the example</div><div class="v" id="st1-loss"></div><div class="s">zero means a perfect fit</div></div>
+          <div class="stat"><div class="k">Size of the weights, √(w₁² + w₂²)</div><div class="v" id="st1-norm"></div><div class="s" id="st1-norm-s"></div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated and exact: one training example with inputs x = (2, 1) and target y = 2, model ŷ = w₁·2 + w₂·1, loss ½(ŷ − y)², plain gradient descent with step size 0.1. The final point is computed with the closed-form expression in the text and agrees with the stepped path. No randomness.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three ideas to hold, each of which gets its own treatment below.</p>
+        <ul>
+          <li><strong>The optimiser has taste.</strong> Plain gradient descent from a small start moves only along directions the data points in, so it never invents weight where the data gave no reason to. It lands on the smallest solution that fits. That is a preference for simplicity that nobody wrote down (R6.3, <a href="#m-implicit">implicit regularisation</a>).</li>
+          <li><strong>Shape matters, not just height.</strong> Two solutions with the same training loss can differ in how sharp the valley is around them. Large steps cannot stay in a sharp valley, so they drift towards flat ones, and flat ones tend to survive small changes in the data (<a href="#m-landscape">loss landscapes</a>).</li>
+          <li><strong>Most of the network is spare.</strong> You can often delete 80–90% of the weights after training and keep the accuracy. The lottery ticket hypothesis asks whether a small network was hiding inside the big one from the start (<a href="#m-lottery">lottery tickets</a>).</li>
+        </ul>
+        <p>Then the second topic turns the lens on language models. When you put a few worked examples into a prompt, the model's weights do not change, yet its behaviour does. One of the cleanest theories of why says the forward pass is doing something that looks like gradient descent on those examples (R6.4, <a href="#m-icl">in-context learning as implicit gradient descent</a>). It is a theory about a mechanism, with real proofs in small settings and real doubts about large ones.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>"Fits the training data" does not pin down a model. The training procedure picks among the fits, and that choice carries most of the generalisation. When someone says a model "just memorises", ask which solution the optimiser would have chosen and why. That is a sharper question than "is it overfitting?".</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-implicit">Implicit regularisation: the bias nobody wrote down</h3>
+      <div class="prose">
+        <p>Start with the case you just played with, which is exactly solvable. A linear model has more weights than examples. Gradient descent on squared error updates the weights by a multiple of each example's input vector: <code>w ← w − η·(error)·x</code>. Every step adds a combination of the training inputs and nothing else. So after any number of steps the weights equal the starting weights plus something inside the span of the data. Whatever the starting point had in directions the data does not touch stays exactly as it was.</p>
+        <p>If the run converges to zero loss, the answer is the unique solution that is the smallest possible change from the start:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>w</mi><mi>∞</mi></msub><mo>=</mo><msub><mi>w</mi><mn>0</mn></msub><mo>+</mo><msup><mi>X</mi><mi>⊤</mi></msup><msup><mrow><mo stretchy="false">(</mo><mi>X</mi><msup><mi>X</mi><mi>⊤</mi></msup><mo stretchy="false">)</mo></mrow><mrow><mo>−</mo><mn>1</mn></mrow></msup><mo stretchy="false">(</mo><mi>y</mi><mo>−</mo><mi>X</mi><msub><mi>w</mi><mn>0</mn></msub><mo stretchy="false">)</mo></math>
+        <p class="where">X holds the training inputs, one example per row; y the targets; w<sub>0</sub> the starting weights. The correction term lives entirely in the span of the data. From w<sub>0</sub> = 0 this is the <strong>minimum-norm interpolating solution</strong>, the same answer as ridge regression (F2.5) in the limit where the penalty shrinks to zero. In Simulation 1, x = (2, 1), y = 2 gives (0.8, 0.4), the green point. Nobody asked for small weights; the algorithm delivered them anyway.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>That is a fact about linear models. The research programme is to find its analogues for the networks people really use. The main findings, in plain terms:</p>
+        <ul>
+          <li><strong>Classification with separable data.</strong> If one straight line can separate the classes, gradient descent on logistic loss never stops (the loss keeps shrinking as weights grow), but the <em>direction</em> of the weights converges to the maximum-margin separator, the same one a support vector machine would choose (Soudry et al., 2018). Again a preference nobody coded.</li>
+          <li><strong>Depth changes the preference.</strong> In deep linear networks and matrix factorisation, gradient descent from a small start tends to find low-rank solutions, learning the strongest patterns first and the weaker ones later (Arora et al., 2019). Where a one-layer model prefers small weights, a deep one prefers simple structure.</li>
+          <li><strong>The optimiser is part of the model.</strong> Adam and SGD, big steps and small steps, small versus large initial weights, momentum, batch size, and when you stop all select different points on the valley floor. Early stopping is implicit regularisation you choose on purpose: stopping before convergence returns something between the start and the minimum-norm answer, much like a ridge penalty (Simulation 4 below shows this working).</li>
+          <li><strong>It is not a complete explanation.</strong> The preferences are proved for simple models and observed, not proved, for large ones. Neyshabur et al. (2015) put it as "in search of the real inductive bias": the network's size is not what controls generalisation, something about the search is. Nobody can yet state a theorem that predicts the generalisation of a real language model from first principles.</li>
+        </ul>
+        <p>This is the same story as double descent and grokking in <a href="r6-double-descent-and-grokking.html">the neighbouring lesson</a>: a model that can interpolate does not have to generalise badly, because interpolation is not a single thing. It also reframes the bias-variance picture of F4.1 (<a href="f4-bias-variance-and-generalisation.html">bias, variance and generalisation</a>): counting parameters is the wrong complexity measure for these models.</p>
+      </div>
+
+      <h3 class="sub" id="m-landscape">Loss landscapes: valleys, sharpness and step size</h3>
+      <div class="prose">
+        <p>The landscape picture is easy to say and hard to see. A real network has millions to trillions of weights, so the surface lives in that many dimensions. Four facts from the research are worth carrying:</p>
+        <ul>
+          <li><strong>Bad local minima are rarely the problem.</strong> In high dimensions most points where the slope is zero are saddles, not traps, because to be a true pit the surface must curve upwards in every one of millions of directions. For over-parameterised networks, optimisation usually succeeds: gradient descent reaches near-zero training loss. The mystery is the quality of what it finds, not whether it finds anything.</li>
+          <li><strong>The good regions are connected.</strong> Solutions found from different random starts can often be joined by a path along which the loss stays low (Garipov et al., 2018; Draxler et al., 2018). Later work found that networks trained from the same early checkpoint land in the same basin, which is why averaging weights (model "soups", merging; <a href="r2-synthetic-data-and-model-collapse.html">R2.5</a>) can work at all.</li>
+          <li><strong>Sharpness is the other axis.</strong> At a minimum, the surface curves upward by different amounts in different directions. The largest curvature, written <em>h</em> here, measures how sharp the valley is. Hochreiter and Schmidhuber argued in 1997 that flat minima should generalise better, since a small shift in the weights (or the data) barely changes the loss. Keskar et al. (2017) reported that large-batch training finds sharper minima and generalises worse.</li>
+          <li><strong>The step size acts on sharpness.</strong> This one has a precise, checkable form. Gradient descent on a valley of curvature h is stable only if the step size is below 2/h. Above that, each step overshoots the bottom by more than the previous distance and the iterate bounces outward. So a given step size <em>cannot sit in</em> a valley sharper than 2/η. Larger steps are therefore forced towards flatter regions.</li>
+        </ul>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>η</mi><mo>&lt;</mo><mfrac><mn>2</mn><mi>h</mi></mfrac></math>
+        <p class="where">η is the step size and h the sharpness (largest curvature) at the minimum. On a bowl f(w) = ½·h·w², each step multiplies the distance from the bottom by (1 − η·h). Its absolute value is below 1 only when η·h is between 0 and 2. At η·h = 1 you land on the bottom in one step; past 2 you diverge.</p>
+      </div>
+
+      <figure class="figure" id="fig-sharp">
+        <div class="fig-head"><span class="fig-title">Two perfect solutions, one narrow and one wide: which does a given step size keep?</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> start at −1.2 (inside the narrow valley) with a step size of 0.02, and scrub the steps: it settles in the narrow valley. Raise the step size past 0.05 and rerun: the iterates bounce outward, get thrown out, and settle in the wide valley instead. Both valleys have exactly zero loss, so no training metric could tell them apart.</p>
+        <div class="chart-wrap" id="sharp-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Loss as a function of one weight</span>
+          <span><i style="background:var(--bad)"></i>Gradient descent iterates</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-lr">Step size η <output for="s-lr"></output></label><input type="range" id="s-lr" min="0.005" max="0.12" step="0.001" value="0.02"></div>
+          <div class="ctl"><label for="s-w0">Start position <output for="s-w0"></output></label><input type="range" id="s-w0" min="-2.5" max="2.5" step="0.05" value="-1.2"></div>
+          <div class="ctl"><label for="s-it">Steps shown <output for="s-it"></output></label><input type="range" id="s-it" min="0" max="60" step="1" value="60"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Position after the steps shown</div><div class="v" id="st2-pos"></div><div class="s" id="st2-pos-s"></div></div>
+          <div class="stat" id="st2-end-b"><div class="k">Where it ends up after 60 steps</div><div class="v" id="st2-end"></div><div class="s" id="st2-end-s"></div></div>
+          <div class="stat"><div class="k">Largest stable step size</div><div class="v">0.05 | 1.0</div><div class="s">narrow valley (h = 40) | wide valley (h = 2)</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated and exact: loss is the smaller of two bowls, ½·40·(w + 1.5)² (narrow) and ½·2·(w − 1.5)² (wide), both with minimum loss 0. Plain gradient descent, no noise. This isolates the stability rule η &lt; 2/h. Real networks add far more: many dimensions, curvature that changes during training, and noise from mini-batches.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two caveats keep this honest.</p>
+        <ul>
+          <li><strong>"Flat" is not a parameterisation-free idea.</strong> Dinh et al. (2017) showed that in a ReLU network you can rescale one layer up and the next down without changing the function at all, which makes a minimum look arbitrarily sharp or flat. So "flat minima generalise" cannot be a theorem about raw curvature alone; the useful measures are scale-aware, and the evidence is empirical.</li>
+          <li><strong>Large steps do not just avoid sharp regions, they sit at their edge.</strong> Cohen et al. (2021) found that when training with full-batch gradient descent, the sharpness grows until it reaches about 2/η and then hovers there, with the loss still falling over longer stretches but not smoothly. This <strong>edge of stability</strong> contradicts the textbook picture that you should be safely inside the stable zone, and it means the step size, not the loss alone, controls the geometry you end up with. The toy above shows only the stability rule behind it, not the self-correcting dynamics.</li>
+        </ul>
+        <p>One practical offspring is <strong>sharpness-aware minimisation</strong> (SAM, Foret et al., 2021): at each step, nudge the weights in the worst direction nearby and take the gradient there, so the optimiser prefers regions where the loss stays low in a neighbourhood. It often helps a little on vision benchmarks at roughly twice the compute, and has been studied heavily in 2024–26. It is a good example of turning an implicit preference into an explicit one.</p>
+        <p>Connections to practice you already know: learning-rate schedules and warm-up (<a href="f6-loss-functions-and-what-they.html">F6.2</a>), the gradient mechanics in <a href="f1-gradients-optimisation.html">F1.3</a>, and why dropout and weight decay help (<a href="f6-overfitting-dropout-and-data-augmentation.html">F6.3</a>) are all, partly, ways of steering which point on the valley floor you reach.</p>
+      </div>
+
+      <h3 class="sub" id="m-lottery">The lottery ticket hypothesis: a small network inside the big one</h3>
+      <div class="prose">
+        <p>Training a large network, then deleting the weights with the smallest magnitude, is called <strong>pruning</strong>. It has been known since the 1990s that you can remove most of a trained network's weights and lose almost nothing. The puzzle Frankle and Carbin asked in 2019 was different: if the small network is enough, why can't we train the small network directly? When people tried, from a random start, it usually did worse.</p>
+        <p>Their answer, the <strong>lottery ticket hypothesis</strong>: a large randomly initialised network contains a small sub-network (the "winning ticket") that, if trained <em>by itself starting from the same initial values it had in the big network</em>, can match the full network's accuracy in the same number of steps. The recipe is:</p>
+        <ol>
+          <li>Save the starting weights, then train the dense network.</li>
+          <li>Prune the smallest-magnitude weights, say 50%, leaving a mask of survivors.</li>
+          <li><strong>Rewind</strong> the survivors to their saved starting values and train again (repeat steps 2–3 to prune more).</li>
+        </ol>
+        <p>The crucial control is the comparison with the same mask but <em>fresh random</em> starting values, and with a random mask of the same size. The claim is that the <strong>mask and its initial values come as a pair</strong>: the structure plus the lucky starting point is the ticket. The idea was a sensation partly because it suggests that training is largely a search for a good sub-network that was present from the first step. Simulation 3 runs this experiment, for real, on a very small network.</p>
+      </div>
+
+      <figure class="figure" id="fig-lt">
+        <div class="fig-head"><span class="fig-title">Prune, rewind, retrain: does the starting point matter?</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> choose a sparsity and press <b>Train and compare</b> (it trains a few dozen tiny networks in your browser, about a second). The bars show the typical (median) final error over six random starts. Look at the gap between the green bar (the ticket: same mask, rewound to the original start) and the orange bar (same mask, fresh random start). Then push sparsity to 80% and watch the networks start failing altogether.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-sp">Share of weights removed in each layer <output for="s-sp"></output></label><input type="range" id="s-sp" min="0.3" max="0.8" step="0.1" value="0.5"></div>
+        </div>
+        <div class="btns" role="group" aria-label="Run">
+          <button class="btn" type="button" id="b-lt">Train and compare</button>
+        </div>
+        <div class="chart-wrap" id="lt-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral)"></i>Dense network</span>
+          <span><i class="sq" style="background:var(--accent)"></i>Ticket: kept weights, rewound to original start</span>
+          <span><i class="sq" style="background:var(--warn)"></i>Same kept weights, fresh random start</span>
+          <span><i class="sq" style="background:var(--muted)"></i>Random weights kept, original start</span>
+        </div>
+        <div class="chart-wrap" id="lt-fit"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>True curve</span>
+          <span><i style="background:var(--accent)"></i>Ticket (start 1)</span>
+          <span><i style="background:var(--warn)"></i>Fresh start, same mask (start 1)</span>
+        </div>
+        <p class="verdict" id="s3-verdict">Press the button to run it.</p>
+        <p class="sim-note">Simulated and genuinely trained: a one-input, 80-unit ReLU network fitting y = sin(3x) + 0.5x on 40 points, trained with Adam for 1,500 steps. Pruning is by weight magnitude, done separately in each of the three weight groups, because pruning across the whole network at once removes entire layers. Six random starts; bars show medians (log scale). It is a toy: the lottery-ticket effect in the literature is shown for networks and datasets thousands of times larger, and in this small setting results vary a lot between starts, so read the pattern, not the exact numbers.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What the research has found since, which is what to remember:</p>
+        <ul>
+          <li><strong>Plain rewinding to step 0 fails for big networks.</strong> For ResNets on ImageNet and for transformers, tickets are found only if you rewind not to the very start but to an early point in training (a few percent in), the "late rewinding" of Frankle et al. (2020). The reason: early in training, the network settles into a basin of the landscape, after which different random runs behave the same up to noise ("linear mode connectivity"). The ticket is a statement about that early commitment.</li>
+          <li><strong>The mask carries most of the information.</strong> Zhou et al. (2019) found that a winning ticket's mask, even with the weights set to just their sign, can give good accuracy untrained. Ramanujan et al. (2020) and Malach et al. (2020) showed that sufficiently wide, randomly weighted networks contain sub-networks that do the job with <em>no training at all</em>, and proved it for wide enough layers. This says the "search" view is real: choosing connections can substitute for learning values.</li>
+          <li><strong>Doubts about novelty and use.</strong> Liu et al. (2019) found that, with a proper training budget, a pruned architecture trained from scratch matches the pruned-and-fine-tuned one, so the structure matters, not the inherited weights. Frankle et al. (2021) showed that methods that prune at initialisation, before any training, mostly fail to beat simple controls. Finding tickets still requires training the dense network first, so they save inference cost but not training cost.</li>
+          <li><strong>Practical pruning is more modest.</strong> In production, you train, prune, fine-tune and quantise; you do not rewind. Pruning's value is smaller and cheaper models, but unstructured sparsity (random holes) rarely speeds up real hardware unless a lot is removed, so structured pruning, quantisation and distillation (<a href="p3-quantization-pruning-and-distillation.html">P3.1</a>, <a href="r12-very-low-bit-quantization-gptq.html">R12.3</a>) dominate in practice.</li>
+        </ul>
+        <p>Link to the rest of the lesson: sparse sub-networks, flat valleys and minimum-norm solutions are three views of one fact, that a big network's training result is much simpler than its parameter count. It also explains why <a href="r1-mixture-of-experts-at-scale.html">mixture-of-experts</a> and low-rank adapters (<a href="m2-prompting-versus-rag-versus-fine.html">M2.4</a>) work: most of the change you need lives in a small subspace.</p>
+      </div>
+
+      <h3 class="sub" id="m-icl">In-context learning as implicit gradient descent</h3>
+      <div class="prose">
+        <p>Now the second topic. You give a language model three labelled examples in the prompt, for instance three customer messages tagged "complaint", "enquiry", "complaint", and then a fourth message. It labels the fourth. No weights changed. Yet the model <em>learned the task from the examples</em>: that is <strong>in-context learning</strong> (ICL), the behaviour that made prompting useful (<a href="m2-prompting-and-context-engineering.html">M2.1</a>, <a href="m1-pretraining-then-post-training.html">M1.3</a>).</p>
+        <p>How can a fixed network learn something from its input? The suggestion, from several 2022–23 papers (Akyürek et al.; von Oswald et al.; Dai et al.), is that <strong>attention can implement a step of gradient descent</strong>, so the forward pass over the prompt is a tiny training run on the examples, and the answer is the prediction of the model it just "trained".</p>
+        <p>Here is the cleanest version, where the maths is exact. Suppose each example is an input vector x<sub>i</sub> with a number y<sub>i</sub> to predict, and the task is linear regression. Start the in-context model at zero weights and take one gradient step on the examples (average squared error, step size η). The new weights are</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mover><mi>w</mi><mo>^</mo></mover><mn>1</mn></msub><mo>=</mo><mfrac><mi>η</mi><mi>k</mi></mfrac><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>k</mi></munderover><msub><mi>y</mi><mi>i</mi></msub><msub><mi>x</mi><mi>i</mi></msub><mo>,</mo><mspace width="1em"/><mover><mi>y</mi><mo>^</mo></mover><mo stretchy="false">(</mo><msub><mi>x</mi><mi>q</mi></msub><mo stretchy="false">)</mo><mo>=</mo><mfrac><mi>η</mi><mi>k</mi></mfrac><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>k</mi></munderover><msub><mi>y</mi><mi>i</mi></msub><mo stretchy="false">(</mo><msub><mi>x</mi><mi>i</mi></msub><mo>·</mo><msub><mi>x</mi><mi>q</mi></msub><mo stretchy="false">)</mo></math>
+        <p class="where">k is the number of examples and x<sub>q</sub> the new query. The second expression is what a single <strong>linear attention</strong> head computes (F5.5, <a href="f5-attention.html">attention</a>): the query is compared with each example's key by a dot product (x<sub>i</sub> · x<sub>q</sub>), and the result mixes the examples' values (y<sub>i</sub>) with those scores as weights. So one attention layer can output exactly "the prediction after one step of gradient descent on the examples in the prompt" (von Oswald et al., 2023). Stack layers and you can take more steps.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The evidence, in order of strength:</p>
+        <ul>
+          <li><strong>A construction.</strong> The weights of a transformer layer can be chosen so that it does this. That shows it is <em>possible</em>, not that it happens.</li>
+          <li><strong>Trained small transformers do learn something like it.</strong> When a small transformer is trained from scratch on thousands of random linear-regression tasks, with examples in the prompt, it learns to solve new tasks in context (Garg et al., 2022). Von Oswald et al. found that the trained single-layer model matches the gradient-descent construction, and Akyürek et al. found that larger ones behave like ridge regression or even exact least squares, depending on size. Ahn et al. (2023) showed the trained solution is a <em>preconditioned</em> gradient descent, better than the plain kind, and Zhang, Frei and Bartlett (2024) proved that gradient flow on such a transformer converges to it. Mahankali et al. (2023) proved that for one layer of linear attention, one step of gradient descent is the best you can do.</li>
+          <li><strong>The link to real LLMs is weaker.</strong> Dai et al. (2023) argued that GPT-style models show similar signatures, but a careful check by Shen et al. (2024) found that the match between pretrained LLMs doing ICL and gradient descent is inconsistent across models, datasets and numbers of examples, so the equivalence remains an unproven hypothesis for them. Real tasks are not linear regression, real attention has softmax, and real models do many things at once.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-icl">
+        <div class="fig-head"><span class="fig-title">Learning from the examples in a prompt, as a few steps of gradient descent</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> with noise low, see how quickly the one-step method (which is exactly linear attention) is beaten by more steps and how all methods improve with more examples. Then switch to <b>High label noise</b>. The full least-squares fit blows up near 4 examples (the number of unknowns), while a handful of gradient steps stays calm. Stopping early is implicit regularisation, the same lesson as Simulation 1, now applied inside a prompt.</p>
+        <div class="btns" role="group" aria-label="Label noise">
+          <button class="btn" type="button" id="b-nlo" aria-pressed="true">Low label noise</button>
+          <button class="btn" type="button" id="b-nhi" aria-pressed="false">High label noise</button>
+        </div>
+        <div class="chart-wrap" id="icl-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>Predict zero (no learning)</span>
+          <span><i style="background:var(--warn)"></i>One step = linear attention</span>
+          <span><i style="background:var(--accent)"></i>Several steps (slider)</span>
+          <span><i style="background:var(--bad)"></i>Full least squares</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-steps">Gradient steps for the green line <output for="s-steps"></output></label><input type="range" id="s-steps" min="2" max="30" step="1" value="8"></div>
+          <div class="ctl"><label for="s-eta">Step size η <output for="s-eta"></output></label><input type="range" id="s-eta" min="0.05" max="0.4" step="0.01" value="0.2"></div>
+          <div class="ctl"><label for="s-k">Examples shown in the prompt (marker) <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="16" step="1" value="6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Predict zero</div><div class="v" id="st4-z"></div><div class="s">typical squared error in the weights</div></div>
+          <div class="stat"><div class="k">One step (attention)</div><div class="v" id="st4-1"></div><div class="s">at the marked number of examples</div></div>
+          <div class="stat"><div class="k">Several steps</div><div class="v" id="st4-t"></div><div class="s" id="st4-t-s"></div></div>
+          <div class="stat"><div class="k">Full least squares</div><div class="v" id="st4-o"></div><div class="s">minimum-size answer when examples &lt; 4</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated and computed in the page: 300 random tasks, each a linear rule y = w·x with 4 inputs and w drawn at random; inputs are random normal numbers; label noise 0.1 or 1.0. The error shown is the median over tasks of the squared distance between the learned and the true weights, on a log scale. "One step" and "several steps" are plain gradient descent from zero. A check that attention and one gradient step give the same prediction is run on every task and reported below. Real LLM prompts are not linear regression tasks; this shows what the theory claims, not what GPT does.</p>
+        <p class="asof" id="st4-check" style="margin-top:8px"></p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things the theory clarifies, and one it does not.</p>
+        <ul>
+          <li><strong>Why prompting can feel like fine-tuning.</strong> Examples in a prompt and examples in a training set both steer the model, one through attention, one through weights. That is why the few-shot vs fine-tune choice (<a href="m2-prompting-versus-rag-versus-fine.html">M2.3</a>) is a real trade-off and not magic versus engineering.</li>
+          <li><strong>Why more examples help with diminishing returns, and why the format matters.</strong> The curves in the simulation fall steeply and then flatten. It also suggests that example <em>selection</em> and <em>order</em> change what the "gradient steps" see, which matches practical experience.</li>
+          <li><strong>Why it does not always need "learning".</strong> The competing story is that pretraining already taught the model many tasks, and the examples merely tell it <em>which</em> task this is, a Bayesian "task recognition" view (Xie et al., 2022). Evidence for it: models often still do well when example labels are randomised, because the format and the label space carry the signal (Min et al., 2022). Pan et al. (2023) separated the two: bigger models do more real task learning from the examples, small ones mostly recognise. Both mechanisms are probably at work, in proportions that depend on the model and task.</li>
+          <li><strong>What it does not explain.</strong> Where, in a trained LLM, the circuits sit. For that, see the mechanistic work on induction heads (Olsson et al., 2022), which copy patterns from earlier in the prompt and appear to power much ICL; see <a href="r5-linear-representations-probing-representation-engineering.html">R5.3–R5.4</a>.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This is theory, but it touches almost every practical decision about training and deploying models.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">R6.1 · Double descent and grokking</span><span class="t"><a href="r6-double-descent-and-grokking.html">The same puzzle, from the data side</a></span><p>Why test error can fall again after the model can interpolate, and why a network can generalise long after it fits the training set. Implicit regularisation is the common thread.</p></div>
+        <div class="link-card"><span class="code">F1.3 · Gradients and optimisation</span><span class="t"><a href="f1-gradients-optimisation.html">What gradient descent actually does</a></span><p>Simulation 1 is the update rule from F1.3 on its simplest possible problem. The "stays in the span of the data" fact comes straight from the gradient formula.</p></div>
+        <div class="link-card"><span class="code">F6.1 · F6.2 · Learning rates and schedules</span><span class="t"><a href="f6-loss-functions-and-what-they.html">Why step size is not just speed</a></span><p>The stability rule η &lt; 2/h is why big learning rates need warm-up, and why decay at the end often improves generalisation: you let the iterate settle into the bottom of whichever valley it is in.</p></div>
+        <div class="link-card"><span class="code">F4.4 · F6.3 · Overfitting and regularisation</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">Explicit versus implicit</a></span><p>Weight decay, dropout and early stopping are explicit and implicit regularisation working together. Early stopping is the cleanest case of implicit regularisation you can control.</p></div>
+        <div class="link-card"><span class="code">F4.1 · Bias, variance and generalisation</span><span class="t"><a href="f4-bias-variance-and-generalisation.html">Why counting parameters misleads</a></span><p>The classical U-shaped curve assumes complexity grows with parameter count. Here, the same count can give very different effective complexity depending on the optimiser.</p></div>
+        <div class="link-card"><span class="code">F2.5 · Regression and GLMs</span><span class="t"><a href="f2-regression-glms.html">Ridge is minimum norm in disguise</a></span><p>The minimum-norm answer is the limit of ridge regression; early-stopped gradient descent traces a similar path. It is the same idea in a simpler model you can check by hand.</p></div>
+        <div class="link-card"><span class="code">F5.5 · Attention</span><span class="t"><a href="f5-attention.html">Query, key, value, in the ICL formula</a></span><p>The ICL formula above is attention with the examples as keys and values. If attention is clear to you, this theory is a short step.</p></div>
+        <div class="link-card"><span class="code">M2.1 · M2.3 · Prompting, RAG, fine-tuning</span><span class="t"><a href="m2-prompting-versus-rag-versus-fine.html">Choosing how to adapt a model</a></span><p>If prompt examples are weak, short-lived gradient steps, then fine-tuning (real gradient steps on a lot more examples) should do better on stable tasks, and prompts win on speed and flexibility.</p></div>
+        <div class="link-card"><span class="code">P3.1 · R12.3 · Pruning, quantisation, distillation</span><span class="t"><a href="p3-quantization-pruning-and-distillation.html">The deployment cousin of lottery tickets</a></span><p>Where the lottery-ticket finding becomes engineering: shrink a trained model to make it cheaper and faster on bank infrastructure.</p></div>
+        <div class="link-card"><span class="code">R5.3 · R5.4 · Induction heads and in-context learning</span><span class="t"><a href="r5-linear-representations-probing-representation-engineering.html">The circuit view of ICL</a></span><p>The gradient-descent theory says what ICL computes in an idealised model; mechanistic interpretability looks for the actual components in real ones. They are complementary and not yet reconciled.</p></div>
+        <div class="link-card"><span class="code">R2.1 · Scaling laws</span><span class="t"><a href="r2-scaling-laws-then-and-now.html">Why bigger works, empirically</a></span><p>Scaling laws describe <em>that</em> loss falls smoothly with size; this lesson is about the shape of the solution space that makes it so. Theory lags behind the empirical laws.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank, indirectly but really:</p>
+        <ul>
+          <li><strong>Few labels, large model.</strong> AML confirmed cases, rare complaint types and KYC edge cases give hundreds of labels, not millions. The implicit-regularisation view tells you why a heavily over-parameterised model, fine-tuned gently (small learning rate, early stopping, a small adapter), stays close to its pretrained solution and does not wildly overfit, and why aggressive training erases that advantage.</li>
+          <li><strong>Few-shot prompts in production.</strong> Classifying Arabic and English complaint letters or tagging transaction narratives with five examples in the prompt is in-context learning. The theory gives you a vocabulary for why the choice and order of examples matters and why the answer is brittle.</li>
+          <li><strong>Model risk and validation.</strong> Validators ask "why should we believe this model generalises?". "It has a low test error on a time-ordered split" is the answer that counts; the theory in this lesson is background that explains why the usual advice (simple baselines, early stopping, flat minima, multiple seeds) works, not a substitute for the test.</li>
+          <li><strong>Shrinking models for on-premises use.</strong> Data residency rules push some banks to run models in their own data centres, where a pruned or quantised model is cheaper. Whether the smaller model is as good <em>on your task</em> is an empirical question that needs your own evaluation set.</li>
+          <li><strong>Reproducibility.</strong> If the starting point and the step size select a solution, then two training runs with different seeds are different models. For credit scoring and other regulated settings, fix seeds, report variation across seeds and check that decisions on individual cases are stable (F7.7, <a href="f7-drift-monitoring-psi-ks-and.html">drift and stability</a>).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>These are theory topics, so "now" means which claims have survived. In brief: the implicit-bias results for simple models are solid; the flat-minima and edge-of-stability pictures are well supported empirically but not settled; lottery tickets are real as a finding about pruning and weaker as a training method; and ICL-as-gradient-descent is a rich, contested theory for small transformers that has not been shown to be <em>the</em> mechanism in large language models.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two light searches. Older papers and arXiv numbers are cited from my knowledge of the literature and should be checked before quoting. Items from 2026 are preprints I saw only as titles and abstracts.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1997</span><div><div class="t">Flat minima</div><p>Hochreiter and Schmidhuber link minima with a wide, flat neighbourhood to better generalisation, the origin of the sharpness debate.</p><div class="src">Hochreiter &amp; Schmidhuber, Neural Computation, 1997</div></div></li>
+        <li><span class="yr">2017</span><div><div class="t">Networks fit noise; sharp-minima arguments get a caveat</div><p>Zhang et al. showed that standard networks can memorise random labels, killing the idea that size alone limits generalisation. Keskar et al. tied large batches to sharper minima; Dinh et al. showed raw sharpness can be changed without changing the function.</p><div class="src">Zhang et al., ICLR 2017; Keskar et al., ICLR 2017; Dinh et al., ICML 2017</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">Implicit bias of gradient descent, and connected solutions</div><p>Soudry et al. proved that gradient descent on separable data converges in direction to the maximum-margin solution. Garipov et al. and Draxler et al. found low-loss paths between independently trained networks.</p><div class="src">Soudry et al., JMLR 2018; Garipov et al., NeurIPS 2018; Draxler et al., ICML 2018</div></div></li>
+        <li><span class="yr">2019</span><div><div class="t">The lottery ticket hypothesis</div><p>Frankle and Carbin showed that rewound sparse sub-networks can train as well as the dense network on small vision tasks. It won a best paper award at ICLR 2019.</p><div class="src">Frankle &amp; Carbin, ICLR 2019</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">Late rewinding, and tickets without training</div><p>Rewinding to an early point rather than to the start makes tickets work on large networks, and linear mode connectivity explains why. Other work proved that wide random networks already contain good sub-networks.</p><div class="src">Frankle et al., ICML 2020; Ramanujan et al., CVPR 2020; Malach et al., ICML 2020</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">Edge of stability; sharpness-aware minimisation</div><p>Cohen et al. reported that full-batch gradient descent drives sharpness up to 2/η and hovers there. Foret et al. introduced SAM, an optimiser that explicitly seeks flat regions.</p><div class="src">Cohen et al., ICLR 2021; Foret et al., ICLR 2021</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Transformers trained to learn in context</div><p>Garg et al. trained transformers from scratch to learn function classes such as linear regression from examples in the prompt, with performance matching the optimal estimator. Xie et al. gave the Bayesian task-recognition account.</p><div class="src">Garg et al., NeurIPS 2022; Xie et al., ICLR 2022</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">In-context learning as gradient descent</div><p>Von Oswald et al. gave the attention-equals-gradient-step construction and evidence from trained models; Akyürek et al. showed trained models track ridge regression and least squares; Dai et al. proposed the link for language models; Ahn et al. and Mahankali et al. characterised what trained and one-layer models learn.</p><div class="src">von Oswald et al., ICML 2023; Akyürek et al., ICLR 2023; Dai et al., Findings of ACL 2023; Ahn et al., NeurIPS 2023; Mahankali et al., ICLR 2024</div></div></li>
+        <li><span class="yr">2023–24</span><div><div class="t">Doubts about the equivalence for pretrained LLMs</div><p>A direct test on a 7-billion-parameter LLaMA model found that its in-context learning and real gradient descent agree inconsistently depending on dataset, model and number of demonstrations; the paper concludes the equivalence is still an open hypothesis. Proof of convergence for the idealised case arrived in parallel.</p><div class="src">Shen et al., arXiv 2310.08540; Zhang, Frei &amp; Bartlett, JMLR 2024</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">ICL as a mixture of strategies; from prompts to weights</div><p>Work on "In-Context Learning Strategies Emerge Rationally" argues that transformers learn a repertoire of strategies and pick among them according to the data, rather than being one mechanism. Another 2025 paper, "Transmuting prompts into weights", turns prompt content into weight updates. I only saw the abstracts.</p><div class="src">arXiv 2506.17859; arXiv 2510.08734 (titles seen in search; verify before relying on them)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Edge of stability and flatness continue to be refined</div><p>Preprints in 2026 study the sharpness gap under stochastic gradient descent, how edge-of-stability dynamics shape learning unevenly across the data, and the flatness bias of SAM with explicit bounds on its hyper-parameters. They show the area is still active, not that it is settled; I did not review their claims.</p><div class="src">arXiv 2604.21016; arXiv 2606.04212; arXiv 2608.03197 (preprints, titles seen in search)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each idea is, as of late 2026:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Idea</th><th>State of the evidence</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Early stopping, weight decay and small-start training as implicit regularisers</b></td><td>Proved for linear models; observed and relied on for deep ones.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Prune, fine-tune, quantise to shrink a trained model</b></td><td>Routine engineering; the gain depends on hardware support for the chosen structure.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Sharpness-aware training (SAM and variants)</b></td><td>Gains reported on many benchmarks, around double the compute; less used for very large language models.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Iterative magnitude pruning with rewinding as a recipe</b></td><td>A research tool for finding structure. Not how production models are slimmed.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Flat minima as the explanation of generalisation</b></td><td>Strong empirical correlations with caveats about parameterisation; no complete theory.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Few-shot prompting in bank workflows</b></td><td>Widely used for classification, extraction and tagging; behaviour is sensitive to example choice and order and must be tested on your own data.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>ICL as implicit gradient descent in large LLMs</b></td><td>Proved and observed for small transformers on synthetic tasks; contested for pretrained LLMs.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Using ICL theory to choose prompts or predict failures</b></td><td>Practised informally by prompt engineers ("add more varied examples"); not a validated method.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>The optimiser's built-in preferences matter as much as the architecture, flat and simple solutions tend to generalise but the explanation is incomplete, small sparse sub-networks exist but finding them costs a full training run, and "the prompt trains the model" is a good first picture of in-context learning that you should hold loosely.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Most of the harm here comes from stretching a theory beyond where it was shown. These are the stretches to watch for in papers, vendor pitches and AI-written summaries.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">"Flat minima generalise" treated as a law</div><p>It is a correlation with exceptions, and "flat" depends on how you parameterise the model. A claim that a model is safe because its minimum is flat needs a scale-aware measure and a test on new data.</p><div class="spot"><b>Spot it</b>Ask which sharpness measure, computed how, and whether it correlates with held-out error across your own runs. If the answer is a single number with no variation across seeds, it is decoration.</div></li>
+        <li><div class="t">Calling a pruned model a lottery ticket</div><p>Pruning a trained model and fine-tuning it is ordinary compression. A ticket needs the rewind step and the control against a random start with the same mask.</p><div class="spot"><b>Spot it</b>Ask whether the sparse network was retrained from the original (or early) weights, and whether a random re-initialisation of the same mask was tried.</div></li>
+        <li><div class="t">Sparsity that saves nothing</div><p>"80% of weights removed" sounds like five times cheaper. Unstructured holes need index storage and rarely speed up GPUs.</p><div class="spot"><b>Spot it</b>Ask for measured latency and memory on the target hardware, not the sparsity percentage. Twenty million weights, 80% pruned, stored as four-byte value plus four-byte index, is 32 MB against 80 MB dense: 60% saved, not 80%, and no faster unless the hardware is built for it.</div></li>
+        <li><div class="t">Believing a lottery ticket result from one run</div><p>Small differences between pruned variants are within seed noise, as Simulation 3 shows.</p><div class="spot"><b>Spot it</b>Ask for several seeds and a spread. If the claimed improvement is smaller than the spread, there is no finding.</div></li>
+        <li><div class="t">"The prompt fine-tunes the model"</div><p>Said as fact, it suggests prompt examples have lasting, general effects. Nothing is stored: the effect vanishes with the context, and it can be overwhelmed by a long irrelevant prompt.</p><div class="spot"><b>Spot it</b>Run the same prompt with examples removed, shuffled and with wrong labels. If accuracy barely moves, the model was recognising a task, not learning from the examples.</div></li>
+        <li><div class="t">Importing the linear-regression result into an LLM claim</div><p>"Transformers do gradient descent" was shown for small models on synthetic linear tasks. Claiming it for a bank's production LLM, or using it to promise how many examples are enough, goes beyond the evidence.</p><div class="spot"><b>Spot it</b>Look for the setting in the paper: model size, task type, number of layers. If it is a synthetic linear task, treat the claim as a hypothesis for LLMs.</div></li>
+        <li><div class="t">Trusting few-shot results without testing order and selection</div><p>The same five examples in a different order can swing accuracy by many points. A single hand-picked prompt tested on 50 cases proves little.</p><div class="spot"><b>Spot it</b>Ask for results across several shuffles and several example sets, and an interval on a validation set of a size that supports one (F2.1, F2.7).</div></li>
+        <li><div class="t">Overfitting through the optimiser's choices</div><p>If starting point, step size and stopping time select the solution, then tuning them against the test set is tuning the model to it.</p><div class="spot"><b>Spot it</b>Ask which data picked the learning rate, number of steps and seed. They should come from a validation set, never the final test set (F4.9).</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Our models have far more adjustable settings than we have examples, and they still work, because the way they are trained prefers simple solutions, and we use that. What it means for us is practical: gentle fine-tuning and early stopping keep a model close to what it already knew, a much smaller version of a trained model is often almost as good, and examples in a prompt can stand in for training on small tasks. We confirm each of those on our own data before relying on it; none of it is guaranteed.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or a validator</span>
+          <blockquote>“Over-parameterised models have many zero-loss solutions, so generalisation is decided by the optimiser's implicit bias: with gradient descent from a small start it is minimum norm in linear models, max-margin on separable data, and low rank in deep linear nets. The step size also matters through the stability bound 2/h on sharpness, which pushes training away from sharp valleys, with the caveat that sharpness is not reparameterisation invariant. Lottery tickets are best read as pruning plus a statement about early basin commitment; they save inference, not training. For in-context learning, a linear attention head computes exactly one gradient step on the prompt examples, trained small transformers converge to preconditioned gradient descent, and the evidence for pretrained LLMs is mixed, with task recognition accounting for part of the effect. I would use it as a modelling heuristic, not a mechanism claim.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“If the model has more parameters than data, why doesn't it just memorise?”</summary><div class="ans"><p>It can memorise, and networks do fit random labels. But on real data gradient descent finds the memorising fit last or not at all, because it moves along directions the data supports and from a small start reaches a small, simple solution first. Then early stopping, weight decay and a modest step size keep it there. It is a preference of the training procedure, not a guarantee, which is why we still hold out time-ordered test data.</p></div></details>
+        <details class="reveal"><summary>“Can we just prune our fraud model by 90% and save the cost?”</summary><div class="ans"><p>Maybe, but check what the saving is on our hardware. Unstructured sparsity rarely speeds up inference unless the hardware supports it, and the real gains tend to come from quantisation, structured pruning or distillation. Then rerun the full evaluation, including the rare-positive slices and calibration, because compression tends to hurt the tail first. For a small tabular model the saving is probably not worth the validation work.</p></div></details>
+        <details class="reveal"><summary>“What is a lottery ticket, in one sentence?”</summary><div class="ans"><p>A small sub-network of a large randomly initialised network which, trained alone from the same starting weights (or from an early checkpoint for big models), matches the full network; the evidence is that the pair of mask and starting values matters, but finding one needs a full training run first, so it is mainly a scientific result about training.</p></div></details>
+        <details class="reveal"><summary>“Does in-context learning mean the model is training itself on my examples?”</summary><div class="ans"><p>It is one useful picture and for small models on simple tasks it can be made exact: attention computes a gradient-like step on the examples. For large language models the evidence is mixed. Part of the effect is the model recognising a task it already knows from the format, and part is genuine learning from the examples, with larger models doing more of the latter. Nothing is stored, so there is no lasting change and no learning across sessions.</p></div></details>
+        <details class="reveal"><summary>“Should we use five examples or fifty in the prompt?”</summary><div class="ans"><p>Test it. The theory says returns diminish (more examples reduce variance, then flatten), that order and choice matter, and that long contexts can dilute attention. On our validation set, compare 0, 5, 20 and 50 examples with several shuffles, report intervals, and weigh the accuracy gain against cost and latency. If a few hundred labelled cases exist and the task is stable, fine-tuning may beat both.</p></div></details>
+        <details class="reveal"><summary>“Is this useful, or academic?”</summary><div class="ans"><p>Mostly a source of better habits and sharper questions, not tools. It explains why simple baselines, early stopping, multiple seeds and honest held-out data work, it frames the prompt-versus-fine-tune decision, and it protects you from claims that overreach. I would not build a bank system on the theory itself; I would use it to read papers and vendor claims critically.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. One training example has inputs x = (3, 4) and target y = 10. A linear model starts at zero weights and is trained by gradient descent to zero loss. What weights does it reach, and why those?</summary><div class="ans"><p>w = x·y ÷ (x·x) = (3, 4)·10 ÷ 25 = <strong>(1.2, 1.6)</strong>. Check: 3×1.2 + 4×1.6 = 3.6 + 6.4 = 10. Every gradient step is a multiple of x, so the weights stay on the line through the origin along (3, 4); the only point on that line that fits is (1.2, 1.6). It is also the smallest-norm perfect fit (norm 2).</p></div></details>
+        <details class="reveal"><summary>2. A minimum has sharpness (largest curvature) 50. What is the largest step size gradient descent can use and stay there? What happens at η = 0.1?</summary><div class="ans"><p>The limit is 2 ÷ 50 = <strong>0.04</strong>. At η = 0.1, each step multiplies the distance from the bottom by |1 − 0.1 × 50| = 4, so the iterate is thrown out and ends in a flatter region or bounces. This is why large step sizes carry an implicit preference for flat minima.</p></div></details>
+        <details class="reveal"><summary>3. Why might "this minimum is flat, so it will generalise" be misleading?</summary><div class="ans"><p>Flatness depends on how the parameters are scaled. In a ReLU network you can scale one layer up and the next down by the same factor without changing the function, making a minimum look sharper or flatter at will (Dinh et al., 2017). Flatness is a useful empirical signal only if measured in a scale-aware way, and it is a correlate, not a cause.</p></div></details>
+        <details class="reveal"><summary>4. What control separates a real "lottery ticket" from a good pruning mask?</summary><div class="ans"><p>Keep the same mask but replace the surviving weights with fresh random starting values (and, separately, use a random mask of the same size). If the original-start version trains better, the pairing of mask and initial values matters, which is the lottery claim. If both do equally well, it is just a good architecture found by pruning, as Liu et al. (2019) argue is often the case.</p></div></details>
+        <details class="reveal"><summary>5. A 20-million-weight model is pruned by 80%, and the remaining weights are stored as a four-byte value plus a four-byte index. How big is it, against a dense four-byte version, and does it run faster?</summary><div class="ans"><p>Remaining 4 million × 8 bytes = <strong>32 MB</strong>, against 20 million × 4 bytes = 80 MB: a 60% saving, not 80%. Speed depends on hardware. General GPUs get little benefit from irregular holes unless sparsity is very high or the pattern is structured, so measure.</p></div></details>
+        <details class="reveal"><summary>6. Two examples in a prompt: (x₁, y₁) = ((1, 0), 2) and (x₂, y₂) = ((0, 1), −2). Using the one-step gradient formula with η = 0.5, what does the model predict for the query x = (2, 1)?</summary><div class="ans"><p>ŷ = (η ÷ k) Σ yᵢ (xᵢ·x<sub>q</sub>) = (0.5 ÷ 2) × (2×2 + (−2)×1) = 0.25 × 2 = <strong>0.5</strong>. Same as forming the weights w₁ = 0.25 × (2·(1,0) + (−2)·(0,1)) = (0.5, −0.5), then (0.5)(2) + (−0.5)(1) = 0.5. Attention weights the example values by key-query similarity, and that is the whole step.</p></div></details>
+        <details class="reveal"><summary>7. In Simulation 4 with high noise, why does the full least-squares fit do worst around four examples, and what does this have to do with early stopping?</summary><div class="ans"><p>There are four unknowns, so with about four examples the fit can pass through every noisy label, and the solution is highly sensitive to that noise (the double-descent peak). Gradient descent stopped after a few steps has not yet fitted the small, noise-dominated directions, so it behaves like a regularised fit. Stopping early is implicit regularisation, the same idea as the minimum-norm bias in Simulation 1.</p></div></details>
+        <details class="reveal"><summary>8. A study finds that a model does as well with randomly wrong labels in its few-shot examples as with correct ones. What does that say about how it uses the examples?</summary><div class="ans"><p>It is mostly using them to recognise the task and its format (input style, label space), not to learn the input-label mapping from them (Min et al., 2022). That does not mean examples are useless: they matter a lot for format. It means the "gradient descent on the examples" picture does not describe this model on this task, at least not fully.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>C. Zhang, S. Bengio, M. Hardt, B. Recht, O. Vinyals. <a href="https://arxiv.org/abs/1611.03530">Understanding deep learning requires rethinking generalization</a>. ICLR, 2017.</li>
+        <li>B. Neyshabur, R. Tomioka, N. Srebro. <a href="https://arxiv.org/abs/1412.6614">In search of the real inductive bias: on the role of implicit regularization in deep learning</a>. ICLR workshop, 2015.</li>
+        <li>D. Soudry, E. Hoffer, M. Nacson, S. Gunasekar, N. Srebro. <a href="https://arxiv.org/abs/1710.10345">The implicit bias of gradient descent on separable data</a>. JMLR, 2018.</li>
+        <li>S. Arora, N. Cohen, W. Hu, Y. Luo. <a href="https://arxiv.org/abs/1905.13655">Implicit regularization in deep matrix factorization</a>. NeurIPS, 2019.</li>
+        <li>M. Belkin, D. Hsu, S. Ma, S. Mandal. <a href="https://arxiv.org/abs/1812.11118">Reconciling modern machine learning practice and the bias-variance trade-off</a>. PNAS, 2019.</li>
+        <li>S. Hochreiter, J. Schmidhuber. <a href="https://doi.org/10.1162/neco.1997.9.1.1">Flat minima</a>. Neural Computation, 1997.</li>
+        <li>N. Keskar et al. <a href="https://arxiv.org/abs/1609.04836">On large-batch training for deep learning: generalization gap and sharp minima</a>. ICLR, 2017.</li>
+        <li>L. Dinh, R. Pascanu, S. Bengio, Y. Bengio. <a href="https://arxiv.org/abs/1703.04933">Sharp minima can generalize for deep nets</a>. ICML, 2017.</li>
+        <li>T. Garipov et al. <a href="https://arxiv.org/abs/1802.10026">Loss surfaces, mode connectivity, and fast ensembling of DNNs</a>. NeurIPS, 2018. And F. Draxler et al., <a href="https://arxiv.org/abs/1803.00885">Essentially no barriers in neural network energy landscape</a>, ICML, 2018.</li>
+        <li>J. Cohen, S. Kaur, Y. Li, J. Z. Kolter, A. Talwalkar. <a href="https://arxiv.org/abs/2103.00065">Gradient descent on neural networks typically occurs at the edge of stability</a>. ICLR, 2021.</li>
+        <li>P. Foret, A. Kleiner, H. Mobahi, B. Neyshabur. <a href="https://arxiv.org/abs/2010.01412">Sharpness-aware minimization for efficiently improving generalization</a>. ICLR, 2021.</li>
+        <li>J. Frankle, M. Carbin. <a href="https://arxiv.org/abs/1803.03635">The lottery ticket hypothesis: finding sparse, trainable neural networks</a>. ICLR, 2019.</li>
+        <li>J. Frankle, G. Dziugaite, D. Roy, M. Carbin. <a href="https://arxiv.org/abs/1912.05671">Linear mode connectivity and the lottery ticket hypothesis</a>. ICML, 2020.</li>
+        <li>V. Ramanujan et al. <a href="https://arxiv.org/abs/1911.13299">What's hidden in a randomly weighted neural network?</a> CVPR, 2020. And E. Malach et al., <a href="https://arxiv.org/abs/2002.00585">Proving the lottery ticket hypothesis: pruning is all you need</a>, ICML, 2020.</li>
+        <li>Z. Liu, M. Sun, T. Zhou, G. Huang, T. Darrell. <a href="https://arxiv.org/abs/1810.05270">Rethinking the value of network pruning</a>. ICLR, 2019. And J. Frankle et al., <a href="https://arxiv.org/abs/2009.08576">Pruning neural networks at initialization: why are we missing the mark?</a> ICLR, 2021.</li>
+        <li>S. Garg, D. Tsipras, P. Liang, G. Valiant. <a href="https://arxiv.org/abs/2208.01066">What can transformers learn in-context? A case study of simple function classes</a>. NeurIPS, 2022.</li>
+        <li>J. von Oswald et al. <a href="https://arxiv.org/abs/2212.07677">Transformers learn in-context by gradient descent</a>. ICML, 2023.</li>
+        <li>E. Akyürek, D. Schuurmans, J. Andreas, T. Ma, D. Zhou. <a href="https://arxiv.org/abs/2211.15661">What learning algorithm is in-context learning? Investigations with linear models</a>. ICLR, 2023.</li>
+        <li>D. Dai et al. <a href="https://arxiv.org/abs/2212.10559">Why can GPT learn in-context? Language models implicitly perform gradient descent as meta-optimizers</a>. Findings of ACL, 2023.</li>
+        <li>K. Ahn, X. Cheng, H. Daneshmand, S. Sra. <a href="https://arxiv.org/abs/2306.00297">Transformers learn to implement preconditioned gradient descent for in-context learning</a>. NeurIPS, 2023. And A. Mahankali, T. Hashimoto, T. Ma, <a href="https://arxiv.org/abs/2307.03576">One step of gradient descent is provably the optimal in-context learner with one layer of linear self-attention</a>, ICLR, 2024.</li>
+        <li>R. Zhang, S. Frei, P. Bartlett. <a href="https://arxiv.org/abs/2306.09927">Trained transformers learn linear models in-context</a>. JMLR, 2024.</li>
+        <li>L. Shen, A. Mishra, D. Khashabi. <a href="https://arxiv.org/abs/2310.08540">Do pretrained Transformers really learn in-context by gradient descent?</a> arXiv 2310.08540.</li>
+        <li>S. M. Xie, A. Raghunathan, P. Liang, T. Ma. <a href="https://arxiv.org/abs/2111.02080">An explanation of in-context learning as implicit Bayesian inference</a>. ICLR, 2022. And S. Min et al., <a href="https://arxiv.org/abs/2202.12837">Rethinking the role of demonstrations</a>, EMNLP, 2022.</li>
+        <li>C. Olsson et al. <a href="https://arxiv.org/abs/2209.11895">In-context learning and induction heads</a>. Transformer Circuits, 2022.</li>
+        <li><a href="https://arxiv.org/abs/2506.17859">In-Context Learning Strategies Emerge Rationally</a>, arXiv 2506.17859, 2025. And <a href="https://arxiv.org/abs/2510.08734">Transmuting prompts into weights</a>, arXiv 2510.08734, 2025. Both seen as abstracts only.</li>
+        <li>2026 preprints on the edge of stability and flatness (titles only, not reviewed): <a href="https://arxiv.org/abs/2604.21016">SGD at the Edge of Stability: The Stochastic Sharpness Gap</a>; <a href="https://arxiv.org/abs/2606.04212">Edge of Stability Selectively Shapes Learning Across the Data Distribution</a>; <a href="https://arxiv.org/abs/2608.03197">On the Implicit Flatness Bias of Sharpness-Aware Minimization</a>.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Module R6 · Deep learning theory</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const fx = (v, d = 2) => v.toFixed(d);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { let s = seed >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { return Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r()); }
+
+  // =====================================================================
+  // Simulation 1: gradient descent picks the nearest perfect fit
+  // =====================================================================
+  const X1 = [2, 1], Y1 = 2, ETA1 = 0.1, XX = 5;
+  const S1 = { a: 0, b: 0, n: 40 };
+  const minBox = $("min-chart");
+  function gdPath(a, b, n) {
+    const pts = [[a, b]]; let w1 = a, w2 = b;
+    for (let i = 0; i < n; i++) {
+      const e = X1[0] * w1 + X1[1] * w2 - Y1;
+      w1 -= ETA1 * e * X1[0]; w2 -= ETA1 * e * X1[1];
+      pts.push([w1, w2]);
+    }
+    return pts;
+  }
+  function renderMin() {
+    const W = Math.max(280, Math.min(minBox.clientWidth, 520)), H = Math.round(Math.min(W, 340)), m = { l: 34, r: 12, t: 12, b: 30 };
+    const svg = mk(minBox, W, H, "Weight space with the line of perfect fits and the gradient descent path");
+    const x = L.scale(-3, 3, m.l, W - m.r), y = L.scale(-3, 3, H - m.b, m.t);
+    for (let v = -3; v <= 3; v++) {
+      L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      if (v % 1 === 0 && v !== 0) { tx(svg, x(v), H - m.b + 15, v, { "text-anchor": "middle" }); tx(svg, m.l - 6, y(v) + 4, v, { "text-anchor": "end" }); }
+    }
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "weight 1", { "text-anchor": "middle" });
+    tx(svg, 10, (m.t + H - m.b) / 2, "weight 2", { "text-anchor": "middle", transform: `rotate(-90 10 ${(m.t + H - m.b) / 2})` });
+    // solution line 2 w1 + w2 = 2, clipped to [-3,3]
+    L.svg("line", { x1: x(-0.5), y1: y(3), x2: x(2.5), y2: y(-3), class: "ln-sol" }, svg);
+    // data direction through the start point
+    // origin direction line
+    L.svg("line", { x1: x(-1.5 * X1[0]), y1: y(-1.5 * X1[1]), x2: x(1.5 * X1[0]), y2: y(1.5 * X1[1]), class: "ln-dir" }, svg);
+    const pts = gdPath(S1.a, S1.b, S1.n);
+    L.svg("path", { d: L.path(pts.map(p => [x(p[0]), y(p[1])])), class: "ln-path" }, svg);
+    L.svg("circle", { cx: x(S1.a), cy: y(S1.b), r: 6, class: "pt-init" }, svg);
+    // min-norm point
+    L.svg("circle", { cx: x(0.8), cy: y(0.4), r: 6, class: "pt-min" }, svg);
+    tx(svg, x(0.8) + 10, y(0.4) + 18, "smallest fit (0.8, 0.4)", { class: "lbl-acc" });
+    const cur = pts[pts.length - 1];
+    L.svg("circle", { cx: x(cur[0]), cy: y(cur[1]), r: 5, class: "pt-now" }, svg);
+    const loss = 0.5 * Math.pow(X1[0] * cur[0] + X1[1] * cur[1] - Y1, 2);
+    const nrm = Math.hypot(cur[0], cur[1]);
+    $("st1-pos").textContent = "(" + fx(cur[0]) + ", " + fx(cur[1]) + ")";
+    $("st1-loss").textContent = loss < 1e-4 ? "≈ 0" : fx(loss, 3);
+    cls($("st1-loss-b"), loss < 1e-3 ? "ok" : "");
+    $("st1-norm").textContent = fx(nrm);
+    $("st1-norm-s").textContent = "smallest possible perfect fit: " + fx(Math.hypot(0.8, 0.4));
+    // closed form final
+    const c = (Y1 - (X1[0] * S1.a + X1[1] * S1.b)) / XX;
+    const fin = [S1.a + c * X1[0], S1.b + c * X1[1]];
+    const atOrigin = Math.abs(S1.a) < 1e-9 && Math.abs(S1.b) < 1e-9;
+    $("s1-verdict").innerHTML = (S1.n < 40 && loss > 1e-3)
+      ? "Still on the way: error is <b>" + fx(loss, 3) + "</b>. Every step moves along the data direction (2, 1), so the path is a straight line."
+      : atOrigin
+        ? "From the origin, gradient descent lands exactly on <b>(0.8, 0.4)</b>, the perfect fit with the smallest weights. Nobody asked for small weights."
+        : "From this start it lands on <b>(" + fx(fin[0]) + ", " + fx(fin[1]) + ")</b>: the perfect fit nearest to where it began. Its size is " + fx(Math.hypot(fin[0], fin[1])) + ", against 0.89 for the smallest. The start is part of the model.";
+  }
+  const c1 = L.bind("s-w1", v => fx(v, 1), v => { S1.a = v; renderMin(); });
+  const c2 = L.bind("s-w2", v => fx(v, 1), v => { S1.b = v; renderMin(); });
+  L.bind("s-st", v => String(v), v => { S1.n = v; renderMin(); });
+  function setStart(a, b) { S1.a = a; S1.b = b; c1.set(a); c2.set(b); renderMin(); }
+  $("b-orig").addEventListener("click", () => setStart(0, 0));
+  $("b-off1").addEventListener("click", () => setStart(-2, 2));
+  $("b-off2").addEventListener("click", () => setStart(2.5, 2.5));
+  renderMin();
+
+  // =====================================================================
+  // Simulation 2: sharp and wide valleys, step size
+  // =====================================================================
+  const H_SH = 40, H_FL = 2, C_SH = -1.5, C_FL = 1.5;
+  const S2 = { lr: 0.02, w0: -1.2, n: 60 };
+  const sharpBox = $("sharp-chart");
+  const f2 = w => Math.min(0.5 * H_SH * (w - C_SH) * (w - C_SH), 0.5 * H_FL * (w - C_FL) * (w - C_FL));
+  const g2 = w => {
+    const a = 0.5 * H_SH * (w - C_SH) * (w - C_SH), b = 0.5 * H_FL * (w - C_FL) * (w - C_FL);
+    return a <= b ? H_SH * (w - C_SH) : H_FL * (w - C_FL);
+  };
+  function run2() { const it = [S2.w0]; let w = S2.w0; for (let i = 0; i < 60; i++) { w -= S2.lr * g2(w); if (!isFinite(w) || Math.abs(w) > 1e3) w = 1e3 * Math.sign(w || 1); it.push(w); } return it; }
+  function renderSharp() {
+    const it = run2();
+    const W = Math.max(300, sharpBox.clientWidth), H = 270, m = { l: 40, r: 12, t: 12, b: 34 };
+    const svg = mk(sharpBox, W, H, "Loss curve with a narrow and a wide minimum, and the gradient descent iterates");
+    const YM = 8;
+    const x = L.scale(-3, 3, m.l, W - m.r), y = L.scale(0, YM, H - m.b, m.t);
+    [-3, -2, -1, 0, 1, 2, 3].forEach(v => { L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid" }, svg); tx(svg, x(v), H - m.b + 15, v, { "text-anchor": "middle" }); });
+    [0, 2, 4, 6, 8].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v, { "text-anchor": "end" }); });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "weight", { "text-anchor": "middle" });
+    tx(svg, 10, (m.t + H - m.b) / 2, "training loss", { "text-anchor": "middle", transform: `rotate(-90 10 ${(m.t + H - m.b) / 2})` });
+    const pts = [];
+    for (let w = -3; w <= 3.0001; w += 0.01) pts.push([x(w), y(Math.min(f2(w), YM))]);
+    L.svg("path", { d: L.path(pts), class: "land" }, svg);
+    tx(svg, x(C_SH) - 6, y(0.0) - 9, "narrow", { class: "lbl-ink", "text-anchor": "end" });
+    tx(svg, x(C_FL), y(0.0) - 9, "wide", { class: "lbl-ink", "text-anchor": "middle" });
+    const cl = v => Math.max(-3, Math.min(3, v));
+    for (let i = 0; i <= S2.n; i++) {
+      const w = it[i], cx = x(cl(w)), cy = y(Math.min(f2(cl(w)), YM));
+      if (i === S2.n) L.svg("circle", { cx, cy, r: 6, class: "it-now" }, svg);
+      else L.svg("circle", { cx, cy, r: 3.2, class: "it-dot" }, svg);
+    }
+    const cur = it[S2.n], fin = it[60];
+    $("st2-pos").textContent = Math.abs(cur) > 50 ? "diverged" : fx(cur, 3);
+    $("st2-pos-s").textContent = "loss " + (Math.abs(cur) > 50 ? "huge" : fx(f2(cur), 3));
+    const dS = Math.abs(fin - C_SH), dF = Math.abs(fin - C_FL);
+    let end, sub, kind;
+    if (dS < 0.02) { end = "narrow"; sub = "settled in the sharp valley"; kind = "warn"; }
+    else if (dF < 0.02) { end = "wide"; sub = "settled in the flat valley"; kind = "ok"; }
+    else { end = "neither"; sub = "still bouncing after 60 steps"; kind = "bad"; }
+    $("st2-end").textContent = end; $("st2-end-s").textContent = sub; cls($("st2-end-b"), kind);
+    const lr = S2.lr, shStable = lr < 2 / H_SH;
+    $("s2-verdict").innerHTML = "Step size " + fx(lr, 3) + " is " + (shStable ? "<b>below</b>" : "<b>above</b>") + " the narrow valley's limit of 0.05, so the narrow valley " + (shStable ? "can hold the iterate." : "cannot hold it: each step overshoots by a factor of " + fx(Math.abs(1 - lr * H_SH), 1) + ".") +
+      (end === "wide" && !shStable && Math.abs(S2.w0 - C_SH) < 1 ? " It was thrown out and found the wide valley, which has the same training loss." : "") +
+      (end === "wide" && shStable ? " The start was nearer the wide valley, so that is where it went." : "") +
+      (end === "narrow" ? " Same training loss as the wide valley, but a sharper solution." : "");
+  }
+  L.bind("s-lr", v => fx(v, 3), v => { S2.lr = v; renderSharp(); });
+  L.bind("s-w0", v => fx(v, 2), v => { S2.w0 = v; renderSharp(); });
+  L.bind("s-it", v => String(v), v => { S2.n = v; renderSharp(); });
+  renderSharp();
+
+  // =====================================================================
+  // Simulation 3: lottery tickets on a tiny real network
+  // =====================================================================
+  const H3 = 80, NP = 3 * H3 + 1, STEPS = 1500, NSEED = 6;
+  const xs = [], ys = [];
+  for (let i = 0; i < 40; i++) { const x = -1 + 2 * i / 39; xs.push(x); ys.push(Math.sin(3 * x) + 0.5 * x); }
+  function initNet(seed) {
+    const r = rng(seed), p = new Array(NP).fill(0);
+    for (let j = 0; j < H3; j++) { p[j] = gauss(r) * 1.2; p[H3 + j] = gauss(r) * 0.8; p[2 * H3 + j] = gauss(r) * 0.3; }
+    return p;
+  }
+  function fwd(p, x) { let o = p[3 * H3]; for (let j = 0; j < H3; j++) { const a = p[j] * x + p[H3 + j]; if (a > 0) o += p[2 * H3 + j] * a; } return o; }
+  function mse(p) { let s = 0; for (let i = 0; i < xs.length; i++) { const e = fwd(p, xs[i]) - ys[i]; s += e * e; } return s / xs.length; }
+  function train(p0, mask) {
+    const p = p0.slice(); for (let i = 0; i < NP; i++) if (!mask[i]) p[i] = 0;
+    const m = new Array(NP).fill(0), v = new Array(NP).fill(0), g = new Array(NP), act = new Array(H3);
+    const lr = 0.01, b1 = 0.9, b2 = 0.999, n = xs.length;
+    for (let t = 1; t <= STEPS; t++) {
+      g.fill(0);
+      for (let i = 0; i < n; i++) {
+        const x = xs[i]; let o = p[3 * H3];
+        for (let j = 0; j < H3; j++) { const a = p[j] * x + p[H3 + j]; act[j] = a; if (a > 0) o += p[2 * H3 + j] * a; }
+        const e = 2 * (o - ys[i]) / n; g[3 * H3] += e;
+        for (let j = 0; j < H3; j++) if (act[j] > 0) { g[2 * H3 + j] += e * act[j]; const d = e * p[2 * H3 + j]; g[j] += d * x; g[H3 + j] += d; }
+      }
+      const c1 = 1 - Math.pow(b1, t), c2 = 1 - Math.pow(b2, t);
+      for (let k = 0; k < NP; k++) {
+        if (!mask[k]) continue;
+        m[k] = b1 * m[k] + (1 - b1) * g[k]; v[k] = b2 * v[k] + (1 - b2) * g[k] * g[k];
+        p[k] -= lr * (m[k] / c1) / (Math.sqrt(v[k] / c2) + 1e-8);
+      }
+    }
+    return p;
+  }
+  function groupMask(score, frac) {
+    const mask = new Array(NP).fill(1);
+    for (let g = 0; g < 3; g++) {
+      const idx = []; for (let i = 0; i < H3; i++) idx.push(g * H3 + i);
+      idx.sort((a, b) => score[a] - score[b]);
+      const cut = Math.round(frac * H3); for (let i = 0; i < cut; i++) mask[idx[i]] = 0;
+    }
+    return mask;
+  }
+  const dense = {};
+  function denseRun(seed) { if (!dense[seed]) { const p0 = initNet(seed); const p = train(p0, new Array(NP).fill(1)); dense[seed] = { p0, p, loss: mse(p) }; } return dense[seed]; }
+  const med = a => { const s = a.slice().sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : 0.5 * (s[n / 2 - 1] + s[n / 2]); };
+  const ltBox = $("lt-chart"), fitBox = $("lt-fit");
+  let LT = null;
+  function drawLT() {
+    if (!LT) { ltBox.innerHTML = ""; fitBox.innerHTML = ""; return; }
+    const names = ["Dense network", "Ticket (original start)", "Same mask, fresh start", "Random mask, original start"];
+    const vals = [med(LT.dense), med(LT.ticket), med(LT.fresh), med(LT.rand)];
+    const W = Math.max(300, ltBox.clientWidth), H = 190, m = { l: 150, r: 70, t: 8, b: 34 };
+    const svg = mk(ltBox, W, H, "Median final error of four kinds of network");
+    const lo = -5, hi = 0;
+    const X = L.scale(lo, hi, m.l, W - m.r);
+    [-5, -4, -3, -2, -1, 0].forEach(v => { L.svg("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, class: "grid" }, svg); tx(svg, X(v), H - m.b + 15, "1e" + v, { "text-anchor": "middle" }); });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "median error (mean squared; lower is better)", { "text-anchor": "middle" });
+    const bh = 28, gap = (H - m.t - m.b - 4 * bh) / 5;
+    vals.forEach((v, i) => {
+      const y0 = m.t + gap * (i + 1) + bh * i, lv = Math.max(lo, Math.min(hi, Math.log10(Math.max(v, 1e-12))));
+      L.svg("rect", { x: X(lo), y: y0, width: Math.max(2, X(lv) - X(lo)), height: bh, rx: 3, class: "bar-" + i }, svg);
+      tx(svg, m.l - 8, y0 + bh / 2 + 4, names[i], { "text-anchor": "end", class: "lbl-ink" });
+      tx(svg, X(lv) + 6, y0 + bh / 2 + 5, v.toExponential(1), { class: "lbl-strong" });
+    });
+    // fit plot for seed 1
+    const W2 = Math.max(300, fitBox.clientWidth), H2 = 190, m2 = { l: 34, r: 12, t: 10, b: 24 };
+    const sv = mk(fitBox, W2, H2, "Fitted curves for start number 1");
+    const xx = L.scale(-1, 1, m2.l, W2 - m2.r), yy = L.scale(-1.6, 1.6, H2 - m2.b, m2.t);
+    [-1, -0.5, 0, 0.5, 1].forEach(v => { L.svg("line", { x1: xx(v), x2: xx(v), y1: m2.t, y2: H2 - m2.b, class: "grid" }, sv); tx(sv, xx(v), H2 - m2.b + 15, v, { "text-anchor": "middle" }); });
+    [-1, 0, 1].forEach(v => { L.svg("line", { x1: m2.l, x2: W2 - m2.r, y1: yy(v), y2: yy(v), class: "grid" }, sv); tx(sv, m2.l - 6, yy(v) + 4, v, { "text-anchor": "end" }); });
+    const curve = (fn, c) => { const pts = []; for (let i = 0; i <= 120; i++) { const x = -1 + 2 * i / 120; pts.push([xx(x), yy(Math.max(-1.6, Math.min(1.6, fn(x))))]); } L.svg("path", { d: L.path(pts), class: c }, sv); };
+    curve(x => Math.sin(3 * x) + 0.5 * x, "cv-tgt");
+    curve(x => fwd(LT.pt, x), "cv-a");
+    curve(x => fwd(LT.pf, x), "cv-b");
+  }
+  function runLT() {
+    const sp = +$("s-sp").value, btn = $("b-lt");
+    btn.disabled = true; btn.textContent = "Training…"; $("s3-verdict").textContent = "Training " + NSEED + " starts × 4 networks, one moment.";
+    setTimeout(() => {
+      const res = { dense: [], ticket: [], fresh: [], rand: [], pt: null, pf: null, sp };
+      let wins = 0;
+      for (let s = 1; s <= NSEED; s++) {
+        const d = denseRun(s), mask = groupMask(d.p.map(Math.abs), sp);
+        const r = rng(500 + s), rmask = groupMask(Array.from({ length: NP }, () => r()), sp);
+        const pt = train(d.p0, mask), pf = train(initNet(900 + s), mask), pr = train(d.p0, rmask);
+        res.dense.push(d.loss); res.ticket.push(mse(pt)); res.fresh.push(mse(pf)); res.rand.push(mse(pr));
+        if (mse(pt) < mse(pf)) wins++;
+        if (s === 1) { res.pt = pt; res.pf = pf; }
+      }
+      LT = res; drawLT();
+      const mt = med(res.ticket), mf = med(res.fresh), mr = med(res.rand), md = med(res.dense);
+      const fail = mt > 0.1;
+      $("s3-verdict").innerHTML = "<ul><li>At <b>" + Math.round(sp * 100) + "%</b> removed, the ticket beat the fresh-start version in <b>" + wins + " of " + NSEED + "</b> starts; medians " + mt.toExponential(1) + " against " + mf.toExponential(1) + " (dense: " + md.toExponential(1) + ").</li>" +
+        "<li>" + (mt < mr ? "A magnitude-chosen mask did better than a random one of the same size (" + mr.toExponential(1) + "): which weights survive matters." : "The random mask was as good here (" + mr.toExponential(1) + "); at this size and sparsity the choice of mask is not clearly better than chance.") + "</li>" +
+        (fail ? "<li>Many of these sparse networks have collapsed to a flat or near-linear fit (error near 0.1 or above). Too few weights are left to draw the curve: pruning has a limit.</li>" : "") +
+        "<li>Treat it as a pattern, not a proof: six starts of a tiny network.</li></ul>";
+      btn.disabled = false; btn.textContent = "Train and compare";
+    }, 30);
+  }
+  L.bind("s-sp", v => Math.round(v * 100) + "%", () => { });
+  $("b-lt").addEventListener("click", runLT);
+  window.addEventListener("resize", () => { if (LT) drawLT(); });
+
+  // =====================================================================
+  // Simulation 4: in-context learning as a few gradient steps
+  // =====================================================================
+  const D = 4, T = 300, K = 16;
+  const tasks = [];
+  { const r = rng(2026);
+    for (let t = 0; t < T; t++) {
+      const w = Array.from({ length: D }, () => gauss(r));
+      const X = Array.from({ length: K }, () => Array.from({ length: D }, () => gauss(r)));
+      const e = Array.from({ length: K }, () => gauss(r));
+      const q = Array.from({ length: D }, () => gauss(r));
+      tasks.push({ w, X, e, q });
+    } }
+  const S4 = { sigma: 0.1, t: 8, eta: 0.2, k: 6 };
+  const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+  function gdSteps(X, y, k, eta, steps) {
+    const w = new Array(D).fill(0);
+    for (let s = 0; s < steps; s++) {
+      const g = new Array(D).fill(0);
+      for (let i = 0; i < k; i++) { const r = dot(X[i], w) - y[i]; for (let j = 0; j < D; j++) g[j] += r * X[i][j] / k; }
+      for (let j = 0; j < D; j++) w[j] -= eta * g[j];
+    }
+    return w;
+  }
+  function solve(A, b) {
+    const n = b.length, M = A.map((r, i) => r.concat([b[i]]));
+    for (let c = 0; c < n; c++) {
+      let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+      [M[c], M[p]] = [M[p], M[c]];
+      for (let r = c + 1; r < n; r++) { const f = M[r][c] / M[c][c]; for (let j = c; j <= n; j++) M[r][j] -= f * M[c][j]; }
+    }
+    const x = new Array(n).fill(0);
+    for (let i = n - 1; i >= 0; i--) { let s = M[i][n]; for (let j = i + 1; j < n; j++) s -= M[i][j] * x[j]; x[i] = s / M[i][i]; }
+    return x;
+  }
+  function leastSq(X, y, k) {
+    const lam = 1e-8;
+    if (k >= D) {
+      const A = Array.from({ length: D }, (_, a) => Array.from({ length: D }, (_, b) => { let s = 0; for (let i = 0; i < k; i++) s += X[i][a] * X[i][b]; return s + (a === b ? lam : 0); }));
+      const bb = Array.from({ length: D }, (_, a) => { let s = 0; for (let i = 0; i < k; i++) s += X[i][a] * y[i]; return s; });
+      return solve(A, bb);
+    }
+    const A = Array.from({ length: k }, (_, a) => Array.from({ length: k }, (_, b) => dot(X[a], X[b]) + (a === b ? lam : 0)));
+    const al = solve(A, y.slice(0, k));
+    return Array.from({ length: D }, (_, j) => { let s = 0; for (let i = 0; i < k; i++) s += al[i] * X[i][j]; return s; });
+  }
+  const err = (w, ws) => { let s = 0; for (let j = 0; j < D; j++) s += (w[j] - ws[j]) * (w[j] - ws[j]); return s; };
+  const iclBox = $("icl-chart");
+  function curves() {
+    const out = { z: [], one: [], few: [], ols: [] };
+    for (let k = 1; k <= K; k++) {
+      const ez = [], e1 = [], et = [], eo = [];
+      for (const tk of tasks) {
+        const y = tk.X.map((x, i) => dot(x, tk.w) + S4.sigma * tk.e[i]);
+        ez.push(dot(tk.w, tk.w));
+        e1.push(err(gdSteps(tk.X, y, k, S4.eta, 1), tk.w));
+        et.push(err(gdSteps(tk.X, y, k, S4.eta, S4.t), tk.w));
+        eo.push(err(leastSq(tk.X, y, k), tk.w));
+      }
+      out.z.push(med(ez)); out.one.push(med(e1)); out.few.push(med(et)); out.ols.push(med(eo));
+    }
+    return out;
+  }
+  function attnCheck() {
+    let mx = 0;
+    for (const tk of tasks) {
+      const k = 6, y = tk.X.map((x, i) => dot(x, tk.w) + S4.sigma * tk.e[i]);
+      let att = 0; for (let i = 0; i < k; i++) att += y[i] * dot(tk.X[i], tk.q) * S4.eta / k;
+      const gd = dot(tk.q, gdSteps(tk.X, y, k, S4.eta, 1));
+      mx = Math.max(mx, Math.abs(att - gd));
+    }
+    return mx;
+  }
+  const sci = v => v >= 0.01 ? v.toFixed(2) : v.toExponential(1);
+  function renderIcl() {
+    const c = curves();
+    const W = Math.max(300, iclBox.clientWidth), H = 300, m = { l: 48, r: 14, t: 12, b: 38 };
+    const svg = mk(iclBox, W, H, "Error in learned weights against number of examples in the prompt");
+    const x = L.scale(1, K, m.l, W - m.r), lo = -3, hi = 2, y = L.scale(lo, hi, H - m.b, m.t);
+    for (let k = 1; k <= K; k += (k === 1 ? 3 : 4)) { L.svg("line", { x1: x(k), x2: x(k), y1: m.t, y2: H - m.b, class: "grid" }, svg); tx(svg, x(k), H - m.b + 15, k, { "text-anchor": "middle" }); }
+    [-3, -2, -1, 0, 1, 2].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, "1e" + v, { "text-anchor": "end" }); });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "examples in the prompt", { "text-anchor": "middle" });
+    tx(svg, 10, (m.t + H - m.b) / 2, "typical squared error (log)", { "text-anchor": "middle", transform: `rotate(-90 10 ${(m.t + H - m.b) / 2})` });
+    const line = (arr, cl) => L.svg("path", { d: L.path(arr.map((v, i) => [x(i + 1), y(Math.max(lo, Math.min(hi, Math.log10(Math.max(v, 1e-12)))))])), class: cl }, svg);
+    line(c.z, "cv-tgt"); line(c.one, "cv-b"); line(c.few, "cv-a"); line(c.ols, "cv-d");
+    L.svg("line", { x1: x(S4.k), x2: x(S4.k), y1: m.t, y2: H - m.b, class: "vline" }, svg);
+    const i = S4.k - 1;
+    $("st4-z").textContent = sci(c.z[i]); $("st4-1").textContent = sci(c.one[i]); $("st4-t").textContent = sci(c.few[i]); $("st4-o").textContent = sci(c.ols[i]);
+    $("st4-t-s").textContent = S4.t + " steps at η = " + S4.eta.toFixed(2);
+    const best = Math.min(c.one[i], c.few[i], c.ols[i]);
+    const nm = best === c.ols[i] ? "full least squares" : best === c.few[i] ? "the several-step version" : "the one-step version";
+    const peak = c.ols.reduce((a, v, j) => (j >= 1 && v > c.ols[a]) ? j : a, 1) + 1;
+    $("s4-verdict").innerHTML = "<ul><li>With <b>" + S4.k + "</b> examples, the best of the three is <b>" + nm + "</b>. The one-step method (a single attention layer) leaves most of the error because it takes one cautious step.</li>" +
+      (S4.sigma > 0.5 ? "<li>Full least squares is at its worst near <b>" + peak + "</b> examples, close to the 4 unknowns: it chases the noise. Gradient descent run to the end reaches the same answer.</li>" : "<li>With little noise, every method improves as examples arrive, and full least squares (what gradient descent reaches if run to the end) is best once there are 4 or more.</li>") +
+      (S4.sigma > 0.5 && c.few[3] < c.ols[3] ? "<li>At 4 examples the early-stopped version (" + sci(c.few[3]) + ") beats least squares (" + sci(c.ols[3]) + "): stopping early regularised the fit.</li>" : "") + "</ul>";
+    $("st4-check").innerHTML = "Check on all " + T + " tasks with 6 examples: largest difference between the attention formula and one gradient step is <b>" + attnCheck().toExponential(1) + "</b>, i.e. rounding error only.";
+  }
+  L.bind("s-steps", v => String(v), v => { S4.t = v; renderIcl(); });
+  L.bind("s-eta", v => v.toFixed(2), v => { S4.eta = v; renderIcl(); });
+  L.bind("s-k", v => String(v), v => { S4.k = v; renderIcl(); });
+  function setNoise(s) {
+    S4.sigma = s;
+    $("b-nlo").setAttribute("aria-pressed", String(s < 0.5)); $("b-nhi").setAttribute("aria-pressed", String(s >= 0.5));
+    renderIcl();
+  }
+  $("b-nlo").addEventListener("click", () => setNoise(0.1));
+  $("b-nhi").addEventListener("click", () => setNoise(1.0));
+  renderIcl();
+
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderMin(); renderSharp(); renderIcl(); }, 120); });
+})();
+</script>
+</body>
+</html>

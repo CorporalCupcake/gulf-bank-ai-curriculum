@@ -1,0 +1,748 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Causal Effects Without a Randomised Test: Synthetic Control, Modern Difference-in-Differences and Causal Discovery</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-bad { fill: var(--bad) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  .ln-t { stroke: var(--ink); stroke-width: 2.4; fill: none; }
+  .ln-c { stroke: var(--neutral); stroke-width: 2.2; fill: none; }
+  .ln-cf { stroke: var(--accent); stroke-width: 2.2; stroke-dasharray: 5 4; fill: none; }
+  .ln-bad { stroke: var(--bad); stroke-width: 2.2; fill: none; }
+  .ln-pl { stroke: var(--neutral); stroke-width: 1.2; fill: none; opacity: .7; }
+  .ln-gap { stroke: var(--accent); stroke-width: 2.8; fill: none; }
+  .mark { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .post-bg { fill: var(--warn); fill-opacity: .08; }
+  .gb { fill: var(--accent); fill-opacity: .75; }
+  .gb.pre { fill: var(--neutral); fill-opacity: .7; }
+  .node rect { fill: var(--surface); stroke: var(--ink); stroke-width: 1.6; }
+  .arrow { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .arrow.dim { stroke: var(--neutral); opacity: .5; }
+  .arrow.und { stroke: var(--warn); stroke-dasharray: 5 4; }
+  .tag { font-family: var(--font-mono); font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--sunk); color: var(--muted); }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track R · Research frontier: AI, ML and data science</span>
+    <span>Module R8 · Statistics, causality and experimentation</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>R8.5 – R8.6</span>
+        <span class="pill e">Edge</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Causal Effects Without a Randomised Test: Synthetic Control, Modern Difference-in-Differences and Causal Discovery</h1>
+      <p class="dek">What to do when the bank rolled something out and nobody randomised it: build the comparison group the data never gave you, avoid the quiet bias in staggered rollouts, and see what an algorithm (or an LLM) can and cannot say about the arrows between variables.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Without randomisation every causal estimate is only as good as the comparison group you can defend: difference-in-differences borrows the trend of untouched units, modern versions stop the staggered rollout from contaminating that borrowing, synthetic control builds the comparison from a weighted blend of other units, and causal discovery can narrow the possible cause-and-effect structures but never settle them without expert knowledge.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>In March a bank launches a new savings feature in its Dubai branches only. By June, new savings accounts per 1,000 customers are up 14%. The product head wants to know: did the feature cause that? You cannot ask the Dubai customers what they would have done without it. That unobserved world is the <strong>counterfactual</strong>, and every causal method is a way of guessing it.</p>
+        <p>The cheap guesses are bad. "Before versus after" blames the feature for everything that changed in the spring: salaries, Ramadan, a market rally. "Dubai versus Abu Dhabi" blames it for every permanent difference between the two cities. Neither is a fair comparison.</p>
+        <p>There is a better idea, and it is simple. Look at how <em>Abu Dhabi</em> changed over the same months. Whatever happened to both cities (the season, the economy) shows up in Abu Dhabi too. Only the Dubai-specific extra change is a candidate for the feature's effect. That is <strong>difference-in-differences</strong> (DiD): the change in the treated group, minus the change in the comparison group. It removes anything that is constant per group and anything that hits both groups equally.</p>
+        <p>It costs one big assumption: absent the feature, Dubai would have moved in parallel with Abu Dhabi. This lesson is mostly about that assumption, and about three ways to extend or stress-test the idea:</p>
+        <ul>
+          <li><strong>Staggered rollouts.</strong> Real programmes reach branches, segments or products at different dates. The textbook regression for that situation (two-way fixed effects) can give a wrong answer, even a wrong <em>sign</em>, when effects grow over time. Newer estimators fix this by never using already-treated units as comparisons.</li>
+          <li><strong>Synthetic control.</strong> When you have one treated unit (one region, one product, one segment) and many possible comparisons, none of which is a good match alone, you build a weighted blend that tracked the treated unit before launch. If the blend then drifts away after launch, that gap is your estimate.</li>
+          <li><strong>Causal discovery.</strong> Sometimes the question is earlier: you do not know which variables cause which. Algorithms can test patterns of dependence to rule structures out. They rarely rule in a single answer, and a language model can propose a graph that looks sensible while being wrong.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>All of these methods trade randomisation for assumptions. The skill is not running the estimator (a library does that in one line) but stating the assumption in plain words, showing the evidence for it, and reporting how wrong the answer would be if it fails.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-did">Difference-in-differences and the parallel-trends assumption</h3>
+      <div class="prose">
+        <p>Take two groups and two periods. Let <i>Ȳ</i> be an average outcome.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>DiD</mtext><mo>=</mo><mo stretchy="false">(</mo><msub><mover><mi>Y</mi><mo>¯</mo></mover><mrow><mi>T</mi><mo>,</mo><mtext>post</mtext></mrow></msub><mo>−</mo><msub><mover><mi>Y</mi><mo>¯</mo></mover><mrow><mi>T</mi><mo>,</mo><mtext>pre</mtext></mrow></msub><mo stretchy="false">)</mo><mo>−</mo><mo stretchy="false">(</mo><msub><mover><mi>Y</mi><mo>¯</mo></mover><mrow><mi>C</mi><mo>,</mo><mtext>post</mtext></mrow></msub><mo>−</mo><msub><mover><mi>Y</mi><mo>¯</mo></mover><mrow><mi>C</mi><mo>,</mo><mtext>pre</mtext></mrow></msub><mo stretchy="false">)</mo></math>
+        <p class="where">T is the treated group, C the comparison group. The first bracket is the treated group's change; the second is the change you would expect from everything else. Under <strong>parallel trends</strong> (absent treatment, T's average would have changed by the same amount as C's), the difference is the average effect on the treated. The same number comes out of the regression <code>y ~ treated + post + treated:post</code>, where the interaction coefficient is the DiD.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Notice what parallel trends does <em>not</em> say. Levels may differ (Dubai starts higher). Both groups may trend. Only the <strong>gap between them</strong> must have been stable, in the absence of treatment. It is an assumption about a world you cannot see, so you can never prove it. You can only look for evidence against it, using the periods before launch.</p>
+        <p>The standard check is an <strong>event study</strong>: plot the treated-minus-comparison gap for each period, relative to the gap just before launch. If the gap was flat before launch and moves after, that is reassuring. If it was already drifting, DiD attributes the drift to the treatment. Simulation 1 shows exactly how much.</p>
+      </div>
+
+      <figure class="figure" id="fig-did">
+        <div class="fig-head"><span class="fig-title">Difference-in-differences, and what a hidden pre-trend does to it</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> set the true effect to 6 and the pre-trend to 0. The dashed line (what Dubai would have done) matches the comparison's shape and DiD recovers 6, while before-versus-after reads about 4, because the seasonal dip offsets part of the trend. Now drag the pre-trend to +0.4: Dubai was already pulling away. The bottom panel's pre-launch bars slope upward and the DiD overstates the effect by exactly pre-trend × 6 months.</p>
+        <div class="chart-wrap" id="did-chart"></div>
+        <div class="chart-wrap" id="did-gap"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Treated (Dubai)</span>
+          <span><i style="background:var(--neutral)"></i>Comparison (Abu Dhabi)</span>
+          <span><i style="background:var(--accent)"></i>What DiD assumes Dubai would have done</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-tau">True effect (accounts per 1,000) <output for="s-tau"></output></label><input type="range" id="s-tau" min="0" max="12" step="0.5" value="6"></div>
+          <div class="ctl"><label for="s-dtr">Hidden extra trend in Dubai (per month) <output for="s-dtr"></output></label><input type="range" id="s-dtr" min="-0.5" max="0.5" step="0.05" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">True effect</div><div class="v" id="st1-true"></div><div class="s">built into the simulation</div></div>
+          <div class="stat" id="st1-naive-b"><div class="k">Before versus after</div><div class="v" id="st1-naive"></div><div class="s">Dubai only, post minus pre</div></div>
+          <div class="stat" id="st1-did-b"><div class="k">Difference-in-differences</div><div class="v" id="st1-did"></div><div class="s" id="st1-did-s"></div></div>
+          <div class="stat"><div class="k">Pre-launch gap slope</div><div class="v" id="st1-slope"></div><div class="s">per month, the visible warning</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: 12 months, launch in month 7. Comparison = 50 + 0.5·month + a seasonal wave of amplitude 4 that both cities share. Treated = 60 + (0.5 + extra trend)·month + the same wave + the effect from month 7. Exact expected values, no sampling noise. Outcome: new savings accounts per 1,000 customers.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three practical points follow.</p>
+        <ul>
+          <li><strong>Parallel trends depends on the scale.</strong> Parallel in AED may be non-parallel in percentage growth. A high-balance segment and a low-balance segment rarely move in parallel in levels. Choose the scale (levels, logs) for which a story of "same shock, same proportional response" is believable, and say so.</li>
+          <li><strong>A flat pre-trend is necessary, not sufficient.</strong> It cannot catch something that begins at launch: a competitor's promotion in Dubai that month, a rule change that affects only Dubai. The more units and the longer the pre-period, the more a coincidence of that sort becomes unlikely, but never impossible. Rambachan and Roth (2023) turned this into a tool, often called "honest DiD": instead of testing for a pre-trend and then pretending there is none, you ask how big a post-launch violation would need to be, relative to what you saw before launch, to erase your conclusion, and report intervals that stay valid under that much violation.</li>
+          <li><strong>Pre-trend tests have weak power and can distort.</strong> A test that fails to reject "no pre-trend" with six noisy months is not evidence of parallelism. Roth (2022) showed that screening studies on a passed pre-test also biases what survives. Prefer plotting the event study and reasoning about size.</li>
+        </ul>
+        <p>Standard errors also need care: outcomes within a branch are correlated over time, so cluster at the level at which treatment was assigned (the branch, the segment), and be sceptical when there are few clusters. With two cities there are two clusters; no formula rescues that.</p>
+<pre><code># 2x2 DiD as a regression, clustered by branch
+import statsmodels.formula.api as smf
+m = smf.ols("accounts ~ treated + post + treated:post", data=df).fit(
+        cov_type="cluster", cov_kwds={"groups": df["branch_id"]})
+print(m.params["treated:post"], m.conf_int().loc["treated:post"].values)</code></pre>
+      </div>
+
+      <h3 class="sub" id="m-stagger">Staggered rollouts and why the old regression breaks</h3>
+      <div class="prose">
+        <p>Banks seldom switch something on everywhere at once. A new onboarding flow reaches branch clusters in waves; a pricing change hits one customer segment per quarter; a fraud rule goes to retail, then business banking. The habit is to run a <strong>two-way fixed effects</strong> (TWFE) regression: an outcome on a unit effect, a time effect and a 0/1 "treated yet?" dummy. With one launch date this is just DiD. With several, it hides a problem.</p>
+        <p>The TWFE coefficient is a weighted average of many small two-group, two-period comparisons (Goodman-Bacon, 2021). Some are good: late-treated units compared with never-treated units, or early-treated compared with not-yet-treated. But some use <strong>already-treated units as the comparison group</strong>: the late cohort is compared with the early cohort, which is by then in its treated state. If the early cohort's effect is still growing, that growth is subtracted from the late cohort's estimate as though it were a background trend. The result is biased downwards, and with enough heterogeneity some good comparisons receive <em>negative</em> weights, so the estimate can be negative when every unit's true effect is positive (de Chaisemartin and D'Haultfœuille, 2020; Sun and Abraham, 2021).</p>
+        <p>If the effect is the same for every unit at every date, none of this bites. That is rarely true: a new feature builds up as customers learn it.</p>
+      </div>
+
+      <figure class="figure" id="fig-stag">
+        <div class="fig-head"><span class="fig-title">Staggered rollout: where the two-way regression goes wrong</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> set growth to 0: every method gives the same answer. Raise growth to 1.0 per month. The true average effect climbs, TWFE lags behind it, and the "forbidden" comparison (late cohort against the already-treated early cohort) collapses towards zero. The cohort-by-cohort estimator, which only compares with never-treated branches, stays right.</p>
+        <div class="chart-wrap" id="stag-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Early rollout (from month 4)</span>
+          <span><i style="background:var(--accent)"></i>Late rollout (from month 8)</span>
+          <span><i style="background:var(--neutral)"></i>Never treated</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-base">Effect in the first month <output for="s-base"></output></label><input type="range" id="s-base" min="0" max="6" step="0.5" value="3"></div>
+          <div class="ctl"><label for="s-grow">Extra effect each further month <output for="s-grow"></output></label><input type="range" id="s-grow" min="0" max="1.5" step="0.05" value="0.8"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">True average effect</div><div class="v" id="st2-true"></div><div class="s">over all treated branch-months</div></div>
+          <div class="stat" id="st2-twfe-b"><div class="k">Two-way regression</div><div class="v" id="st2-twfe"></div><div class="s" id="st2-twfe-s"></div></div>
+          <div class="stat" id="st2-clean-b"><div class="k">Cohort vs never-treated</div><div class="v" id="st2-clean"></div><div class="s">Callaway-Sant'Anna style</div></div>
+          <div class="stat" id="st2-forb-b"><div class="k">Late vs already-treated</div><div class="v" id="st2-forb"></div><div class="s">the forbidden comparison</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: three branch groups over 12 months. Untreated outcome = group level (0, 5, 10) + 2 per month, so trends are exactly parallel. Treated outcome adds an effect equal to the first-month effect plus the growth per month since adoption. The two-way regression is computed exactly (partial out unit and month effects, then regress). The cohort estimator averages ATT(g,t) over treated cells, using never-treated as comparison and the month before adoption as base. Exact values, no noise. One branch group per cohort, equal weight.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The modern family all avoid forbidden comparisons, in slightly different ways:</p>
+        <ul>
+          <li><strong>Callaway and Sant'Anna (2021).</strong> Estimate a separate effect for each cohort <i>g</i> (units first treated at date <i>g</i>) and each date <i>t</i>, written ATT(<i>g</i>,<i>t</i>), using never-treated or not-yet-treated units as controls. Then aggregate those building blocks however you need: by time since treatment (an event study), by cohort, or overall. This is what Simulation 2's "cohort vs never-treated" does.</li>
+          <li><strong>Sun and Abraham (2021).</strong> Keep a regression, but interact relative-time dummies with cohort, so each cohort's dynamics are free, then average with cohort-share weights.</li>
+          <li><strong>Imputation estimators</strong> (Borusyak, Jaravel and Spiess, 2024; Gardner's two-stage). Fit the unit and time effects <em>only on untreated observations</em>, predict each treated observation's untreated outcome, and average the differences. Efficient, and easy to explain: "we predicted what each treated branch-month would have looked like and compared".</li>
+          <li><strong>de Chaisemartin and D'Haultfœuille.</strong> Estimators built from the units that switch treatment status, also handling treatment that turns on and off, which matters for things like a limit that is raised and later cut.</li>
+        </ul>
+        <p>You do not need to choose a winner for a meeting. You need to know the trigger for the problem (staggered timing plus effects that change with exposure time), the symptom (TWFE and an event study disagree) and the remedy (an estimator that compares only with untreated units, and an event-study plot as the main exhibit). Roth, Sant'Anna, Bilinski and Poe (2023) review the whole literature; Baker et al. give a practical guide.</p>
+        <p>An important remaining caution: these methods fix the <em>estimator</em>, not the <em>assumption</em>. They still need parallel trends (conditional on whatever you adjust for), no anticipation (customers did not change behaviour before the official launch, which is common when a feature is announced early), and no spill-over (the comparison branches were not affected by the treated ones, which fails if customers move between branches or the same call centre serves both).</p>
+      </div>
+
+      <h3 class="sub" id="m-sc">Synthetic control and synthetic difference-in-differences</h3>
+      <div class="prose">
+        <p>Sometimes you have one treated unit: one emirate, one product line, one customer segment, one subsidiary. Choosing a single comparison unit feels arbitrary, and averaging all the others gives a group that never resembled the treated unit. The <strong>synthetic control method</strong> (Abadie and Gardeazabal, 2003; Abadie, Diamond and Hainmueller, 2010) builds a comparison as a <em>weighted average of the untreated "donor" units</em>, with weights chosen so that the blend tracked the treated unit's pre-launch path as closely as possible.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><munder><mi>min</mi><mi>w</mi></munder><munder><mo>∑</mo><mrow><mi>t</mi><mo>≤</mo><msub><mi>T</mi><mn>0</mn></msub></mrow></munder><msup><mrow><mo stretchy="false">(</mo><msub><mi>Y</mi><mrow><mn>1</mn><mi>t</mi></mrow></msub><mo>−</mo><munderover><mo>∑</mo><mrow><mi>j</mi><mo>=</mo><mn>2</mn></mrow><mrow><mi>J</mi><mo>+</mo><mn>1</mn></mrow></munderover><msub><mi>w</mi><mi>j</mi></msub><msub><mi>Y</mi><mrow><mi>j</mi><mi>t</mi></mrow></msub><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mspace width="1em"></mspace><mtext>subject to</mtext><mspace width="0.5em"></mspace><msub><mi>w</mi><mi>j</mi></msub><mo>≥</mo><mn>0</mn><mo>,</mo><mspace width="0.5em"></mspace><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>w</mi><mi>j</mi></msub><mo>=</mo><mn>1</mn></math>
+        <p class="where">Unit 1 is the treated unit, units 2 to <i>J</i>+1 are donors, <i>T</i><sub>0</sub> is the last pre-launch period. The weights are non-negative and sum to one, so the synthetic unit is a <em>blend</em>, never an extrapolation. After launch, the estimated effect at date <i>t</i> is the treated unit's outcome minus the synthetic unit's. The weights are usually sparse: a handful of donors get most of the weight, which makes the result inspectable ("our synthetic Sharjah is 45% Ajman-like, 30% ...").</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Two ideas make it credible. First, <strong>fit before launch is the diagnostic</strong>: if the blend cannot reproduce the treated path before launch, the post-launch gap means nothing. This also gives synthetic control a cousin of the parallel-trends check that is much more demanding than "the pre-lines looked similar". Second, <strong>inference by placebo</strong>: with one treated unit there are no standard errors from a sample. So pretend, in turn, that each donor was the treated unit, run the same procedure, and see how large a post-launch gap arises by chance. If the real unit's gap (scaled by its pre-launch fit error, because a poorly fitted unit makes a big gap easily) is bigger than nearly all placebos, the effect is unlikely to be chance. With 10 donors, the best p-value you can reach is 1 in 11, about 0.09. That is honest, not weak.</p>
+      </div>
+
+      <figure class="figure" id="fig-sc">
+        <div class="fig-head"><span class="fig-title">Build a synthetic comparison, then test it against placebos</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start with effect +6 and the full pre-period: the dashed synthetic line hugs the treated line before month 25 and parts from it afterwards, and the treated unit tops the placebo ranking. Set the effect to 0 and the treated unit is just another line in the grey crowd. Now press <b>Make the treated unit unusual</b>: no blend of donors can reach it, the pre-fit error balloons, and the results stop meaning anything even when the post gap looks large.</p>
+        <div class="btns" role="group" aria-label="Treated unit">
+          <button class="btn" type="button" id="b-unus" aria-pressed="false">Make the treated unit unusual</button>
+        </div>
+        <div class="chart-wrap" id="sc-chart"></div>
+        <div class="chart-wrap" id="sc-gap"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Treated cluster</span>
+          <span><i style="background:var(--accent)"></i>Synthetic (weighted donors) / treated gap</span>
+          <span><i style="background:var(--neutral)"></i>Placebo gaps (each donor pretending to be treated)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-eff">True effect after launch (index points) <output for="s-eff"></output></label><input type="range" id="s-eff" min="-10" max="10" step="1" value="6"></div>
+          <div class="ctl"><label for="s-pre">Pre-launch months used for fitting <output for="s-pre"></output></label><input type="range" id="s-pre" min="6" max="24" step="1" value="24"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Estimated average effect</div><div class="v" id="st3-est"></div><div class="s" id="st3-est-s"></div></div>
+          <div class="stat" id="st3-fit-b"><div class="k">Pre-launch fit error</div><div class="v" id="st3-fit"></div><div class="s">RMSPE, index points (noise is about 0.8)</div></div>
+          <div class="stat" id="st3-rank-b"><div class="k">Placebo rank</div><div class="v" id="st3-rank"></div><div class="s" id="st3-rank-s"></div></div>
+          <div class="stat"><div class="k">Heaviest donor weights</div><div class="v" id="st3-w" style="font-size:16px"></div><div class="s">blend must be non-negative, sum to 100%</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: 36 months of a spend index for one treated branch cluster (launch after month 24) and 10 donor clusters. Each unit is its own level plus two shared latent factors (a trend with seasonality, and a random walk) with its own loadings, plus noise of about 0.8. The treated unit is a 50/30/20 mix of three donors, so a good synthetic control exists unless you make it unusual. Weights are fitted by accelerated projected gradient on the simplex (500 iterations). Placebos give each donor the same procedure using the other donors; they receive no effect. Rank is by post/pre RMSPE ratio; the value shown is the rank out of 11 units. Fixed random seed.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Where it goes beyond the original recipe:</p>
+        <ul>
+          <li><strong>Augmented synthetic control</strong> (Ben-Michael, Feller and Rothstein, 2021) adds a regression correction when the pre-fit is imperfect, so you do not need an exact blend.</li>
+          <li><strong>Synthetic difference-in-differences</strong> (Arkhangelsky, Athey, Hirshberg, Imbens and Wager, 2021) is a hybrid. It weights donor units as synthetic control does <em>and</em> weights pre-launch periods, then runs a DiD with those weights, allowing a constant level gap between treated and synthetic (which DiD allows and plain synthetic control does not). It works across the setting where DiD has many treated units and synthetic control has few, and is designed to behave sensibly on both.</li>
+          <li><strong>Staggered and multi-unit versions</strong> exist, including recent work on inference when several units are treated at different dates. Treat these as active research, not settled practice.</li>
+        </ul>
+        <p>Synthetic control suits small numbers of treated units with a long pre-period and many donors: a regional pricing change, one product's repricing, one regulator-driven change applied to one business line. It suits large numbers of treated units less well, where DiD with a modern estimator is the better tool. Always report the weights, the pre-fit error, the placebo distribution, and what happens if you drop the top donor.</p>
+      </div>
+
+      <h3 class="sub" id="m-discovery">Causal discovery: learning structure from data</h3>
+      <div class="prose">
+        <p><em>(In brief.)</em> Everything above assumed you knew what caused what and wanted the size. <strong>Causal discovery</strong> asks the earlier question: given data on many variables, which arrows are consistent with it? Three families:</p>
+        <ul>
+          <li><strong>Constraint-based</strong> (PC, FCI; Spirtes, Glymour and Scheines). Test conditional independences, remove edges between variables that are independent given some other set, then orient what the pattern of tests allows. The key signature is the <em>collider</em> A → B ← C: A and C are independent, but become dependent once you condition on B.</li>
+          <li><strong>Score-based</strong> (GES; Chickering, 2002). Search over graphs and score each by how well it fits the data, with a penalty for complexity.</li>
+          <li><strong>Functional-form-based.</strong> Assume more about the mechanism, for example linear with non-Gaussian noise (LiNGAM; Shimizu et al., 2006) or additive noise, and the direction of an arrow becomes identifiable from the data's shape. The continuous-optimisation approach NOTEARS (Zheng et al., 2018) recasts the search as smooth optimisation under an acyclicity constraint.</li>
+        </ul>
+        <p>The limit is fundamental. Different graphs imply the same independences. A chain A → B → C, the reverse chain, and the fork A ← B → C all say "A and C are independent given B" and nothing else; they form a <strong>Markov equivalence class</strong>, and no amount of observational data separates them. Only a collider is orientable from this pattern. Add the usual assumptions (the Markov and <em>faithfulness</em> conditions: independences in the data come from the graph, not from cancelling paths; no hidden common causes unless you use FCI; enough data for the tests) and you get a class of graphs, not a graph.</p>
+      </div>
+
+      <figure class="figure" id="fig-disc">
+        <div class="fig-head"><span class="fig-title">Which arrows can the data tell apart?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> with <b>Collider</b> selected the algorithm finds one answer. Switch to <b>Chain</b> and <b>Fork</b>: the independence pattern is identical and three graphs fit. Then press <b>Add expert knowledge</b>, which says "A comes before B comes before C": the chain gets pinned down, but in the Fork world that knowledge is false and the method confidently returns the wrong graph. Finally drag the strength down to 0.1 or the sample to 100 and watch real edges disappear for lack of power.</p>
+        <div class="toggles" role="group" aria-label="True structure" id="tg-struct">
+          <button class="btn" type="button" data-s="chain" aria-pressed="true">Chain A → B → C</button>
+          <button class="btn" type="button" data-s="fork" aria-pressed="false">Fork A ← B → C</button>
+          <button class="btn" type="button" data-s="collider" aria-pressed="false">Collider A → B ← C</button>
+          <button class="btn" type="button" id="b-know" aria-pressed="false">Add expert knowledge: A before B before C</button>
+        </div>
+        <p class="try" id="s4-cap" style="margin-top:8px"></p>
+        <div class="chart-wrap" id="disc-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-str">Strength of each true arrow <output for="s-str"></output></label><input type="range" id="s-str" min="0.05" max="1" step="0.05" value="0.7"></div>
+          <div class="ctl"><label for="s-n">Sample size <output for="s-n"></output></label><input type="range" id="s-n" min="2" max="3.7" step="0.05" value="3.3"></div>
+        </div>
+        <div class="table-wrap"><div id="disc-table"></div></div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: linear Gaussian data with unit-variance noise, generated from the chosen structure with a fixed random seed (the same noise draws are reused as you change the sliders, so changes are comparable). Independence is judged with Fisher's z test on (partial) correlations at the 5% level; an edge A–B is kept only if A and B are dependent both unconditionally and given the third variable. Equivalence classes are listed by the standard PC orientation logic for three variables. A small sample or weak arrows can produce wrong skeletons; that is intended.</p>
+      </figure>
+      <div class="prose">
+        <p>Real data is harsher than this toy: dozens of variables, mixed types, measurement error, hidden confounders, feedback loops, time. Benchmarks on synthetic graphs are also known to flatter methods, for instance because in many generators the variance of variables rises along the causal order, which algorithms can exploit without learning causation (Reisach, Seiler and Weichwald, 2021, "Beware of the simulated DAG"). A discovered graph is best treated as a <strong>hypothesis generator</strong>: a set of candidate arrows to test with an experiment, a natural experiment (the methods above) or domain review.</p>
+      </div>
+
+      <h3 class="sub" id="m-llm">Language models that propose causal graphs</h3>
+      <div class="prose">
+        <p>Language models know a great deal about how the world works from text. Given variable names ("credit utilisation", "missed payments", "salary credit", "customer age"), they can propose which variable causes which, and often agree with what a domain expert would say. Kıcıman and colleagues (2023) tested this on pairwise cause-effect benchmarks and found accuracy well above what data-only methods achieved on the same pairs, which opened a line of work: use the model as a source of <strong>prior knowledge</strong> to constrain or seed causal discovery. The model plays the part of the expert, cheaply and at scale.</p>
+        <p>The uses that make sense in a bank:</p>
+        <ul>
+          <li><strong>Draft a graph for review.</strong> Ask for a causal diagram of a process (what drives early arrears, what influences alert volume), then have credit or fraud experts correct it. The value is a faster start and a record of assumptions, not an answer.</li>
+          <li><strong>Suggest confounders and mediators</strong> to include or avoid in a regression, such as variables that are consequences of treatment and should not be controlled for.</li>
+          <li><strong>Prune a search.</strong> Forbid arrows that violate time order or common sense (a customer's age cannot be caused by their balance), shrinking the space discovery must explore, as the expert-knowledge button did in Simulation 4.</li>
+        </ul>
+        <p>The risks are specific. A model is rewarded for fluent, plausible text; it will recall textbook relationships even where this bank's data disagrees. It can leak from names: if "default" and "income" appear, it will say income causes default whether or not the data supports an arrow in your population. Answers vary across prompt wording and run. It cannot see unmeasured variables. And a graph accepted because an LLM drew it is exactly the "confidently wrong" case in Simulation 4: it narrows the equivalence class using knowledge nobody verified. Studies keep finding that language models are strong on well-known relationships and weaker on unfamiliar or counter-intuitive ones, and that they can reproduce the surface patterns of causal language without reliable reasoning (see Part 4). The safe workflow: model proposes with reasons, humans challenge each arrow, anything that matters is checked against data or an experiment, and the final graph is versioned like any model document.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>These methods sit between the randomised test and plain correlation. Where they come from and where they lead:</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F9 · Causal inference</span><span class="t"><a href="f9-causal-inference.html">The foundations this lesson builds on</a></span><p>Potential outcomes, confounding, adjustment sets and the basic DiD idea. This lesson is the edge: when the simple versions fail and what replaces them.</p></div>
+        <div class="link-card"><span class="code">F2.6 · Confounding and selection</span><span class="t"><a href="f2-confounding-simpson-selection.html">Why the comparison group matters</a></span><p>Branches get a rollout because they are large, urban or willing. That selection is why "treated minus untreated" fails and why parallel trends must be argued.</p></div>
+        <div class="link-card"><span class="code">R8.3 – R8.4 · Modern A/B testing</span><span class="t"><a href="r8-modern-a-b-testing-cuped.html">When you can randomise</a></span><p>If you can randomise, do: one clean assignment beats every assumption here. DiD and synthetic control are what you do when you could not, or when the unit is too big to randomise.</p></div>
+        <div class="link-card"><span class="code">R8.1 – R8.2 · Conformal prediction</span><span class="t"><a href="r8-conformal-prediction.html">Distribution-free intervals</a></span><p>Conformal methods give prediction intervals without a model of the noise. Placebo inference in synthetic control is the same spirit: use the data's own variation as the reference.</p></div>
+        <div class="link-card"><span class="code">F2.1 · F2.2 · Intervals and bootstrap</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">Few clusters, wide intervals</a></span><p>Cluster-robust and bootstrap intervals matter hugely here because treatment is assigned to branches or segments, not to customers.</p></div>
+        <div class="link-card"><span class="code">F9 · Time series</span><span class="t"><a href="f9-time-series-and-forecasting.html">Counterfactual forecasting</a></span><p>A forecast of what would have happened is a counterfactual. Synthetic control and structural time-series methods differ in where the counterfactual comes from: peers versus the unit's own past.</p></div>
+        <div class="link-card"><span class="code">F3.1 · Leakage and point-in-time</span><span class="t"><a href="f3-leakage-point-in-time.html">Time discipline for treatment dates</a></span><p>Anticipation and announcement dates are leakage in causal form. Define the treatment date by when customers could first act, not by the project plan.</p></div>
+        <div class="link-card"><span class="code">F3.6 · Experiments and write-ups</span><span class="t"><a href="f3-experiments-and-writeups.html">Reporting an observational result</a></span><p>An effect estimate from DiD needs a different write-up from an A/B test: assumptions first, event-study plot, sensitivity.</p></div>
+        <div class="link-card"><span class="code">A4 · Statistics for evals</span><span class="t"><a href="a4-statistics-for-evals.html">Uncertainty with small counts</a></span><p>The same discipline of intervals and honest comparisons applies when you evaluate agents and assistants.</p></div>
+        <div class="link-card"><span class="code">R4 · Faithfulness of reasoning</span><span class="t"><a href="r4-chain-of-thought-faithfulness-and.html">When a model's explanation is not its cause</a></span><p>A language model giving causal-sounding reasons is not the same as causal knowledge. The faithfulness literature explains why to check.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Product and channel rollouts.</strong> A feature, a fee change or a call-centre script launched in waves across branches or segments: staggered DiD with an event study. See <a href="b6-churn-and-retention-modelling.html">churn and retention</a> for the outcome side and why retention programmes are so easily over-credited.</li>
+          <li><strong>One-off changes to one unit.</strong> A new fraud rule on one channel, a pricing change in one market, a policy change applied to one business line only: synthetic control with placebo inference.</li>
+          <li><strong>Regulatory or market shocks.</strong> Events that hit some segments and not others (for instance a rule that applies to one customer class). Do not assume the comparison group is untouched: check for spill-over and anticipation, and state any uncertainty about what a regulation actually covers.</li>
+          <li><strong>Did the model help?</strong> Post-hoc evaluation of an already deployed credit or collections model when no holdout was kept. A synthetic comparison is far weaker than the holdout you should have kept (see <a href="c1-baselines-what-happens-without-the.html">baselines</a>), but better than a before-and-after chart.</li>
+          <li><strong>Root-cause exploration.</strong> Discovery methods and LLM-drafted graphs for data-quality incidents, alert-volume spikes or arrears drivers, as sources of hypotheses to test, never as a finding.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The quiet revolution of the last few years is that the default tool for panel data was found to be unreliable under common conditions, and a family of fixes became standard in economics, public health and tech. The causal-discovery side moves faster and is less settled, with language models pushing a wave of benchmarks.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two light searches. Items from the search results are marked; older items are cited from the standard literature and from memory, and links go to the main papers.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2003–10</span><div><div class="t">Synthetic control is born</div><p>Abadie and Gardeazabal built a synthetic Basque Country from other Spanish regions to estimate the economic cost of terrorism. Abadie, Diamond and Hainmueller formalised the method and the placebo inference with the California tobacco-tax study.</p><div class="src">Abadie &amp; Gardeazabal, AER, 2003; Abadie, Diamond &amp; Hainmueller, JASA, 2010</div></div></li>
+        <li><span class="yr">2020–21</span><div><div class="t">The two-way regression is shown to be fragile</div><p>Goodman-Bacon decomposed the coefficient into weighted two-by-two comparisons, including forbidden ones. de Chaisemartin and D'Haultfœuille showed negative weights; Callaway and Sant'Anna and Sun and Abraham gave robust estimators.</p><div class="src">Goodman-Bacon; de Chaisemartin &amp; D'Haultfœuille, AER, 2020; Callaway &amp; Sant'Anna; Sun &amp; Abraham, J. Econometrics, 2021</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">Synthetic DiD and augmented synthetic control</div><p>Arkhangelsky et al. combined the two approaches; Ben-Michael, Feller and Rothstein added a bias correction for imperfect pre-fit.</p><div class="src">Arkhangelsky et al., AER, 2021; Ben-Michael et al., JASA, 2021</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Sensitivity, not pre-tests</div><p>Rambachan and Roth's "honest DiD" gives intervals robust to bounded violations of parallel trends. Roth, Sant'Anna, Bilinski and Poe reviewed the literature, which is the best single entry point.</p><div class="src">Rambachan &amp; Roth, REStud, 2023; Roth et al., J. Econometrics, 2023</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Language models and causal pairs</div><p>Kıcıman et al. reported strong accuracy on cause-effect pair benchmarks and graph-discovery tasks, and discussed the role of LLMs as a source of domain knowledge, while stressing unpredictable failures.</p><div class="src">Kıcıman, Ness, Sharma &amp; Tan, arXiv 2305.00050, 2023</div></div></li>
+        <li><span class="yr">2023–24</span><div><div class="t">Correlation to causation as an LLM test</div><p>Jin et al. built Corr2Cause, a benchmark in which a model must infer causal relations from stated correlations using the rules of causal discovery. Models performed near chance and did not generalise well, evidence that fluent causal talk is not causal inference. Cited from memory.</p><div class="src">Jin et al., ICLR 2024 (Corr2Cause)</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Benchmarks for LLMs reading and building graphs</div><p>CausalGraph2LLM (700,000+ queries) tests how well LLMs answer questions when a causal graph is given in text. Work in 2025 and 2026 also benchmarks pairwise discovery in biomedical text, where the best model reached about half of the available score in one early-2026 study.</p><div class="src">NAACL Findings 2025; arXiv 2601.15479, 2026 (as reported in search results)</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Practitioner guides and staggered synthetic control</div><p>A comprehensive practitioner's guide to DiD with staggered treatment (Baker et al.) is listed for the Journal of Economic Literature in 2026. A 2025 comparison of staggered-adoption methods finds current methods tend to under-perform when there are few clusters. Newer papers extend synthetic control inference to staggered adoption. Details are from search snippets and preprints; verify before relying on them.</p><div class="src">Baker et al.; arXiv 2508.14365, 2025; recent preprints on staggered synthetic control</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Active causal discovery with LLM agents</div><p>A benchmark where agents may spend a budget of interventions to uncover a graph reports that a classical PC-based method with a greedy orientation heuristic beat the LLM agents tested (Claude Sonnet 4.6 and GPT-5.4 among them) on directed-edge accuracy, with LLM agents tending to over-commit to edges. This is a recent preprint listing; the arXiv ID looked unusual in the search, so check the paper before quoting numbers.</p><div class="src">arXiv 2609.31675 (preprint, as reported in search results)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is in banking and similar regulated settings:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Simple 2x2 DiD with event-study plot</b></td><td>Standard in tech, public policy and economics for rollouts and policy changes; used in analytics teams at banks for campaign and product evaluation.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Modern staggered-adoption estimators</b></td><td>Callaway-Sant'Anna and imputation estimators in widely used packages; standard expectation in academic and policy work.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Synthetic control for single-unit interventions</b></td><td>Widely used in policy evaluation and by experimentation teams for geo-level tests. Bank use is mostly internal and unpublished.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Sensitivity analysis for parallel trends</b></td><td>Honest-DiD style bounds; growing expectation from reviewers, thin in industry.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Causal discovery on bank data</b></td><td>Exploratory use for hypothesis generation in risk and operations; rarely in a decision chain.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>LLM-drafted causal graphs reviewed by experts</b></td><td>Fast drafting of diagrams and confounder lists with human review; no standard validation procedure yet.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Autonomous LLM causal discovery feeding decisions</b></td><td>Research benchmarks only; current results show brittleness.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Randomise when you can; otherwise use an estimator that never compares with already-treated units, show the pre-period evidence, report how robust the conclusion is to violations, and treat discovered or LLM-drafted graphs as hypotheses for experts to test.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These turn up in vendor decks, internal analyses and AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Choosing a comparison group that was treated differently by design</div><p>"Branches without the feature" are the small, rural, low-footfall ones, because the rollout went to the busiest first. Their trends differ for reasons unrelated to the feature.</p><div class="spot"><b>Spot it</b>Ask how rollout order was decided. If it followed performance or expected benefit, expect non-parallel trends and look hard at the event study.</div></li>
+        <li><div class="t">Declaring parallel trends from a pass on a pre-test</div><p>"The pre-trend test was not significant, so the assumption holds." With few periods that test barely has power.</p><div class="spot"><b>Spot it</b>Ask to see the event-study plot with confidence bands, and how large a pre-trend the data could hide.</div></li>
+        <li><div class="t">Two-way fixed effects on a staggered rollout, effects growing</div><p>The coefficient is small or even the wrong sign while the event study shows a clear rise.</p><div class="spot"><b>Spot it</b>Compare the TWFE coefficient with a Callaway-Sant'Anna or imputation estimate. A big gap means contamination. Ask which units serve as controls.</div></li>
+        <li><div class="t">Anticipation and early announcement</div><p>Customers changed behaviour when the feature was announced, before the official start date. The "pre" period already contains the effect, shrinking the estimate.</p><div class="spot"><b>Spot it</b>Look for movement in the periods just before the launch date, and find out when staff and customers first heard.</div></li>
+        <li><div class="t">Spill-over into the comparison group</div><p>Customers move to or from the treated branch, or one team serves both. The comparison is partly treated.</p><div class="spot"><b>Spot it</b>Ask how separate the units are. Compare the comparison group's trend with a more distant group.</div></li>
+        <li><div class="t">Synthetic control with a poor pre-fit</div><p>A large post-launch gap, but the synthetic line never matched before launch. The gap is a fitting artefact.</p><div class="spot"><b>Spot it</b>Look at the pre-launch fit first. Compare the treated unit's post/pre error ratio with the placebo distribution, as in Simulation 3.</div></li>
+        <li><div class="t">Choosing the donor pool or fit window after seeing the result</div><p>Dropping donors until the answer looks right, or picking the fitting window that gives the biggest gap.</p><div class="spot"><b>Spot it</b>Ask whether the donor list and window were fixed in advance and for the effect of leaving out each donor in turn.</div></li>
+        <li><div class="t">Standard errors treating customers as independent</div><p>Treatment is assigned to branches. Customer-level standard errors are far too small.</p><div class="spot"><b>Spot it</b>Ask at what level errors are clustered and how many clusters there are. Below about 20, ask for a bootstrap or randomisation-based interval.</div></li>
+        <li><div class="t">Treating a discovered graph as a finding</div><p>A causal-discovery run outputs a tidy diagram of arrows. People read it as the bank's causal structure.</p><div class="spot"><b>Spot it</b>Ask which assumptions were used (no hidden confounders, faithfulness, linearity), how stable the graph is across bootstrap resamples, and which arrows are only oriented because of prior knowledge.</div></li>
+        <li><div class="t">LLM-proposed graphs accepted without checks</div><p>The model's graph agrees with the textbook, so it is trusted. It may be recalling general knowledge that does not hold in this customer base, or not know about a measured proxy.</p><div class="spot"><b>Spot it</b>Re-run with differently worded prompts and see if arrows flip. Ask for the reason per arrow. Test the arrows that matter against data or an experiment.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“We didn't run a test, so we compared the branches that got the feature with similar branches that hadn't, looking at how each moved over the same months. That strips out the season and the market. The result is about six extra accounts per thousand customers, but it holds only if the two groups would otherwise have moved together. The months before launch support that, and I'll show a version that allows for some drift. If you can hold back a few branches for the next phase, the answer becomes a lot more solid.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“Rollout was staggered, so I wouldn't use a two-way fixed-effects coefficient, since it can use already-treated branches as controls and bias the estimate when effects build over time. I'd estimate cohort-by-date effects against not-yet-treated or never-treated branches, aggregate to an event study, cluster at branch level, and add a sensitivity analysis on parallel trends. For a single treated unit I'd use synthetic control with pre-fit reported and placebo inference. Anything LLM-drafted in the causal graph goes through expert review first.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just compare before and after?”</summary><div class="ans"><p>Because everything else changed too: seasons, salaries, the market. Before and after attributes all of it to the feature. In Simulation 1 it read about 4 when the true effect was 6, because a seasonal dip happened to cancel part of the trend. It could just as easily have been too high. The comparison group gives us a record of what happened to everyone else over the same months.</p></div></details>
+        <details class="reveal"><summary>“How do you know the two groups would have moved together?”</summary><div class="ans"><p>I can't know; it is an assumption about the world that didn't happen. I can show that they moved together in the months before, that nothing else changed in one group at launch, and how large a divergence would have to be to overturn the conclusion. If none of that is convincing, I'd say the estimate is a hypothesis, not a result.</p></div></details>
+        <details class="reveal"><summary>“Our analyst ran a fixed-effects regression with a treatment dummy. What's wrong with that?”</summary><div class="ans"><p>Nothing, if there was a single launch date or the effect is the same everywhere and at every date. With a staggered rollout and effects that grow, it compares later-treated units with already-treated ones and can understate or even flip the sign. I'd rerun with an estimator that only uses untreated units as comparisons, and compare the two. If they agree, no harm done.</p></div></details>
+        <details class="reveal"><summary>“We changed the card fee in one segment only. Can we measure the impact?”</summary><div class="ans"><p>Plausibly, with a synthetic control built from similar segments: weights chosen to match the segment's pre-change path, then the gap afterwards compared with what happens when each other segment is pretended to be treated. The pre-change fit must be good, and I'd want a long pre-period and a donor pool not affected by the fee. With ten donors, the lowest p-value is around 0.09, so I'd report the size of the effect and how it ranks, not just a significance label.</p></div></details>
+        <details class="reveal"><summary>“Can we ask the LLM to draw the causal diagram for us?”</summary><div class="ans"><p>As a first draft for the experts to correct, yes: it is quick, and it exposes assumptions. As a finding, no. Models recall textbook relationships whether or not they hold in our customers, can change answers with the wording, and cannot see unmeasured variables. I'd have the model give reasons for each arrow, have credit or fraud experts accept or reject each one, and test the ones that drive decisions against data or an experiment.</p></div></details>
+        <details class="reveal"><summary>“Can an algorithm just find what causes defaults in our data?”</summary><div class="ans"><p>It can narrow the possibilities, not settle them. Observational data usually leaves several graphs equally consistent, for instance A causes B causes C versus B causing both. It also assumes no hidden confounders, which is unrealistic in lending. I'd use discovery to suggest candidates, then confirm with domain knowledge and either an experiment or a quasi-experiment.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Treated branches averaged 40 accounts per 1,000 before and 52 after. Comparison branches averaged 45 before and 49 after. What is the DiD, and what does it assume?</summary><div class="ans"><p>(52 − 40) − (49 − 45) = 12 − 4 = <strong>8</strong> accounts per 1,000. It assumes that without the feature, the treated branches would have risen by the same 4 as the comparison branches (parallel trends), with no anticipation and no spill-over.</p></div></details>
+        <details class="reveal"><summary>2. The pre-launch gap between treated and comparison grows by 0.3 each month, and the post-launch period averages 6 months after the pre-period mean. Roughly how much does DiD overstate the effect?</summary><div class="ans"><p>The gap's drift continues, and the average post month sits about 6 months beyond the average pre month, so the bias is about 0.3 × 6 = <strong>1.8</strong> units. This is Simulation 1's rule: bias = hidden trend × distance between the average pre and post months.</p></div></details>
+        <details class="reveal"><summary>3. Why can a two-way fixed effects regression give a negative coefficient when every treated unit benefited?</summary><div class="ans"><p>Some of the comparisons it averages use already-treated units as controls. If their effect is still growing, the later group's gain is measured against a rising baseline and looks smaller, and the weights on some comparisons are negative. With large and growing effects the weighted sum can go below zero (de Chaisemartin and D'Haultfœuille; Goodman-Bacon).</p></div></details>
+        <details class="reveal"><summary>4. Name the three conditions beyond the estimator that a modern staggered-DiD analysis still needs.</summary><div class="ans"><p>Parallel trends (conditional on any covariates used), no anticipation (the pre-period is untouched by the programme), and no spill-over between treated and comparison units. Clustering at the level of treatment assignment is also needed for honest uncertainty.</p></div></details>
+        <details class="reveal"><summary>5. A synthetic control matches the treated cluster poorly before launch (pre-fit error 5, against noise of about 1) but shows a post-launch gap of 8. Is that strong evidence of an effect?</summary><div class="ans"><p>No. A gap has to be judged relative to the pre-fit error: here the post/pre ratio is under 2 and typical placebo ratios could exceed that. Either find a better donor pool or a better pre-fit (or use augmented synthetic control or synthetic DiD), then repeat the placebo test.</p></div></details>
+        <details class="reveal"><summary>6. With 12 units in total (one treated, 11 donors), what is the smallest p-value the placebo test can give?</summary><div class="ans"><p>If the treated unit ranks first of 12 by the post/pre error ratio, the p-value is 1/12 ≈ <strong>0.083</strong>. You cannot get below that without more donors, however large the effect.</p></div></details>
+        <details class="reveal"><summary>7. Which of A → B → C, A ← B → C and A → B ← C can observational data distinguish, and why?</summary><div class="ans"><p>Only the collider A → B ← C is distinguishable from the other two: A and C are independent, but dependent given B. The chain and the fork imply the same thing (A and C dependent, independent given B) so they sit in one Markov equivalence class. Time order or an intervention is needed to separate them.</p></div></details>
+        <details class="reveal"><summary>8. A colleague uses an LLM to produce a causal graph of arrears drivers, and the graph matches the textbook. Why is that not enough?</summary><div class="ans"><p>Matching the textbook shows the model recalls general knowledge, not that those relationships hold in our customers, nor that the model knows about variables we did not list. Answers also vary with the wording. Each arrow that drives a decision needs an expert's reason and a check against data or an experiment.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>A. Abadie, J. Gardeazabal. <a href="https://doi.org/10.1257/000282803321455188">The Economic Costs of Conflict: A Case Study of the Basque Country</a>. American Economic Review, 2003.</li>
+        <li>A. Abadie, A. Diamond, J. Hainmueller. <a href="https://doi.org/10.1198/jasa.2009.ap08746">Synthetic Control Methods for Comparative Case Studies</a>. JASA, 2010.</li>
+        <li>A. Goodman-Bacon. <a href="https://doi.org/10.1016/j.jeconom.2021.03.014">Difference-in-differences with variation in treatment timing</a>. Journal of Econometrics, 2021.</li>
+        <li>B. Callaway, P. Sant'Anna. <a href="https://doi.org/10.1016/j.jeconom.2020.12.001">Difference-in-Differences with multiple time periods</a>. Journal of Econometrics, 2021.</li>
+        <li>L. Sun, S. Abraham. <a href="https://doi.org/10.1016/j.jeconom.2020.09.006">Estimating dynamic treatment effects in event studies with heterogeneous treatment effects</a>. Journal of Econometrics, 2021.</li>
+        <li>C. de Chaisemartin, X. D'Haultfœuille. <a href="https://doi.org/10.1257/aer.20181169">Two-Way Fixed Effects Estimators with Heterogeneous Treatment Effects</a>. American Economic Review, 2020.</li>
+        <li>K. Borusyak, X. Jaravel, J. Spiess. <a href="https://doi.org/10.1093/restud/rdae007">Revisiting Event-Study Designs: Robust and Efficient Estimation</a>. Review of Economic Studies, 2024.</li>
+        <li>D. Arkhangelsky, S. Athey, D. Hirshberg, G. Imbens, S. Wager. <a href="https://doi.org/10.1257/aer.20190159">Synthetic Difference-in-Differences</a>. American Economic Review, 2021.</li>
+        <li>E. Ben-Michael, A. Feller, J. Rothstein. <a href="https://doi.org/10.1080/01621459.2021.1929245">The Augmented Synthetic Control Method</a>. JASA, 2021.</li>
+        <li>A. Rambachan, J. Roth. <a href="https://doi.org/10.1093/restud/rdad018">A More Credible Approach to Parallel Trends</a>. Review of Economic Studies, 2023.</li>
+        <li>J. Roth, P. Sant'Anna, A. Bilinski, J. Poe. <a href="https://doi.org/10.1016/j.jeconom.2023.03.008">What's trending in difference-in-differences? A synthesis of the recent econometrics literature</a>. Journal of Econometrics, 2023.</li>
+        <li>A. Baker et al. <a href="https://psantanna.com/files/DiD_JEL.pdf">Difference-in-Differences Designs: A Practitioner's Guide</a>. Journal of Economic Literature (listed for 2026); working-paper version.</li>
+        <li>P. Spirtes, C. Glymour, R. Scheines. <em>Causation, Prediction, and Search</em>. MIT Press, 2nd ed., 2000.</li>
+        <li>S. Shimizu et al. <a href="https://www.jmlr.org/papers/v7/shimizu06a.html">A Linear Non-Gaussian Acyclic Model for Causal Discovery</a>. JMLR, 2006.</li>
+        <li>X. Zheng, B. Aragam, P. Ravikumar, E. Xing. <a href="https://arxiv.org/abs/1803.01422">DAGs with NO TEARS: Continuous Optimization for Structure Learning</a>. NeurIPS, 2018.</li>
+        <li>A. Reisach, C. Seiler, S. Weichwald. <a href="https://arxiv.org/abs/2102.13647">Beware of the Simulated DAG! Causal Discovery Benchmarks May Be Easy To Game</a>. NeurIPS, 2021.</li>
+        <li>E. Kıcıman, R. Ness, A. Sharma, C. Tan. <a href="https://arxiv.org/abs/2305.00050">Causal Reasoning and Large Language Models: Opening a New Frontier for Causality</a>. arXiv, 2023.</li>
+        <li>Z. Jin et al. <a href="https://arxiv.org/abs/2306.05836">Can Large Language Models Infer Causation from Correlation?</a> (Corr2Cause). ICLR, 2024.</li>
+        <li><a href="https://aclanthology.org/2025.findings-naacl.110.pdf">CausalGraph2LLM: Evaluating LLMs for Causal Queries</a>. Findings of NAACL, 2025.</li>
+        <li><a href="https://arxiv.org/abs/2609.31675">Active Causal Discovery Benchmark: Evaluating LLM Agents Under Budgeted Interventions</a>. arXiv 2609.31675, 2026 (preprint).</li>
+        <li><a href="https://arxiv.org/abs/2508.14365">Comparative Evaluation of Difference in Differences Methods for Staggered Adoption Interventions</a>. arXiv 2508.14365, 2025 (preprint).</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Last in R8: Statistics, causality and experimentation</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  const f1 = v => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1);
+  function mk(box, W, H, label) { box.innerHTML = ""; return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box); }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { let s = seed >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = 0; while (!u) u = r(); const v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+  const mean = (a, i0, i1) => { let s = 0; for (let i = i0; i <= i1; i++) s += a[i]; return s / (i1 - i0 + 1); };
+  // generic frame: returns x,y scales, draws grid + ticks
+  function frame(svg, W, H, m, x0, x1, y0, y1, yt, xt, xlab, ylab) {
+    const x = L.scale(x0, x1, m.l, W - m.r), y = L.scale(y0, y1, H - m.b, m.t);
+    yt.forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" }); });
+    xt.forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    if (xlab) tx(svg, (m.l + W - m.r) / 2, H - 4, xlab, { "text-anchor": "middle" });
+    if (ylab) tx(svg, 11, (m.t + H - m.b) / 2, ylab, { "text-anchor": "middle", transform: `rotate(-90 11 ${(m.t + H - m.b) / 2})` });
+    return { x, y };
+  }
+
+  // =====================================================================
+  // Simulation 1: difference-in-differences
+  // =====================================================================
+  const S1 = { tau: 6, d: 0 };
+  const didBox = $("did-chart"), gapBox = $("did-gap");
+  function renderDid() {
+    const t = Array.from({ length: 12 }, (_, i) => i + 1);
+    const sea = k => 4 * Math.sin(2 * Math.PI * k / 12);
+    const C = t.map(k => 50 + 0.5 * k + sea(k));
+    const T = t.map(k => 60 + (0.5 + S1.d) * k + sea(k) + (k >= 7 ? S1.tau : 0));
+    const gapRaw = t.map((_, i) => T[i] - C[i]);
+    const g0 = mean(gapRaw, 0, 5);
+    const CF = C.map(v => v + g0);
+    const naive = mean(T, 6, 11) - mean(T, 0, 5);
+    const did = naive - (mean(C, 6, 11) - mean(C, 0, 5));
+    const ev = gapRaw.map(v => v - g0);
+    // pre slope (least squares on months 1..6)
+    const mx = 3.5; let sxy = 0, sxx = 0; for (let i = 0; i < 6; i++) { sxy += (i + 1 - mx) * (ev[i]); sxx += (i + 1 - mx) ** 2; }
+    const slope = sxy / sxx;
+    // main chart
+    let W = Math.max(300, didBox.clientWidth), H = 250, m = { l: 40, r: 14, t: 12, b: 34 };
+    let svg = mk(didBox, W, H, "Treated and comparison outcomes by month");
+    const all = T.concat(C, CF), lo = Math.floor(Math.min(...all) / 10) * 10, hi = Math.ceil(Math.max(...all) / 10) * 10;
+    const yt = []; for (let v = lo; v <= hi; v += 10) yt.push(v);
+    let f = frame(svg, W, H, m, 0.5, 12.5, lo, hi, yt, [1, 3, 5, 7, 9, 11], "Month", "Accounts per 1,000");
+    L.svg("rect", { x: f.x(6.5), y: m.t, width: f.x(12.5) - f.x(6.5), height: H - m.b - m.t, class: "post-bg" }, svg);
+    L.svg("line", { x1: f.x(6.5), x2: f.x(6.5), y1: m.t, y2: H - m.b, class: "mark" }, svg);
+    tx(svg, f.x(6.5) + 5, m.t + 11, "launch", { class: "lbl-warn" });
+    L.svg("path", { d: L.path(t.map((k, i) => [f.x(k), f.y(C[i])])), class: "ln-c" }, svg);
+    L.svg("path", { d: L.path(t.map((k, i) => [f.x(k), f.y(CF[i])])), class: "ln-cf" }, svg);
+    L.svg("path", { d: L.path(t.map((k, i) => [f.x(k), f.y(T[i])])), class: "ln-t" }, svg);
+    // effect bracket at month 12
+    L.svg("line", { x1: f.x(12), x2: f.x(12), y1: f.y(CF[11]), y2: f.y(T[11]), class: "arrow", "stroke-width": 3, stroke: "var(--accent)" }, svg);
+    tx(svg, f.x(12) - 6, (f.y(CF[11]) + f.y(T[11])) / 2 + 4, "DiD " + f1(did), { class: "lbl-acc", "text-anchor": "end" });
+    // gap panel
+    const H2 = 150, m2 = { l: 40, r: 14, t: 10, b: 30 };
+    const svg2 = mk(gapBox, W, H2, "Event study: treated minus comparison gap, relative to pre-launch mean");
+    const ext = Math.max(4, Math.ceil(Math.max(...ev.map(Math.abs)) / 2) * 2);
+    const f2 = frame(svg2, W, H2, m2, 0.5, 12.5, -ext, ext, [-ext, 0, ext], [1, 3, 5, 7, 9, 11], "Month (bars: extra gap versus the pre-launch average)", "");
+    L.svg("line", { x1: m2.l, x2: W - m2.r, y1: f2.y(0), y2: f2.y(0), class: "ax" }, svg2);
+    L.svg("line", { x1: f2.x(6.5), x2: f2.x(6.5), y1: m2.t, y2: H2 - m2.b, class: "mark" }, svg2);
+    const bw = Math.max(6, (f2.x(2) - f2.x(1)) * 0.6);
+    ev.forEach((v, i) => { const y0 = f2.y(0), y1 = f2.y(v); L.svg("rect", { x: f2.x(i + 1) - bw / 2, y: Math.min(y0, y1), width: bw, height: Math.max(1, Math.abs(y1 - y0)), class: "gb" + (i < 6 ? " pre" : "") }, svg2); });
+    // stats
+    $("st1-true").textContent = f1(S1.tau);
+    $("st1-naive").textContent = f1(naive); cls($("st1-naive-b"), Math.abs(naive - S1.tau) > 1.5 ? "bad" : "ok");
+    $("st1-did").textContent = f1(did);
+    const bias = did - S1.tau;
+    $("st1-did-s").textContent = Math.abs(bias) < 0.05 ? "matches the truth" : "off by " + f1(bias);
+    cls($("st1-did-b"), Math.abs(bias) < 0.5 ? "ok" : "bad");
+    $("st1-slope").textContent = (slope >= 0 ? "+" : "−") + Math.abs(slope).toFixed(2);
+    const warn = Math.abs(slope) > 0.08;
+    $("s1-verdict").innerHTML = Math.abs(S1.d) < 0.001
+      ? "No hidden trend: Dubai and Abu Dhabi moved in parallel before launch (flat grey bars), so DiD recovers the true effect of <b>" + f1(S1.tau) + "</b>. Before-versus-after says <b>" + f1(naive) + "</b>, because the season and the common trend are mixed in (here a seasonal dip happens to offset part of them, so it could as easily read too high)."
+      : "Dubai was already drifting by <b>" + f1(S1.d * 10) + "/10 a month</b>. DiD adds about drift × 6 months = <b>" + f1(S1.d * 6) + "</b> to the answer. " + (warn ? "The upward slope in the grey pre-launch bars is the visible warning; with real noise it would be much harder to see." : "");
+  }
+  L.bind("s-tau", v => v.toFixed(1), v => { S1.tau = v; renderDid(); });
+  L.bind("s-dtr", v => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2), v => { S1.d = v; renderDid(); });
+
+  // =====================================================================
+  // Simulation 2: staggered adoption
+  // =====================================================================
+  const S2 = { base: 3, k: 0.8 };
+  const stagBox = $("stag-chart");
+  function stagger(base, k) {
+    const T = 12, G = [4, 8, Infinity], FE = [0, 5, 10];
+    const Y = G.map((g, i) => Array.from({ length: T }, (_, j) => { const t = j + 1; return FE[i] + 2 * t + (t >= g ? base + k * (t - g) : 0); }));
+    const D = G.map(g => Array.from({ length: T }, (_, j) => (j + 1 >= g ? 1 : 0)));
+    const n = 3, tot = D.flat().reduce((a, b) => a + b, 0) / (n * T);
+    const rm = D.map(r => r.reduce((a, b) => a + b, 0) / T), cm = Array.from({ length: T }, (_, j) => (D[0][j] + D[1][j] + D[2][j]) / n);
+    let num = 0, den = 0, sE = 0, cnt = 0;
+    for (let i = 0; i < n; i++) for (let j = 0; j < T; j++) { const dt = D[i][j] - rm[i] - cm[j] + tot; num += dt * Y[i][j]; den += dt * dt; if (D[i][j]) { sE += Y[i][j] - (FE[i] + 2 * (j + 1)); cnt++; } }
+    // cohort vs never-treated, base = month before adoption
+    let cs = 0, cc = 0;
+    [0, 1].forEach(i => { const g = G[i]; for (let t = g; t <= T; t++) { cs += (Y[i][t - 1] - Y[i][g - 2]) - (Y[2][t - 1] - Y[2][g - 2]); cc++; } });
+    const forb = (mean(Y[1], 7, 11) - mean(Y[1], 3, 6)) - (mean(Y[0], 7, 11) - mean(Y[0], 3, 6));
+    return { Y, twfe: num / den, truth: sE / cnt, clean: cs / cc, forb };
+  }
+  function renderStag() {
+    const r = stagger(S2.base, S2.k);
+    const W = Math.max(300, stagBox.clientWidth), H = 260, m = { l: 40, r: 56, t: 12, b: 34 };
+    const svg = mk(stagBox, W, H, "Outcomes for early, late and never-treated branch groups");
+    const mx = Math.ceil(Math.max(...r.Y.flat()) / 10) * 10, yt = []; for (let v = 0; v <= mx; v += 10) yt.push(v);
+    const f = frame(svg, W, H, m, 0.5, 12.5, 0, mx, yt, [1, 3, 5, 7, 9, 11], "Month", "Outcome");
+    [3.5, 7.5].forEach(v => L.svg("line", { x1: f.x(v), x2: f.x(v), y1: m.t, y2: H - m.b, class: "mark" }, svg));
+    tx(svg, f.x(3.5) + 4, m.t + 10, "early starts", { class: "lbl-warn" });
+    tx(svg, f.x(7.5) + 4, m.t + 10, "late starts", { class: "lbl-warn" });
+    const cl = ["ln-t", "ln-cf", "ln-c"], nm = ["early", "late", "never"];
+    r.Y.forEach((y, i) => {
+      L.svg("path", { d: L.path(y.map((v, j) => [f.x(j + 1), f.y(v)])), class: cl[i] }, svg);
+      tx(svg, f.x(12) + 5, f.y(y[11]) + 4, nm[i], { class: "lbl-ink" });
+    });
+    $("st2-true").textContent = r.truth.toFixed(2);
+    $("st2-twfe").textContent = r.twfe.toFixed(2);
+    const tw = r.twfe - r.truth;
+    $("st2-twfe-s").textContent = Math.abs(tw) < 0.05 ? "matches the truth" : (tw < 0 ? "understates by " : "overstates by ") + Math.abs(tw).toFixed(2);
+    cls($("st2-twfe-b"), Math.abs(tw) > 0.1 * Math.max(1, Math.abs(r.truth)) ? "bad" : "ok");
+    $("st2-clean").textContent = r.clean.toFixed(2); cls($("st2-clean-b"), Math.abs(r.clean - r.truth) < 0.05 ? "ok" : "warn");
+    $("st2-forb").textContent = r.forb.toFixed(2); cls($("st2-forb-b"), Math.abs(r.forb - r.truth) > 0.1 * Math.max(1, Math.abs(r.truth)) ? "bad" : "ok");
+    $("s2-verdict").innerHTML = S2.k < 0.02
+      ? "Effects are constant over time (growth 0), so every method agrees: <b>" + r.truth.toFixed(2) + "</b>. The old regression is only dangerous when effects change with time since adoption."
+      : "True average effect <b>" + r.truth.toFixed(2) + "</b>. The two-way regression reports <b>" + r.twfe.toFixed(2) + "</b> because it partly compares the late group with the early group, whose effect is still rising. That one comparison alone gives <b>" + r.forb.toFixed(2) + "</b>. Comparing each cohort only with never-treated branches recovers <b>" + r.clean.toFixed(2) + "</b>.";
+  }
+  L.bind("s-base", v => v.toFixed(1), v => { S2.base = v; renderStag(); });
+  L.bind("s-grow", v => v.toFixed(2), v => { S2.k = v; renderStag(); });
+
+  // =====================================================================
+  // Simulation 3: synthetic control
+  // =====================================================================
+  const scBox = $("sc-chart"), scGapBox = $("sc-gap");
+  const S3 = { eff: 6, pre: 24, unus: false };
+  function projSimplex(v) { const u = [...v].sort((a, b) => b - a); let css = 0, th = 0; for (let i = 0; i < u.length; i++) { css += u[i]; const t = (css - 1) / (i + 1); if (u[i] - t > 0) th = t; } return v.map(x => Math.max(x - th, 0)); }
+  function solve(X, y) {
+    const J = X[0].length; let Lc = 0; X.forEach(r => r.forEach(v => Lc += v * v));
+    let w = Array(J).fill(1 / J), z = w.slice(), tk = 1;
+    for (let it = 0; it < 500; it++) {
+      const g = Array(J).fill(0);
+      X.forEach((r, t) => { let p = -y[t]; for (let j = 0; j < J; j++) p += r[j] * z[j]; for (let j = 0; j < J; j++) g[j] += r[j] * p; });
+      const wn = projSimplex(z.map((v, j) => v - g[j] / Lc)), tn = (1 + Math.sqrt(1 + 4 * tk * tk)) / 2;
+      z = wn.map((v, j) => v + ((tk - 1) / tn) * (v - w[j])); w = wn; tk = tn;
+    }
+    return w;
+  }
+  const dataCache = {};
+  function build(unusual) {
+    if (dataCache[unusual]) return dataCache[unusual];
+    const r = rng(7), T = 36, J = 10;
+    const f1s = Array.from({ length: T }, (_, t) => 0.5 * t + 3 * Math.sin(2 * Math.PI * t / 12));
+    const f2s = [0]; for (let t = 1; t < T; t++) f2s.push(f2s[t - 1] + gauss(r) * 1.2);
+    const units = []; for (let j = 0; j < J; j++) units.push({ a: 90 + gauss(r) * 8, l1: 0.6 + r() * 0.8, l2: gauss(r) * 1.2 });
+    const own = u => Array.from({ length: T }, (_, t) => u.a + u.l1 * f1s[t] + u.l2 * f2s[t] + gauss(r) * 0.8);
+    const donors = units.map(own);
+    const mix = [0.5, 0.3, 0.2], ids = [1, 4, 7]; let tu = { a: 0, l1: 0, l2: 0 };
+    ids.forEach((id, i) => { tu.a += mix[i] * units[id].a; tu.l1 += mix[i] * units[id].l1; tu.l2 += mix[i] * units[id].l2; });
+    if (unusual) tu = { a: tu.a + 8, l1: tu.l1 * 1.7, l2: tu.l2 * 1.8 };
+    return (dataCache[unusual] = { donors, treated: own(tu), T, J });
+  }
+  function fit(donors, y, P) {
+    const s = 24 - P, X = []; for (let t = s; t < 24; t++) X.push(donors.map(c => c[t]));
+    const w = solve(X, y.slice(s, 24)); const syn = y.map((_, t) => donors.reduce((a, c, j) => a + w[j] * c[t], 0));
+    let a = 0, b = 0; for (let t = s; t < 24; t++) a += (y[t] - syn[t]) ** 2; for (let t = 24; t < 36; t++) b += (y[t] - syn[t]) ** 2;
+    const pre = Math.sqrt(a / P), post = Math.sqrt(b / 12);
+    return { w, syn, pre, ratio: post / pre, gap: y.map((v, t) => v - syn[t]) };
+  }
+  function renderSc() {
+    const d = build(S3.unus), y = d.treated.map((v, t) => v + (t >= 24 ? S3.eff : 0));
+    const main = fit(d.donors, y, S3.pre);
+    const plc = d.donors.map((c, i) => fit(d.donors.filter((_, k) => k !== i), c, S3.pre));
+    const rank = 1 + plc.filter(p => p.ratio >= main.ratio).length;
+    const est = mean(main.gap, 24, 35);
+    // main chart
+    const W = Math.max(300, scBox.clientWidth), H = 240, m = { l: 44, r: 14, t: 12, b: 34 };
+    const svg = mk(scBox, W, H, "Treated cluster and its synthetic control");
+    const all = y.concat(main.syn), lo = Math.floor(Math.min(...all) / 10) * 10, hi = Math.ceil(Math.max(...all) / 10) * 10;
+    const yt = []; for (let v = lo; v <= hi; v += 10) yt.push(v);
+    const f = frame(svg, W, H, m, 1, 36, lo, hi, yt, [1, 6, 12, 18, 24, 30, 36], "Month", "Spend index");
+    L.svg("rect", { x: f.x(24.5), y: m.t, width: f.x(36) - f.x(24.5), height: H - m.b - m.t, class: "post-bg" }, svg);
+    L.svg("line", { x1: f.x(24.5), x2: f.x(24.5), y1: m.t, y2: H - m.b, class: "mark" }, svg);
+    tx(svg, f.x(24.5) + 5, m.t + 11, "launch", { class: "lbl-warn" });
+    if (S3.pre < 24) { L.svg("line", { x1: f.x(24 - S3.pre + 0.5), x2: f.x(24 - S3.pre + 0.5), y1: m.t, y2: H - m.b, class: "mark", opacity: .5 }, svg); tx(svg, f.x(24 - S3.pre + 0.5) + 4, H - m.b - 6, "fit window starts", { class: "lbl-ink" }); }
+    L.svg("path", { d: L.path(main.syn.map((v, t) => [f.x(t + 1), f.y(v)])), class: "ln-cf" }, svg);
+    L.svg("path", { d: L.path(y.map((v, t) => [f.x(t + 1), f.y(v)])), class: "ln-t" }, svg);
+    // gap chart
+    const H2 = 190, m2 = { l: 44, r: 14, t: 10, b: 30 };
+    const svg2 = mk(scGapBox, W, H2, "Gap between each unit and its synthetic control, treated and placebos");
+    const ext = Math.max(10, Math.ceil(Math.max(...main.gap.map(Math.abs), 8) / 5) * 5);
+    const f2 = frame(svg2, W, H2, m2, 1, 36, -ext, ext, [-ext, 0, ext], [1, 6, 12, 18, 24, 30, 36], "Month (gap = unit minus its synthetic control)", "Gap");
+    L.svg("line", { x1: m2.l, x2: W - m2.r, y1: f2.y(0), y2: f2.y(0), class: "ax" }, svg2);
+    L.svg("line", { x1: f2.x(24.5), x2: f2.x(24.5), y1: m2.t, y2: H2 - m2.b, class: "mark" }, svg2);
+    plc.forEach(p => L.svg("path", { d: L.path(p.gap.map((v, t) => [f2.x(t + 1), f2.y(L.clamp(v, -ext, ext))])), class: "ln-pl" }, svg2));
+    L.svg("path", { d: L.path(main.gap.map((v, t) => [f2.x(t + 1), f2.y(L.clamp(v, -ext, ext))])), class: "ln-gap" }, svg2);
+    // stats
+    $("st3-est").textContent = (est >= 0 ? "+" : "−") + Math.abs(est).toFixed(1);
+    $("st3-est-s").textContent = "true effect " + (S3.eff >= 0 ? "+" : "−") + Math.abs(S3.eff);
+    $("st3-fit").textContent = main.pre.toFixed(1); const poor = main.pre > 2.5; cls($("st3-fit-b"), poor ? "bad" : "ok");
+    $("st3-rank").textContent = rank + " of 11"; $("st3-rank-s").textContent = "placebo p about " + (rank / 11).toFixed(2);
+    cls($("st3-rank-b"), poor ? "warn" : (rank <= 2 ? "ok" : ""));
+    const top = main.w.map((v, j) => [v, j]).sort((a, b) => b[0] - a[0]).slice(0, 3).filter(a => a[0] > 0.005);
+    $("st3-w").innerHTML = top.map(a => "D" + (a[1] + 1) + " " + pct(a[0])).join("<br>");
+    $("s3-verdict").innerHTML = poor
+      ? "<b>Do not trust this.</b> The pre-launch fit error is " + main.pre.toFixed(1) + ", several times the noise of about 0.8: no blend of donors reaches this unit (blends cannot extrapolate beyond the donors). The post-launch gap of " + f1(est) + " mixes the effect with the fitting error. Fix the donor pool, or use augmented synthetic control or synthetic DiD."
+      : (rank === 1
+        ? "Good fit before launch (error " + main.pre.toFixed(1) + ") and the post/pre error ratio is the <b>largest of all 11 units</b>: a gap this big would arise by chance in about 1 of 11 placebo runs, the smallest p-value this design allows. Estimated effect <b>" + f1(est) + "</b> against a true " + S3.eff + "."
+        : "Good pre-fit, but the treated unit ranks <b>" + rank + " of 11</b> on the post/pre error ratio: " + (rank - 1) + " donor" + (rank === 2 ? "" : "s") + " with no treatment at all show equally large or larger post-launch gaps. The estimate of " + f1(est) + " is not distinguishable from chance. " + (S3.pre < 12 ? "A shorter fitting window also leaves more room for overfitting." : ""));
+  }
+  L.bind("s-eff", v => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v), v => { S3.eff = v; renderSc(); });
+  L.bind("s-pre", v => v + " months", v => { S3.pre = v; renderSc(); });
+  $("b-unus").addEventListener("click", e => { S3.unus = !S3.unus; e.currentTarget.setAttribute("aria-pressed", String(S3.unus)); renderSc(); });
+
+  // =====================================================================
+  // Simulation 4: causal discovery on three variables
+  // =====================================================================
+  const S4 = { s: "chain", str: 0.7, n: 3.3, know: false };
+  const discBox = $("disc-chart");
+  const NN = 5000, rr = rng(11);
+  const eA = Array.from({ length: NN }, () => gauss(rr)), eB = Array.from({ length: NN }, () => gauss(rr)), eC = Array.from({ length: NN }, () => gauss(rr));
+  const CAP = {
+    chain: "Example: A = salary credit delayed, B = overdraft use, C = missed card payment. The delay causes overdraft use, which causes the missed payment.",
+    fork: "Example: B = local economic downturn, A = job-loss claims, C = falling card spend. One hidden-in-plain-sight cause drives both.",
+    collider: "Example: A = stolen card details, C = compromised device, B = fraud alert fires. Two independent causes both raise the alert. Among alerted cases they look negatively related."
+  };
+  function corr(a, b, n) { let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0; for (let i = 0; i < n; i++) { sa += a[i]; sb += b[i]; saa += a[i] * a[i]; sbb += b[i] * b[i]; sab += a[i] * b[i]; } const cov = sab / n - sa * sb / n / n; return cov / Math.sqrt((saa / n - sa * sa / n / n) * (sbb / n - sb * sb / n / n)); }
+  const part = (rxy, rxz, ryz) => (rxy - rxz * ryz) / Math.sqrt((1 - rxz * rxz) * (1 - ryz * ryz));
+  function gen() {
+    const s = S4.str, A = new Array(NN), B = new Array(NN), C = new Array(NN);
+    for (let i = 0; i < NN; i++) {
+      if (S4.s === "chain") { A[i] = eA[i]; B[i] = s * A[i] + eB[i]; C[i] = s * B[i] + eC[i]; }
+      else if (S4.s === "fork") { B[i] = eB[i]; A[i] = s * B[i] + eA[i]; C[i] = s * B[i] + eC[i]; }
+      else { A[i] = eA[i]; C[i] = eC[i]; B[i] = s * A[i] + s * C[i] + eB[i]; }
+    }
+    return { A, B, C };
+  }
+  function renderDisc() {
+    const n = Math.round(Math.pow(10, S4.n)), d = gen();
+    const rab = corr(d.A, d.B, n), rbc = corr(d.B, d.C, n), rac = corr(d.A, d.C, n);
+    const pab = part(rab, rac, rbc), pbc = part(rbc, rac, rab), pac = part(rac, rab, rbc);
+    const dep = (r, k) => Math.abs(Math.atanh(L.clamp(r, -0.9999, 0.9999))) * Math.sqrt(n - 3 - k) > 1.96;
+    const adj = { AB: dep(rab, 0) && dep(pab, 1), BC: dep(rbc, 0) && dep(pbc, 1), AC: dep(rac, 0) && dep(pac, 1) };
+    const ne = Object.values(adj).filter(Boolean).length;
+    let classes = [], note = "", dirs = null;
+    const legsOf = adj.AB && adj.BC && !adj.AC ? "ABC" : null;
+    if (ne === 3) { note = "All three pairs stay dependent whatever you condition on: the skeleton is complete and no orientation follows from these tests (six acyclic orderings fit)."; classes = ["any of the 6 orderings of the three variables"]; }
+    else if (legsOf) {
+      if (!dep(rac, 0)) { classes = ["A → B ← C (a collider)"]; note = "A and C are independent until B is conditioned on, which is the one signature the data can orient."; dirs = "collider"; }
+      else { classes = ["A → B → C", "A ← B ← C", "A ← B → C"]; note = "A and C are dependent, but independent given B. Three graphs imply exactly this; observational data cannot separate them."; dirs = "mec"; }
+    } else if (ne === 2) { note = "Two edges found, but not a path through B: a different pair of variables is linked. Shown as an unlabelled skeleton."; classes = ["skeleton only (see edges)"]; }
+    else { note = "At most one edge survives: the tests lack the power (weak arrows or small sample) to see the structure that is really there."; classes = ["no usable structure"]; }
+    let knowTxt = "";
+    if (S4.know) {
+      if (dirs === "collider") knowTxt = "Time order A, C before B agrees with the collider: unchanged.";
+      else if (dirs === "mec") knowTxt = "With 'A before B before C' the equivalence class collapses to <b>A → B → C</b>." + (S4.s === "fork" ? " <b>But in this world the truth is a fork (B causes both)</b>, so the knowledge was wrong and the answer is confidently wrong. The data fit both equally." : "");
+      else knowTxt = "Time order alone cannot rescue a structure the tests did not find.";
+    }
+    // diagram
+    const W = Math.max(300, discBox.clientWidth), H = 150;
+    const svg = mk(discBox, W, H, "Graph consistent with the data");
+    L.svg("defs", {}, svg).innerHTML = '<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="var(--ink)"/></marker>';
+    const px = { A: W * 0.18, B: W * 0.5, C: W * 0.82 }, py = { A: 85, B: 85, C: 85 }, bw = 44, bh = 34;
+    const tr = [["A", "B", adj.AB], ["B", "C", adj.BC], ["A", "C", adj.AC]];
+    // direction: "f" = first -> second, "b" = second -> first, null = undetermined
+    const dirOf = (u, v) => {
+      if (S4.know && dirs) return "f";
+      if (dirs === "collider") return u === "A" ? "f" : "b";
+      return null;
+    };
+    tr.forEach(([u, v, on]) => {
+      if (!on) return;
+      const x1 = px[u] + bw / 2, x2 = px[v] - bw / 2, y1 = py[u], y2 = py[v], dr = dirOf(u, v);
+      const attrs = { class: "arrow" + (dr ? "" : " und") };
+      if (dr === "f") attrs["marker-end"] = "url(#ah)";
+      if (dr === "b") attrs["marker-start"] = "url(#ah)";
+      if (u === "A" && v === "C") L.svg("path", Object.assign({ d: `M${px.A},${y1 - bh / 2} C${px.A + 30},${y1 - 80} ${px.C - 30},${y1 - 80} ${px.C},${y2 - bh / 2}` }, attrs), svg);
+      else L.svg("line", Object.assign({ x1, y1, x2, y2 }, attrs), svg);
+    });
+    ["A", "B", "C"].forEach(k => {
+      const g = L.svg("g", { class: "node" }, svg);
+      L.svg("rect", { x: px[k] - bw / 2, y: py[k] - bh / 2, width: bw, height: bh, rx: 8 }, g);
+      tx(g, px[k], py[k] + 5, k, { "text-anchor": "middle", class: "lbl-strong" });
+    });
+    tx(svg, 8, 16, "Dashed orange line: edge found, direction undetermined. Solid arrow: direction implied.", { class: "lbl-ink" });
+    // table
+    const f2 = v => (v >= 0 ? " " : "") + v.toFixed(2);
+    let html = '<table class="data"><thead><tr><th>Test</th><th>Correlation</th><th>Verdict</th></tr></thead><tbody>';
+    html += `<tr><td>A and C, ignoring B</td><td>${rac.toFixed(2)}</td><td>${dep(rac, 0) ? "dependent" : "independent"}</td></tr>`;
+    html += `<tr><td>A and C, given B (partial)</td><td>${pac.toFixed(2)}</td><td>${dep(pac, 1) ? "dependent" : "independent"}</td></tr>`;
+    html += `<tr><td>A–B edge (dependent both ways?)</td><td>${rab.toFixed(2)} / ${pab.toFixed(2)}</td><td>${adj.AB ? "edge" : "no edge"}</td></tr>`;
+    html += `<tr><td>B–C edge</td><td>${rbc.toFixed(2)} / ${pbc.toFixed(2)}</td><td>${adj.BC ? "edge" : "no edge"}</td></tr>`;
+    html += `<tr><td><b>Graphs consistent with the data</b></td><td colspan="2"><b>${classes.join(" &nbsp;or&nbsp; ")}</b></td></tr></tbody></table>`;
+    $("disc-table").innerHTML = html;
+    const truthTxt = { chain: "A → B → C", fork: "A ← B → C", collider: "A → B ← C" }[S4.s];
+    const hit = classes.some(c => c.replace(/\(.*\)/, "").trim() === truthTxt) ;
+    $("s4-verdict").innerHTML = note + " The true structure here is <b>" + truthTxt + "</b>" + (ne >= 3 || classes[0].startsWith("no") || classes[0].startsWith("skeleton") ? ", which the tests could not pin down." : (hit ? ", and it is among the candidates, but " + (classes.length > 1 ? "it is one of " + classes.length + " graphs the data cannot tell apart." : "uniquely identified.") : ".")) + (knowTxt ? " " + knowTxt : "");
+    $("s4-cap").textContent = CAP[S4.s];
+  }
+  L.bind("s-str", v => v.toFixed(2), v => { S4.str = v; renderDisc(); });
+  L.bind("s-n", v => L.fmtInt(Math.round(Math.pow(10, v))), v => { S4.n = v; renderDisc(); });
+  document.querySelectorAll("#tg-struct button[data-s]").forEach(b => b.addEventListener("click", () => {
+    S4.s = b.dataset.s; document.querySelectorAll("#tg-struct button[data-s]").forEach(x => x.setAttribute("aria-pressed", String(x === b))); renderDisc();
+  }));
+  $("b-know").addEventListener("click", e => { S4.know = !S4.know; e.currentTarget.setAttribute("aria-pressed", String(S4.know)); renderDisc(); });
+
+  function all() { renderDid(); renderStag(); renderSc(); renderDisc(); }
+  all();
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(all, 150); });
+})();
+</script>
+</body>
+</html>

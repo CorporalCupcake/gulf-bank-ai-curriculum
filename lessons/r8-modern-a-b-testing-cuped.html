@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Modern Experimentation: CUPED, Anytime-Valid Tests, Interference and Off-Policy Evaluation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-bad { fill: var(--bad) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .pt { fill: var(--neutral); fill-opacity: .7; }
+  .pt-a { fill: var(--accent); fill-opacity: .75; }
+  .pt-w { fill: var(--warn); fill-opacity: .6; }
+  .pt-b { fill: var(--bad); fill-opacity: .6; }
+  .ln-fit { stroke: var(--ink); stroke-width: 1.6; fill: none; }
+  .ln-ref { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .ln-acc { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .ln-bad { stroke: var(--bad); stroke-width: 2.6; fill: none; }
+  .ln-ink { stroke: var(--ink); stroke-width: 1.6; stroke-dasharray: 4 3; fill: none; }
+  .band { fill: var(--accent); fill-opacity: .16; }
+  .band-w { fill: var(--warn); fill-opacity: .16; }
+  .band-b { fill: var(--bad); fill-opacity: .16; }
+  .hb-n { fill: var(--warn); fill-opacity: .75; }
+  .hb-s { fill: var(--accent); fill-opacity: .75; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track R · Research frontier: AI, ML and data science</span>
+    <span>Module R8 · Statistics, causality and experimentation</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>R8.3 · R8.4</span>
+        <span class="pill n">90 days</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Modern Experimentation: CUPED, Anytime-Valid Tests, Interference and Off-Policy Evaluation</h1>
+      <p class="dek">How to get the same answer from a third fewer customers, how to look at a running test without cheating, what breaks when customers share a scarce resource, and how to judge a new decision policy from old logs.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A classic A/B test wastes information (it ignores what you knew about each customer before the test), forbids peeking, assumes customers do not affect each other, and needs a live experiment for every idea; the modern toolkit fixes each of these, and each fix comes with a condition that you must check rather than assume.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A Gulf bank wants to know whether a new app nudge ("you are AED 200 short of your monthly goal") raises card spend. The textbook test (F2.3, F3.6) is simple: split customers at random, wait four weeks, compare average spend. It works, and it has four quiet weaknesses. This lesson is one fix for each.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Weakness of the classic test</th><th>What it costs you</th><th>The modern fix</th></tr></thead>
+          <tbody>
+            <tr><td><b>It ignores what you already know.</b> A customer who spent AED 15,000 last month will spend a lot this month whatever you do.</td><td>Huge customer-to-customer noise hides a modest effect, so you need many customers or many weeks.</td><td><b>CUPED</b>: subtract the part of each customer's result that their own history predicts.</td></tr>
+            <tr><td><b>It forbids looking.</b> Check daily, stop when it turns significant, and your 5% error rate is really 20-30%.</td><td>Either you wait for a fixed date, or you cheat without knowing it.</td><td><b>Anytime-valid inference</b> and <b>e-values</b>: tests that stay honest however often you look.</td></tr>
+            <tr><td><b>It assumes customers do not affect each other.</b> If treated customers use up appointment slots, control customers get fewer.</td><td>The measured difference can be large and the true effect of rolling out zero.</td><td><b>Cluster randomisation</b> and <b>switchbacks</b>: randomise the unit that actually interacts, such as a branch or a time block.</td></tr>
+            <tr><td><b>It needs a live test for every idea.</b> You cannot try twenty collections policies on real customers.</td><td>Slow, costly, and sometimes not allowed.</td><td><b>Off-policy evaluation</b>: estimate how a new policy would have done, using logs of the old one.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Two ideas run through all four.</p>
+        <ul>
+          <li><strong>Information is the currency.</strong> Every technique here either squeezes more signal from the same customers (CUPED), lets you act as soon as the evidence is strong enough (sequential tests), or reuses data you already paid for (off-policy evaluation).</li>
+          <li><strong>Every gain rests on an assumption you can break.</strong> CUPED needs the covariate to be measured before treatment. Sequential tests need the right stopping rule. Cluster and switchback designs need the interference to stay inside the unit. Off-policy evaluation needs the old policy to have tried what the new one wants to do. The skill is knowing the assumption, not the formula.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>The randomised experiment is still the gold standard. These methods do not replace it. They make it cheaper, safer to monitor, correct when customers interact, and let you shortlist ideas before spending a live test on them.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-cuped">CUPED: variance reduction from pre-experiment data</h3>
+      <div class="prose">
+        <p>The comparison of two group means is noisy mostly because customers differ from each other, not because of the nudge. Some spend AED 2,000 a month, some AED 15,000. That spread is already visible <em>before</em> the test starts. CUPED (Controlled-experiment Using Pre-Experiment Data; Deng et al., 2013) uses it.</p>
+        <p>Let <i>Y</i> be a customer's spend during the test and <i>X</i> their spend in the four weeks before it. Replace <i>Y</i> with an adjusted value:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>Y</mi><mtext>cuped</mtext></msub><mo>=</mo><mi>Y</mi><mo>−</mo><mi>θ</mi><mo stretchy="false">(</mo><mi>X</mi><mo>−</mo><mover><mi>X</mi><mo>¯</mo></mover><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"></mspace><mi>θ</mi><mo>=</mo><mfrac><mrow><mi>Cov</mi><mo stretchy="false">(</mo><mi>X</mi><mo>,</mo><mi>Y</mi><mo stretchy="false">)</mo></mrow><mrow><mi>Var</mi><mo stretchy="false">(</mo><mi>X</mi><mo stretchy="false">)</mo></mrow></mfrac></math>
+        <p class="where"><i>θ</i> is the slope of a regression of <i>Y</i> on <i>X</i>, and <i>X̄</i> is the average of <i>X</i> over <em>both arms combined</em>. The adjustment shifts each customer's result by the amount their history predicts. Because <i>X</i> was measured before assignment, it cannot differ between arms except by chance, so the average treatment effect is unchanged (no bias) while the spread of the adjusted values shrinks to</p>
+        <math display="block"><mi>Var</mi><mo stretchy="false">(</mo><msub><mi>Y</mi><mtext>cuped</mtext></msub><mo stretchy="false">)</mo><mo>=</mo><mi>Var</mi><mo stretchy="false">(</mo><mi>Y</mi><mo stretchy="false">)</mo><mo>·</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><msup><mi>ρ</mi><mn>2</mn></msup><mo stretchy="false">)</mo></math>
+        <p class="where"><i>ρ</i> is the correlation between pre-test and in-test spend. With ρ = 0.7, the variance falls by 49%. Since the sample size needed for a given precision is proportional to variance, you need about <strong>half the customers</strong>, or you reach the same answer in half the time.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>This is ordinary regression adjustment (F2.5) in disguise: the treatment effect from "regress <i>Y</i> on treatment and <i>X</i>" is essentially CUPED. The experimenter's version is popular because it is simple to run at scale in SQL and easy to explain: "we remove the predictable part of each customer's behaviour." In a randomised test, adding covariates is safe because treatment is independent of them, so it can only help precision.</p>
+      </div>
+
+      <figure class="figure" id="fig-cuped">
+        <div class="fig-head"><span class="fig-title">Take out what history already explains</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> set the correlation to 0.7 and press <b>Adjust</b>. The cloud collapses from a diagonal band onto a flat one: same average, much less spread. Then drag the correlation to 0.2 and see how little is gained. The numbers below show what that buys in precision and in customers.</p>
+        <div class="btns" role="group" aria-label="Adjustment">
+          <button class="btn" type="button" id="b-adj" aria-pressed="false">Adjust for pre-test spend</button>
+        </div>
+        <div class="chart-wrap" id="cuped-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--neutral)"></i>One customer (illustrative sample of 150)</span>
+          <span><i style="background:var(--ink)"></i>What history predicts</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-rho">Correlation between pre-test and in-test spend <output for="s-rho"></output></label><input type="range" id="s-rho" min="0" max="0.95" step="0.05" value="0.6"></div>
+          <div class="ctl"><label for="s-n1">Customers per arm <output for="s-n1"></output></label><input type="range" id="s-n1" min="2.5" max="4.5" step="0.05" value="3.5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Spread of spend (sd)</div><div class="v" id="st1-sd"></div><div class="s" id="st1-sd-s"></div></div>
+          <div class="stat"><div class="k">95% interval on the difference, ±</div><div class="v" id="st1-ci"></div><div class="s" id="st1-ci-s"></div></div>
+          <div class="stat" id="st1-n-b"><div class="k">Customers per arm to detect AED 100</div><div class="v" id="st1-n"></div><div class="s" id="st1-n-s"></div></div>
+          <div class="stat"><div class="k">Effective extra customers</div><div class="v" id="st1-x"></div><div class="s">for free, from the same data</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: monthly card spend with mean AED 6,000 and standard deviation AED 1,800 (a normal approximation; real spend is skewed). The 150 dots are one seeded random draw; the interval and sample-size figures are exact formulae: ±1.96·σ·√(2/n), and n = 2(1.96 + 0.84)²σ²(1 − ρ²)/δ² for 80% power at a 5% two-sided test.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What to remember when you use it.</p>
+        <ul>
+          <li><strong>The covariate must come from before assignment.</strong> A pre-period metric is safe. Anything measured after the nudge could itself be changed by it, and adjusting for it biases the result. This is point-in-time discipline (<a href="f3-leakage-point-in-time.html">F3.1</a>) applied to experiments.</li>
+          <li><strong>The gain is set by ρ.</strong> Spend, balances and logins usually correlate strongly with their own past; one-off outcomes such as "took a new product this month" do not, so CUPED may give almost nothing. Measure ρ before promising anything.</li>
+          <li><strong>New customers have no history.</strong> Give them <i>X</i> = the average and an indicator, or use other pre-test traits. The method still works; it just helps less for them.</li>
+          <li><strong>Skewed metrics need care.</strong> A few very large spenders drive both the variance and θ. Cap extreme values at a percentile, or work on a log scale, before adjusting.</li>
+          <li><strong>You can use more than one covariate, or a model.</strong> CUPAC (the name used by DoorDash) replaces <i>X</i> with a machine-learning prediction of the outcome trained on pre-test data, and the same recipe works with several covariates. The more of <i>Y</i> the prediction explains, the larger the gain. Post-stratification and regression adjustment are close cousins.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-seq">Looking early without cheating: anytime-valid tests and e-values</h3>
+      <div class="prose">
+        <p>A p-value is built for one look at a pre-planned sample size. Look more often and each look is another chance to see a fluke. A daily check across a 30-day test turns a nominal 5% error rate into something like 25-30%, because random noise wanders across the line at some point (<a href="f2-tests-pvalues-power.html">F2.3, F2.4</a> cover the logic of tests and multiple chances). Business people do look, and they do stop early when a dashboard turns green. The question is how to make that legitimate.</p>
+        <p>There are three families of answer.</p>
+        <ul>
+          <li><strong>Group-sequential designs</strong> (classical, from clinical trials). Decide in advance on, say, four looks and spend the 5% error budget across them with a stricter threshold at each. Reliable and well understood, but you must fix the schedule.</li>
+          <li><strong>Always-valid p-values and confidence sequences</strong> (Johari et al.; Howard et al.). A confidence interval that is valid at every sample size simultaneously, so you can look continuously. The price is a wider interval than a fixed-sample one at any given moment.</li>
+          <li><strong>E-values</strong> (Grünwald, Ramdas and others). A different foundation: a bet against the null hypothesis.</li>
+        </ul>
+        <p>An <strong>e-value</strong> is a number <i>E</i> ≥ 0 whose expected value is at most 1 if the null is true. Think of it as the wealth of a gambler who stakes one dirham against "no effect" and wins when the data surprise the null. Under the null, big wealth is rare: by Markov's inequality, the chance that <i>E</i> ever reaches 1/α is at most α. So "reject when <i>E</i> ≥ 20" is a 5% test, and an e-value of 20 means the bet grew twentyfold.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>E</mi><mi>n</mi></msub><mo>=</mo><mfrac><mn>1</mn><msqrt><mrow><mn>1</mn><mo>+</mo><mi>n</mi><msup><mi>τ</mi><mn>2</mn></msup></mrow></msqrt></mfrac><mo>·</mo><mi>exp</mi><mo stretchy="false">(</mo><mfrac><mrow><msup><mi>τ</mi><mn>2</mn></msup><msubsup><mi>S</mi><mi>n</mi><mn>2</mn></msubsup></mrow><mrow><mn>2</mn><mo stretchy="false">(</mo><mn>1</mn><mo>+</mo><mi>n</mi><msup><mi>τ</mi><mn>2</mn></msup><mo stretchy="false">)</mo></mrow></mfrac><mo stretchy="false">)</mo></math>
+        <p class="where">A standard example for comparing two means with known unit variance (a "normal mixture" test, related to the mSPRT of Johari et al.). <i>S<sub>n</sub></i> is the running sum of standardised differences after <i>n</i> units of information, and τ² is how large an effect you consider plausible (a prior width). This <i>E<sub>n</sub></i> averages likelihood ratios over all effect sizes, so it has expectation exactly 1 at every <i>n</i> under the null. That property makes it a "martingale", and it is what makes stopping at any time legitimate. Choosing a different τ² changes power but never validity.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Three properties make e-values attractive in practice. They <strong>survive optional stopping and continuation</strong>: you may stop whenever you like, or extend a test, and the guarantee holds. Evidence from <strong>independent experiments multiplies</strong>: two studies with <i>E</i> = 4 and 5 give 20, which is the clean way to combine a pilot and a rollout. And they <strong>stay interpretable</strong> ("20 to 1 against the null" is easier to explain than "p = 0.049 after four peeks"). The honest cost: at a fixed planned sample size they need stronger evidence than the classical test, so you gain flexibility and lose some power. The simulation shows both sides.</p>
+      </div>
+
+      <figure class="figure" id="fig-seq">
+        <div class="fig-head"><span class="fig-title">Peek daily and the error rate quietly balloons</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> with the effect at 0 (no real change, an A/A test) and a look every day, the orange line climbs far above the 5% line: roughly a quarter of A/A tests "find" something. Slide the look interval to 30 and it falls to 5%. The e-value line (green) stays low whatever you do. Now raise the effect to 3 and see what honesty costs in speed.</p>
+        <div class="chart-wrap" id="seq-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Classic test at each look, stop if p &lt; 0.05</span>
+          <span><i style="background:var(--accent)"></i>E-value test, stop when E ≥ 20</span>
+          <span><i style="background:var(--muted)"></i>5% error budget</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-look">Look at the dashboard <output for="s-look"></output></label><input type="range" id="s-look" min="0" max="5" step="1" value="0"></div>
+          <div class="ctl"><label for="s-eff">True effect: expected z-score by day 30 <output for="s-eff"></output></label><input type="range" id="s-eff" min="0" max="4" step="0.25" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st2-p-b"><div class="k">Classic test, stopping at any look</div><div class="v" id="st2-p"></div><div class="s" id="st2-p-s"></div></div>
+          <div class="stat"><div class="k">Classic test, one look at day 30</div><div class="v" id="st2-f"></div><div class="s">the planned design</div></div>
+          <div class="stat" id="st2-e-b"><div class="k">E-value test, looking every day</div><div class="v" id="st2-e"></div><div class="s" id="st2-e-s"></div></div>
+          <div class="stat"><div class="k">E-value: average day it stops</div><div class="v" id="st2-d"></div><div class="s">among tests that stop</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: 400 experiments, 30 days, each day adding the same amount of information. Effect 0 means no real difference, so every flag is a false alarm. Effect z means the classic test's z-score would average z on day 30. The e-value uses τ² = 0.01 per unit of information and rejects at E ≥ 20. One seeded sample, so percentages carry about ±2 to ±3 points of sampling error.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two practical notes. First, <strong>sequential testing is also a safety feature</strong>: a harmful treatment (a bad pricing message, a broken checkout) can be stopped early without ruining the statistics. Second, the same ideas power <strong>safe stopping for guardrail metrics</strong> (complaints, failed payments) that you want to watch continuously while the main metric is read once. Several commercial experimentation platforms now ship some form of sequential testing; check the vendor's documentation for exactly which method they use.</p>
+      </div>
+
+      <h3 class="sub" id="m-interf">When customers interact: interference, clusters and switchbacks</h3>
+      <div class="prose">
+        <p>A standard test relies on SUTVA, the "stable unit treatment value assumption" (<a href="f9-causal-inference.html">F9</a> covers causal inference more broadly). In plain terms: one customer's result depends only on their own assignment, not on what anybody else got. When it fails you have <strong>interference</strong> or <strong>spillover</strong>, and a customer-level A/B test can be badly wrong, not just noisy.</p>
+        <p>Where this happens in a bank:</p>
+        <ul>
+          <li><strong>Shared capacity.</strong> Relationship-manager appointment slots, collections agents, call-centre callbacks, a fixed pool of fraud analysts. Give treated customers a better chance of a slot and control customers lose out.</li>
+          <li><strong>Limited budgets and inventory.</strong> A cashback pot, a promotional rate quota, a fixed number of new-card allocations.</li>
+          <li><strong>Networks.</strong> Peer-to-peer transfers, referral bonuses, household accounts, salary-advance products spreading by word of mouth. A treated customer influences untreated friends.</li>
+          <li><strong>Adversaries.</strong> Fraudsters adapt. Block one pattern for half the traffic and the attack may simply shift to the other half. Control customers then look worse than they would in a world where everything is blocked.</li>
+          <li><strong>Prices and markets.</strong> Anything that moves a shared price, such as an auction, a margin or an FX spread.</li>
+        </ul>
+        <p>The danger is a precise one. The test estimates "treated customers versus control customers who live in the same crowded world". The decision you face is "everyone gets it versus nobody gets it". Those can differ wildly. The simulation below makes it concrete.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Design</th><th>What is randomised</th><th>Fixes</th><th>Costs and cautions</th></tr></thead>
+          <tbody>
+            <tr><td><b>Customer-level A/B</b></td><td>Individual customers.</td><td>Nothing: assumes no interference.</td><td>Biased when customers compete for a resource or influence each other, and the bias can be large and confident.</td></tr>
+            <tr><td><b>Cluster randomisation</b></td><td>Whole groups: branches, regions, advisor books, households, or communities found in a transaction graph (graph cluster randomisation; Ugander et al., 2013).</td><td>Spillover that stays inside the cluster.</td><td>Far fewer independent units, so wide intervals. Clusters must truly contain the interaction. With 20 branches you have a 20-unit experiment.</td></tr>
+            <tr><td><b>Switchback</b></td><td>Time blocks. The <em>whole</em> system is on treatment for a day, then off for a day, in a random order (Bojinov, Simchi-Levi and Zhao, 2023).</td><td>Interference between simultaneous customers, since at any moment everyone is treated alike.</td><td>Carryover: today's treatment leaks into tomorrow. Day-to-day shocks become noise. Cannot be used if switching is disruptive to customers or regulators.</td></tr>
+            <tr><td><b>Two-sided or budget-split designs</b></td><td>Both sides of a marketplace, or budget shares.</td><td>Competition for a shared resource, by estimating the effect at several treatment shares.</td><td>Needs bespoke modelling; used in large marketplaces more than in banks.</td></tr>
+            <tr><td><b>Staggered rollout / geo test</b></td><td>When a region goes live.</td><td>Operational constraints.</td><td>Analysed with difference-in-differences or synthetic control (<a href="r8-synthetic-control-and-modern-difference.html">R8.5-R8.6</a>), which have their own assumptions.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Switchbacks buy validity with <strong>block length</strong> as the dial. Short blocks give many repeats and little noise from slow-moving trends, but more of each block is contaminated by the previous state (carryover). Long blocks are clean but give few independent comparisons. Practitioners handle carryover by discarding the first part of each block (a "burn-in"), by modelling it explicitly, or by designing blocks longer than the memory of the system.</p>
+      </div>
+
+      <figure class="figure" id="fig-interf">
+        <div class="fig-head"><span class="fig-title">A confident answer to the wrong question</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> leave the defaults. Orange: 300 repeated customer-level tests all say the nudge lifts appointment bookings by about 17 points, with almost no scatter. Green: the same 300 experiments run as switchbacks centre near the true all-or-nothing effect of 2 points, but are noisier. Now raise carryover to 0.5 and shorten the blocks to one day: the green estimate slides below the truth. Longer blocks fix that.</p>
+        <div class="chart-wrap" id="interf-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--warn);opacity:.75"></i>Customer-level test, 300 repeats</span>
+          <span><i class="sq" style="background:var(--accent);opacity:.75"></i>Switchback, 300 repeats</span>
+          <span><i style="background:var(--ink)"></i>True effect of switching everyone on</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-q">Share of customers treated (customer-level test) <output for="s-q"></output></label><input type="range" id="s-q" min="0.05" max="0.95" step="0.05" value="0.5"></div>
+          <div class="ctl"><label for="s-lam">Priority boost: treated customers book this many times faster <output for="s-lam"></output></label><input type="range" id="s-lam" min="0" max="3" step="0.1" value="1"></div>
+          <div class="ctl"><label for="s-blk">Switchback block length <output for="s-blk"></output></label><input type="range" id="s-blk" min="0" max="4" step="1" value="2"></div>
+          <div class="ctl"><label for="s-car">Carryover: share of a block's first day still in the old state <output for="s-car"></output></label><input type="range" id="s-car" min="0" max="0.8" step="0.1" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-n-b"><div class="k">Customer-level estimate</div><div class="v" id="st3-n"></div><div class="s" id="st3-n-s"></div></div>
+          <div class="stat" id="st3-s-b"><div class="k">Switchback estimate, average</div><div class="v" id="st3-s"></div><div class="s" id="st3-s-s"></div></div>
+          <div class="stat"><div class="k">True effect of rolling out to everyone</div><div class="v" id="st3-t"></div><div class="s">the decision you actually face</div></div>
+          <div class="stat"><div class="k">Treated vs control booking rate</div><div class="v" id="st3-r"></div><div class="s">inside the split customer-level test</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: 1,000 eligible customers a day compete for appointment slots; base capacity is 25% and treatment raises it by 2 points when applied to all (so the true rollout effect is 2 points). In a split test, a treated customer's chance of a slot is s·(1 + λ)/(1 + qλ) and a control customer's is s/(1 + qλ), where s = 0.25 + 0.02q is the capacity share. Day-level demand shocks (sd 3 points, autocorrelated) hit everyone equally. Switchbacks run 28 days; exactly half the blocks are treated, in random order. Each histogram is scaled to its own tallest bar.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Notice what is and is not wrong with the customer-level test. It is not "noisy": its 300 repeats agree almost perfectly. That is the trap. A very tight interval around the wrong quantity looks like strong evidence. Only the <em>design</em> can protect you, not more data. Notice also that the answer depends on the treated share <i>q</i>: a 5% pilot overstates the benefit less than a 50% split but still overstates it, and the effect of "everyone treated" is not recoverable from a single split without a model of how customers compete.</p>
+        <p>Checklist before trusting a customer-level test: is there a shared, scarce resource? Does the treatment change how customers reach it? Do treated and control customers share a queue, a budget or a network? If yes to any, plan a cluster or switchback design, or at least run the test at two different treated shares and see whether the estimate moves.</p>
+      </div>
+
+      <h3 class="sub" id="m-ope">Off-policy evaluation: judging a new policy from old logs</h3>
+      <div class="prose">
+        <p>A <strong>policy</strong> is a rule that maps a customer's situation to an action: which offer to show, whether to call, how large a limit increase to give. Banks accumulate years of logs of "situation, action taken, outcome". The question: if we had used a different policy, what would the outcome have been? Answering it from the logs, without deploying, is <strong>off-policy evaluation</strong> (OPE).</p>
+        <p>It is hard for one reason. You only see the outcome of the action that was taken. If the old policy never offered the premium card to high-risk customers, the logs say nothing about how they would have responded. This is the missing-counterfactual problem of causal inference (F9), and OPE is its decision-making version. Three estimators, each balancing bias and variance differently:</p>
+        <ul>
+          <li><strong>Direct method (DM).</strong> Fit a model <i>r̂</i>(<i>x</i>, <i>a</i>) predicting the reward for each customer and action, then ask it what the new policy would have earned. Low variance, but it is only as good as the model, especially for actions the logs rarely contain.</li>
+          <li><strong>Importance weighting (IPS, inverse propensity scoring).</strong> Keep only the logged rows where the old action happens to match what the new policy would do, and re-weight them by how unlikely that action was under the old policy. Unbiased, but variance explodes when the weights are large.</li>
+          <li><strong>Doubly robust (DR).</strong> Start from the model, then correct it with weighted residuals. It stays accurate if <em>either</em> the model or the logged probabilities are right.</li>
+        </ul>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mover><mi>V</mi><mo>^</mo></mover><mtext>IPS</mtext></msub><mo>=</mo><mfrac><mn>1</mn><mi>n</mi></mfrac><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover><mfrac><mrow><msub><mi>π</mi><mn>1</mn></msub><mo stretchy="false">(</mo><msub><mi>a</mi><mi>i</mi></msub><mo>|</mo><msub><mi>x</mi><mi>i</mi></msub><mo stretchy="false">)</mo></mrow><mrow><msub><mi>π</mi><mn>0</mn></msub><mo stretchy="false">(</mo><msub><mi>a</mi><mi>i</mi></msub><mo>|</mo><msub><mi>x</mi><mi>i</mi></msub><mo stretchy="false">)</mo></mrow></mfrac><msub><mi>r</mi><mi>i</mi></msub></math>
+        <p class="where">π<sub>0</sub> is the old (logging) policy, π<sub>1</sub> the new one, and <i>r<sub>i</sub></i> the observed reward. If the new policy is deterministic, only rows where the logged action equals its choice survive, each scaled by 1/π<sub>0</sub>. Example: if the old policy offered the premium card to a customer type with probability 5%, each matching row counts 20 times. The estimator is unbiased provided π<sub>0</sub> was truly random enough (see below) and you recorded its probabilities. The doubly robust version replaces <i>r<sub>i</sub></i> with <i>r̂</i>(<i>x<sub>i</sub></i>, π<sub>1</sub>) + w<sub>i</sub>(<i>r<sub>i</sub></i> − <i>r̂</i>(<i>x<sub>i</sub></i>, <i>a<sub>i</sub></i>)), where w<sub>i</sub> is the weight above.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The conditions that matter, in order of how often they bite:</p>
+        <ul>
+          <li><strong>Overlap (positivity).</strong> Whatever the new policy would do must have had a non-zero chance of being tried in the logs. If the old rule was deterministic ("high-risk customers never get offer 2"), the data are silent and no estimator can recover the answer without assumptions. This is why teams keep a small randomised exploration share: it is the price of being able to evaluate later.</li>
+          <li><strong>Logged propensities.</strong> You need π<sub>0</sub>(<i>a</i>|<i>x</i>), either recorded at decision time (best) or estimated from the logs (then it is a model, with a model's errors).</li>
+          <li><strong>No unmeasured confounding.</strong> The logging policy's choices may depend on things you did not record. If the call centre rang the customers it "had a feeling" about, the logs mix its judgement into the outcome (F2.6).</li>
+          <li><strong>Effective sample size.</strong> High weights mean few rows do the work. A useful quantity is (Σw)² / Σw², the number of equally-weighted rows that would give the same variance. The simulation shows it collapsing when exploration is thin.</li>
+          <li><strong>Stable world.</strong> Logs describe customers as they were. If behaviour shifts, or the policy changes the customers' environment, the estimate drifts (F7).</li>
+        </ul>
+        <p>Practical variants: <em>clip</em> the weights at a ceiling (introduces small bias, cuts variance); <em>self-normalise</em> by dividing by the sum of weights rather than <i>n</i> (stabilises when many rows get a low weight); report intervals by bootstrapping the logged rows (<a href="f2-uncertainty-intervals-bootstrap.html">F2.2</a>). For sequential decisions over many steps (collections plans over months), the weights multiply across steps and variance grows rapidly, which is why long-horizon OPE is still a research problem.</p>
+      </div>
+
+      <figure class="figure" id="fig-ope">
+        <div class="fig-head"><span class="fig-title">Judging a policy nobody ran</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> keep the model error at +5 points and compare. The direct method (top) is precise and wrong. Importance weighting (middle) is centred on the truth but wide. Doubly robust (bottom) is centred and a bit tighter. Now drop the exploration share to 2%: the weights get huge and everything but the model becomes useless. Set model error to 0 and the direct method wins, as it should: it is only dangerous when the model is wrong.</p>
+        <div class="chart-wrap" id="ope-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>True value of the new policy</span>
+          <span><i style="background:var(--muted)"></i>Old policy as it ran</span>
+          <span><i class="sq" style="background:var(--accent);opacity:.3"></i>Middle 90% of 150 repeated log samples</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Customers in the log <output for="s-n"></output></label><input type="range" id="s-n" min="2" max="3.7" step="0.05" value="3.3"></div>
+          <div class="ctl"><label for="s-eps">Exploration: share of decisions where old policy tried something else <output for="s-eps"></output></label><input type="range" id="s-eps" min="0.02" max="0.3" step="0.01" value="0.1"></div>
+          <div class="ctl"><label for="s-err">Reward-model error on rarely-tried offers <output for="s-err"></output></label><input type="range" id="s-err" min="-0.1" max="0.1" step="0.01" value="0.05"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Logged rows matching the new policy</div><div class="v" id="st4-m"></div><div class="s">these carry the IPS and DR corrections</div></div>
+          <div class="stat" id="st4-dm-b"><div class="k">Direct method: average error</div><div class="v" id="st4-dm"></div><div class="s" id="st4-dm-s"></div></div>
+          <div class="stat" id="st4-ips-b"><div class="k">Importance weighting: spread</div><div class="v" id="st4-ips"></div><div class="s" id="st4-ips-s"></div></div>
+          <div class="stat" id="st4-dr-b"><div class="k">Doubly robust: spread</div><div class="v" id="st4-dr"></div><div class="s" id="st4-dr-s"></div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: 70% low-risk and 30% high-risk customers; three offers (none, standard, premium). The chance that the customer takes up the offer and repays on time is 5/20/30% for low risk and 4/10/2% for high risk. The old policy offers "standard" to low risk and "none" to high risk, trying each other offer with probability ε/2. The new policy offers "premium" to everyone, so its true value is 0.7·0.30 + 0.3·0.02 = 21.6%. The reward model is exact except for a fixed error you set on the offers the old policy rarely used. 150 seeded repeats of the log.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The picture makes the central trade-off visible. You can have a model that is precise but possibly biased, or weights that are unbiased but noisy, and doubly robust estimators try to keep the best of both. They do <em>not</em> remove the need for overlap: if the old policy never tried the new action, the weights are infinite and the estimate leans entirely on the model, with nothing to correct it. In this toy, the new policy premium-offers high-risk customers, who rarely saw it; it looks fine on average because the model errs in the same direction everywhere. In a real portfolio, errors differ by segment and the harm can concentrate in the segment you least wanted to hurt.</p>
+        <p>In practice OPE is a <strong>screening tool</strong>. It tells you which three of thirty candidate policies deserve a live test, and gives a rough size of the prize. It rarely replaces the test for a decision with real money or customer impact, and it must report an interval. Open-source toolkits and benchmark data (the Open Bandit Pipeline, for example) exist for trying the estimators on realistic logs.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson sits on top of the statistics foundations and leads towards causal estimation from non-experimental data.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F3.6 · Experiments</span><span class="t"><a href="f3-experiments-and-writeups.html">The classic design this lesson upgrades</a></span><p>Randomisation, unit of analysis, guardrails and sample ratio checks. Everything here assumes you can already run and write up a clean A/B test.</p></div>
+        <div class="link-card"><span class="code">F2.3 · F2.4 · F2.7 · Tests and power</span><span class="t"><a href="f2-tests-pvalues-power.html">Why peeking inflates errors</a></span><p>The multiple-chances logic behind Simulation 2. CUPED is, in effect, a way to buy power without more customers.</p></div>
+        <div class="link-card"><span class="code">F2.1 · F2.2 · Intervals and the bootstrap</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">Putting error bars on everything</a></span><p>Bootstrapping logged rows gives intervals for off-policy estimates; confidence sequences are the always-valid version of an interval.</p></div>
+        <div class="link-card"><span class="code">F2.5 · Regression</span><span class="t"><a href="f2-regression-glms.html">CUPED is regression adjustment</a></span><p>The same slope θ appears as the coefficient on the pre-period covariate when you regress the outcome on treatment and history.</p></div>
+        <div class="link-card"><span class="code">F2.6 · Confounding and selection</span><span class="t"><a href="f2-confounding-simpson-selection.html">What logs hide</a></span><p>OPE assumes the old policy chose actions using only the variables you recorded. When staff acted on hunches, the logs are confounded.</p></div>
+        <div class="link-card"><span class="code">F3.1 · Point-in-time correctness</span><span class="t"><a href="f3-leakage-point-in-time.html">Covariates must precede treatment</a></span><p>A CUPED covariate measured even slightly after assignment can bias the estimate. The discipline is the same as for model features.</p></div>
+        <div class="link-card"><span class="code">F9 · Causal inference, bandits and RL</span><span class="t"><a href="f9-causal-inference.html">The wider causal toolkit</a></span><p>Potential outcomes underlie everything here. <a href="f9-bandits-and-reinforcement-learning.html">Bandits and reinforcement learning</a> generate the exploratory logs that off-policy evaluation needs.</p></div>
+        <div class="link-card"><span class="code">R8.1 – R8.2 · Conformal prediction and DML</span><span class="t"><a href="r8-conformal-prediction.html">Next-door methods</a></span><p>Double/debiased machine learning uses the same "model plus weighted residual" structure as the doubly robust estimator and is the route to heterogeneous treatment effects.</p></div>
+        <div class="link-card"><span class="code">R8.5 – R8.6 · Synthetic control and DiD</span><span class="t"><a href="r8-synthetic-control-and-modern-difference.html">When you cannot randomise at all</a></span><p>A regional rollout with no control group needs these. Switchbacks and cluster tests are the randomised alternative when you can control timing.</p></div>
+        <div class="link-card"><span class="code">B6 · Churn, propensity and uplift</span><span class="t"><a href="b6-churn-and-retention-modelling.html">Where experiments feed models</a></span><p>Uplift models are trained on randomised offers; the quality of that experiment sets the ceiling of the model.</p></div>
+        <div class="link-card"><span class="code">P2 · Deployment patterns</span><span class="t"><a href="p2-deployment-patterns-batch-real-time.html">Shadow and canary are experiments too</a></span><p>A canary rollout is a staged test that benefits from sequential monitoring and guardrails.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>App and notification nudges, offer design, onboarding flows.</strong> Classic CUPED territory: lots of customers, noisy spend, strong history. A 30-50% saving in test duration is realistic when pre-post correlation is high.</li>
+          <li><strong>Contact-centre scripts and collections strategies.</strong> Shared agent capacity makes interference real. Randomise by team, branch or time block rather than by customer, or test at two treated shares.</li>
+          <li><strong>Fraud and AML alert models.</strong> A new model changes the analyst queue and the fraudsters' behaviour. Customer-level splits understate how much a full rollout changes the world, and labels arrive late (F3.5). Use sequential monitoring for harm; use time-block or channel-level designs where you can.</li>
+          <li><strong>Credit limits, pricing and next-best-action.</strong> Cost and fairness constraints make live tests hard, and decisions are policy-shaped. OPE helps shortlist candidate policies from existing logs, provided the old policy explored enough. Take any plan to randomise credit decisions through compliance and legal first.</li>
+          <li><strong>Pilot governance.</strong> For model risk, being able to say "we pre-registered the stopping rule and the guardrails" is much stronger than "we looked when it seemed ready".</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Variance reduction and sequential testing are mainstream in large online experimentation platforms. Anytime-valid inference has grown into a mature statistical theory. Interference-aware design is an active area, and off-policy evaluation has a strong theory for single decisions and a much weaker one for long sequences.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Not freshly searched for this page: the dated items below are well-established landmarks I am confident about from memory. Check the most recent proceedings (KDD, NeurIPS, ICML, Annals of Statistics, Management Science) for 2025-26 developments before quoting "latest" results.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2011</span><div><div class="t">Doubly robust policy evaluation</div><p>Dudík, Langford and Li combined a reward model with importance weighting so that the estimate is correct if either part is. The foundation of most modern OPE.</p><div class="src">Dudík et al., ICML 2011; Li et al., WSDM 2011 (replay evaluation for news recommendation)</div></div></li>
+        <li><span class="yr">2013</span><div><div class="t">CUPED, and graph cluster randomisation</div><p>Microsoft's team published CUPED, showing roughly halved variance on real metrics in some cases. The same year, Ugander and colleagues proposed randomising clusters of a network to limit spillover.</p><div class="src">Deng, Xu, Kohavi, Walker, WSDM 2013; Ugander et al., KDD 2013</div></div></li>
+        <li><span class="yr">2015-16</span><div><div class="t">Learning and evaluating from logged bandit feedback</div><p>Counterfactual risk minimisation and the self-normalised estimator made importance weighting more stable. Thomas and Brunskill extended doubly robust estimation to multi-step reinforcement learning.</p><div class="src">Swaminathan &amp; Joachims, ICML and NeurIPS 2015; Thomas &amp; Brunskill, ICML 2016</div></div></li>
+        <li><span class="yr">2017</span><div><div class="t">Causal effects under general interference</div><p>Aronow and Samii gave a framework for estimating average effects when units influence each other through an exposure mapping.</p><div class="src">Aronow &amp; Samii, Annals of Applied Statistics, 2017</div></div></li>
+        <li><span class="yr">2015-22</span><div><div class="t">Always-valid inference</div><p>Johari and colleagues designed A/B tests that remain valid under continuous monitoring (preprint 2015, journal version 2022). Howard, Ramdas and others developed nonparametric confidence sequences (2021).</p><div class="src">Johari et al., Operations Research, 2022; Howard et al., Annals of Statistics, 2021</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">A practitioner's textbook</div><p>Kohavi, Tang and Xu codified the industrial state of the art: sample ratio checks, variance reduction, interference and long-term effects.</p><div class="src">Kohavi, Tang &amp; Xu, Trustworthy Online Controlled Experiments, Cambridge University Press</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">Open data for OPE</div><p>The Open Bandit Dataset and Pipeline provide logs from a real fashion e-commerce service with randomised policies, so estimators can be compared against ground truth.</p><div class="src">Saito et al., NeurIPS Datasets and Benchmarks, 2021</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Switchbacks formalised, and the e-value programme</div><p>Bojinov, Simchi-Levi and Zhao gave a design-based theory of switchback experiments, including optimal block lengths under carryover. Ramdas, Grünwald, Vovk and Shafer surveyed game-theoretic statistics, e-values and safe anytime-valid inference as a unified foundation.</p><div class="src">Bojinov et al., Management Science, 2023; Ramdas et al., Statistical Science, 2023</div></div></li>
+        <li><span class="yr">2022-</span><div><div class="t">Open problems</div><p>Long-horizon OPE with limited overlap, interference on real transaction networks, combining e-values with variance reduction, and experimentation in settings with adaptive adversaries such as fraud. Treat claims of general solutions with caution.</p><div class="src">Survey: Uehara, Shi &amp; Kallus, arXiv 2022 (OPE in reinforcement learning)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically (my judgement; adoption inside banks is rarely published):</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>CUPED / regression adjustment</b></td><td>Pre-period spend or activity as a covariate in digital-channel tests.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Group-sequential monitoring</b></td><td>Planned interim looks with stricter thresholds; guardrail monitoring.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Branch- or region-level randomisation</b></td><td>Randomising by branch or advisor team when customers share staff.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Always-valid p-values and confidence sequences</b></td><td>Offered by some experimentation platforms; banks with digital-first teams adopt gradually.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>E-value based testing</b></td><td>Mostly in academic and a few industrial settings; attractive for combining evidence across pilots.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Switchback experiments</b></td><td>Common in ride-hailing and delivery. In banks, a fit for shared-capacity operations such as call-back queues, where operations allow it.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Off-policy evaluation of one-step decisions</b></td><td>Offer and recommendation policies screened on logs before live tests.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Off-policy evaluation of long-horizon policies</b></td><td>Collections or credit-line management as multi-step RL; research on variance and confounding is ongoing.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Adjust for pre-test data by default, choose a monitoring rule before the test starts, randomise at the level where customers actually interact, and use logged-data evaluation to shortlist rather than to decide.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in vendor claims and in AI-generated analyses alike. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">CUPED with a post-treatment covariate</div><p>"Adjusted for the customer's logins" where logins were counted during the test, and the nudge affects logins.</p><div class="spot"><b>Spot it</b>Ask for the date range of every covariate. All of it must end before assignment. Check that the covariate is balanced across arms.</div></li>
+        <li><div class="t">Promising a variance cut without measuring ρ</div><p>"CUPED halves the sample size" for a binary outcome with a weak pre-period link.</p><div class="spot"><b>Spot it</b>Ask for the pre-post correlation on historical data. The reduction is 1 − ρ²; at ρ = 0.3 it is 9%.</div></li>
+        <li><div class="t">Peeking with a fixed-sample test</div><p>The dashboard shows p-values daily and the team stops when p drops below 0.05.</p><div class="spot"><b>Spot it</b>Ask when the stopping rule was fixed and how many looks occurred. Run an A/A test through the same process and see how often it "wins".</div></li>
+        <li><div class="t">Declaring e-value tests "free" of cost</div><p>Claiming that sequential methods are strictly better.</p><div class="spot"><b>Spot it</b>Compare the sample size needed for the same power against a fixed-horizon plan. Anytime-validity costs some speed if you would only have looked once.</div></li>
+        <li><div class="t">Customer-level split with a shared resource</div><p>A tight, large effect on a product that draws on limited slots, budget, queue time or a network.</p><div class="spot"><b>Spot it</b>Ask what the control group experiences. If treated customers can use up something control customers need, rerun with a different treated share; if the estimate moves, there is interference.</div></li>
+        <li><div class="t">Clusters that leak</div><p>Randomising by branch, when customers use several branches and the app.</p><div class="spot"><b>Spot it</b>Measure what share of a customer's activity occurs outside their assigned cluster. High leakage means the design only partly isolates arms.</div></li>
+        <li><div class="t">Switchback carryover ignored</div><p>Daily flipping on a metric that responds slowly, such as balances or churn.</p><div class="spot"><b>Spot it</b>Plot the metric around switch points. If it takes days to settle, use longer blocks or drop a burn-in period.</div></li>
+        <li><div class="t">OPE without overlap</div><p>Evaluating a new policy whose actions the old policy never took, with a flexible model filling the gap.</p><div class="spot"><b>Spot it</b>For each segment, tabulate how often the logged policy took the new policy's action. Zero cells mean the estimate is model opinion.</div></li>
+        <li><div class="t">Unlogged or guessed propensities</div><p>Weights computed from a model of "what the policy probably did" when staff actually used judgement.</p><div class="spot"><b>Spot it</b>Ask how π<sub>0</sub> was recorded. If it was estimated, the estimator inherits that model's errors; check whether weights are extreme.</div></li>
+        <li><div class="t">Reporting a point estimate from OPE</div><p>"The new policy would raise acceptance by 3.1 points" from heavy weights on a few rows.</p><div class="spot"><b>Spot it</b>Ask for an interval and the effective sample size. If a handful of rows carry most of the weight, treat the result as a hypothesis.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To a product or business lead · 30 seconds</span>
+          <blockquote>“We can usually finish this test about a third sooner by using each customer's own spending history to remove the noise that has nothing to do with the nudge. I'd also like us to agree the stopping rule up front, so that checking the dashboard mid-test doesn't weaken the result. And since agents have limited time, I'd split the test by team, not by customer, otherwise the group getting the nudge simply takes appointments from the group that doesn't.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“For randomised digital tests I'd use regression-adjusted estimators with pre-period covariates, which are CUPED in effect, with the covariate window fixed before assignment and ρ checked on history. Monitoring would use a pre-registered group-sequential or anytime-valid procedure, such as a mixture e-process, with guardrails monitored continuously. Where customers share capacity I'd move to cluster or switchback randomisation and report the block length and any carryover treatment. For policy changes I'd screen candidates with doubly robust off-policy estimates, but only where logged propensities exist and overlap is adequate, with bootstrap intervals and an effective sample size, and then confirm the shortlist live.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Isn't CUPED just a trick that changes the answer?”</summary><div class="ans"><p>It does not change the expected effect; it removes noise. Because the adjustment uses data from before assignment, which is independent of treatment by randomisation, the estimate stays unbiased while its variance shrinks by a factor 1 − ρ². It is regression with a pre-period covariate. If it changes the point estimate a lot, that is a sign that the arms were imbalanced on history by chance, which is exactly what it should correct.</p></div></details>
+        <details class="reveal"><summary>“Can we stop the test as soon as it looks significant?”</summary><div class="ans"><p>Not with a standard p-value: each look is another chance for noise, and a daily check on a 30-day test makes a nominal 5% error rate more like a quarter. We have two honest options: pre-plan interim looks with a stricter threshold, or use a sequential or e-value test that is valid at any stopping time. The latter needs somewhat more evidence than a single planned look, so we trade a little power for flexibility.</p></div></details>
+        <details class="reveal"><summary>“What is an e-value in one sentence?”</summary><div class="ans"><p>A number that is on average at most 1 if nothing is going on, so if it reaches 20 the data are twenty times more surprising than chance would allow, and that holds however many times and whenever we look. Evidence from independent tests can be multiplied.</p></div></details>
+        <details class="reveal"><summary>“The A/B test shows +17 points on bookings. Why won't you recommend rollout?”</summary><div class="ans"><p>Because bookings draw on a fixed pool of appointment slots. The treated customers can only be booking faster by taking slots the control customers would have had. The 17 points is the gap between two groups sharing a crowded system, not the gain from improving the system. I'd rerun as a switchback or by team and measure total bookings and wait times for everyone.</p></div></details>
+        <details class="reveal"><summary>“Can we evaluate the new collections policy using last year's data instead of a pilot?”</summary><div class="ans"><p>Maybe for screening, if last year's policy had some randomness, we recorded its probabilities, and it tried the actions the new policy wants. I'd check overlap by segment first. If the old rules were deterministic, the data cannot answer the question. If it passes, I'd report a doubly robust estimate with an interval and effective sample size, shortlist the best two, and test those live.</p></div></details>
+        <details class="reveal"><summary>“Why are the intervals so wide on the off-policy estimate?”</summary><div class="ans"><p>Because only the logged rows that match the new policy do the work, each scaled up by the inverse of how unlikely it was under the old one. If the old policy rarely did that, a few rows carry large weights and the effective sample size is small. More logs or a bit of deliberate exploration in the current policy would fix it; a fancier estimator would not.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Pre-test and in-test spend correlate at 0.6. By how much does CUPED cut the variance, the width of the interval, and the customers needed?</summary><div class="ans"><p>Variance falls by ρ² = 36%, to 64% of the original. The interval width scales with the square root, so ×0.8: a 20% narrower interval. The sample size needed is proportional to variance, so 36% fewer customers.</p></div></details>
+        <details class="reveal"><summary>2. Why is it safe to adjust for pre-test spend but not for in-test logins?</summary><div class="ans"><p>Pre-test spend was fixed before random assignment, so it is independent of treatment and cannot create bias. In-test logins can be changed by the treatment itself; adjusting for them removes part of the real effect (or introduces selection) and biases the estimate.</p></div></details>
+        <details class="reveal"><summary>3. You look at a 5% test every day for 30 days and stop at the first p &lt; 0.05. Roughly how often will a test with no real effect be called a winner?</summary><div class="ans"><p>Very roughly a quarter to a third (the simulation shows about 26%). Repeated looks give noise many chances to cross the line, so the overall false-positive rate is far above the nominal 5%.</p></div></details>
+        <details class="reveal"><summary>4. A test ends with an e-value of 12. At what error level can you reject the null? Can you reject at 5%?</summary><div class="ans"><p>The null can be rejected at level 1/12 ≈ 8.3%. At 5% you need E ≥ 20, so no. You may keep collecting data and multiply in further independent evidence, because e-values remain valid when a test is continued.</p></div></details>
+        <details class="reveal"><summary>5. 250 appointment slots exist for 1,000 customers. A feature gives treated customers priority. Half are treated. Explain why the treated group's booking rate rises, and why the total does not.</summary><div class="ans"><p>The number of slots is fixed, so total bookings are capped at 25% of customers. Priority only changes who gets them: the treated group's rate rises, the control group's falls, and the average stays about 25%. A customer-level test reports the gap between the groups, even though rolling out to everyone would leave the total unchanged.</p></div></details>
+        <details class="reveal"><summary>6. What is the trade-off when choosing the block length of a switchback?</summary><div class="ans"><p>Short blocks give many comparisons and so less noise from trends, but a larger share of each block is contaminated by the previous state (carryover), which biases the estimate toward zero. Long blocks reduce carryover but give few independent blocks, so the estimate is noisier. Choose blocks longer than the system's memory, or discard a burn-in at the start of each block.</p></div></details>
+        <details class="reveal"><summary>7. The old rule never offered product B to high-risk customers. Can off-policy evaluation tell you what would happen if it did?</summary><div class="ans"><p>No. There are no logged cases to reweight, so the importance weights are infinite. Any answer would come purely from the reward model's extrapolation, which is an assumption and not evidence. You need some randomised exposure first.</p></div></details>
+        <details class="reveal"><summary>8. In the log, the old policy took the action the new one prefers with probability 4%. Of 10,000 customers, about 400 rows match, each scaled by 25. What does this do to the estimate, and what would reduce the problem?</summary><div class="ans"><p>The estimate rests on about 400 rows with weight 25, so its variance is high (the effective sample size is at most 400, and less if some rows have even larger weights). Remedies: more logs, deliberate exploration in the current policy, clipped or self-normalised weights, or the doubly robust form with a good reward model. Always bootstrap an interval.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>R. Kohavi, D. Tang, Y. Xu. <a href="https://experimentguide.com/">Trustworthy Online Controlled Experiments</a>. Cambridge University Press, 2020. The practitioner's reference.</li>
+        <li>A. Deng, Y. Xu, R. Kohavi, T. Walker. <a href="https://doi.org/10.1145/2433396.2433413">Improving the Sensitivity of Online Controlled Experiments by Utilizing Pre-Experiment Data</a>. WSDM, 2013. The CUPED paper.</li>
+        <li>R. Johari, P. Koomen, L. Pekelis, D. Walsh. <a href="https://arxiv.org/abs/1512.04922">Always Valid Inference: Continuous Monitoring of A/B Tests</a>. Operations Research, 2022 (arXiv 2015).</li>
+        <li>S. Howard, A. Ramdas, J. McAuliffe, J. Sekhon. <a href="https://arxiv.org/abs/1810.08240">Time-uniform, nonparametric, nonasymptotic confidence sequences</a>. Annals of Statistics, 2021.</li>
+        <li>A. Ramdas, P. Grünwald, V. Vovk, G. Shafer. <a href="https://arxiv.org/abs/2210.01948">Game-theoretic statistics and safe anytime-valid inference</a>. Statistical Science, 2023.</li>
+        <li>P. Grünwald, R. de Heide, W. Koolen. <a href="https://arxiv.org/abs/1906.07801">Safe Testing</a>. Journal of the Royal Statistical Society B, 2024.</li>
+        <li>P. Aronow, C. Samii. <a href="https://arxiv.org/abs/1305.6156">Estimating average causal effects under general interference, with application to a social network experiment</a>. Annals of Applied Statistics, 2017.</li>
+        <li>J. Ugander, B. Karrer, L. Backstrom, J. Kleinberg. <a href="https://arxiv.org/abs/1305.6979">Graph cluster randomization: network exposure to multiple universes</a>. KDD, 2013.</li>
+        <li>I. Bojinov, D. Simchi-Levi, J. Zhao. <a href="https://arxiv.org/abs/2009.00148">Design and Analysis of Switchback Experiments</a>. Management Science, 2023.</li>
+        <li>M. Dudík, J. Langford, L. Li. <a href="https://arxiv.org/abs/1103.4601">Doubly Robust Policy Evaluation and Learning</a>. ICML, 2011.</li>
+        <li>A. Swaminathan, T. Joachims. <a href="https://arxiv.org/abs/1502.02362">Counterfactual Risk Minimization</a>. ICML, 2015.</li>
+        <li>P. Thomas, E. Brunskill. <a href="https://arxiv.org/abs/1604.00923">Data-Efficient Off-Policy Policy Evaluation for Reinforcement Learning</a>. ICML, 2016.</li>
+        <li>M. Uehara, C. Shi, N. Kallus. <a href="https://arxiv.org/abs/2212.06355">A Review of Off-Policy Evaluation in Reinforcement Learning</a>. arXiv, 2022.</li>
+        <li>Y. Saito, S. Aihara, M. Matsutani, Y. Narita. <a href="https://arxiv.org/abs/2008.07146">Open Bandit Dataset and Pipeline: Towards Realistic and Reproducible Off-Policy Evaluation</a>. NeurIPS Datasets and Benchmarks, 2021.</li>
+      </ol>
+      <p class="sim-note" style="margin-top:12px">Links and citation details were written from memory and not re-checked online; verify before quoting in a formal document.</p>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in R8: Synthetic control and modern difference-in-differences (R8.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  const aed = v => "AED " + L.fmtInt(v);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { let s = seed | 0; return function () { s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function normal(R) { return () => Math.sqrt(-2 * Math.log(R() + 1e-12)) * Math.cos(2 * Math.PI * R()); }
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+  const sdev = a => { const m = mean(a); return Math.sqrt(mean(a.map(v => (v - m) ** 2))); };
+  const quant = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
+
+  // =====================================================================
+  // Simulation 1: CUPED
+  // =====================================================================
+  const MU = 6000, SG = 1800, DELTA = 100, ZB = 1.96 + 0.8416;
+  const N1PTS = 150, Rn1 = normal(rng(21));
+  const zx = Array.from({ length: N1PTS }, Rn1), zz = Array.from({ length: N1PTS }, Rn1);
+  const S1 = { rho: 0.6, n: 3.5, t: 0 };
+  const cupedBox = $("cuped-chart");
+  function renderCuped() {
+    const rho = S1.rho, n = Math.pow(10, S1.n);
+    const xs = zx.map(z => MU + SG * z);
+    const ys = zx.map((z, i) => MU + SG * (rho * z + Math.sqrt(1 - rho * rho) * zz[i]));
+    const xm = mean(xs), ym = mean(ys);
+    let cxy = 0, cxx = 0; xs.forEach((x, i) => { cxy += (x - xm) * (ys[i] - ym); cxx += (x - xm) ** 2; });
+    const th = cxy / cxx;
+    const W = Math.max(300, cupedBox.clientWidth), H = 280, m = { l: 52, r: 12, t: 12, b: 44 };
+    const svg = mk(cupedBox, W, H, "Pre-test spend against in-test spend, before and after adjustment");
+    const x = L.scale(0, 12000, m.l, W - m.r), y = L.scale(0, 12000, H - m.b, m.t);
+    [0, 3000, 6000, 9000, 12000].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v / 1000) + "k", { "text-anchor": "end" });
+      tx(svg, x(v), H - m.b + 16, (v / 1000) + "k", { "text-anchor": "middle" });
+    });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Spend in the four weeks before the test (AED)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Spend in the test (AED)", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const t = S1.t;
+    // fitted line: prediction from history; flattens as t -> 1
+    L.svg("line", { x1: x(0), x2: x(12000), y1: y(ym + th * (1 - t) * (0 - xm)), y2: y(ym + th * (1 - t) * (12000 - xm)), class: "ln-fit" }, svg);
+    xs.forEach((xv, i) => {
+      const yv = ys[i] - t * th * (xv - xm);
+      L.svg("circle", { cx: x(xv), cy: y(L.clamp(yv, 0, 12000)), r: 3.2, class: t > 0.5 ? "pt-a" : "pt" }, svg);
+    });
+    const sdY = SG, sdA = SG * Math.sqrt(1 - rho * rho);
+    const ci0 = 1.96 * SG * Math.sqrt(2 / n), ci1 = ci0 * Math.sqrt(1 - rho * rho);
+    const n0 = 2 * ZB * ZB * SG * SG / (DELTA * DELTA), n1 = n0 * (1 - rho * rho);
+    $("st1-sd").textContent = aed(t > 0.5 ? sdA : sdY);
+    $("st1-sd-s").textContent = t > 0.5 ? "after adjustment (raw: " + aed(sdY) + ")" : "raw; adjusted would be " + aed(sdA);
+    $("st1-ci").textContent = aed(ci1); $("st1-ci-s").textContent = "raw: ± " + aed(ci0) + " with " + L.fmtInt(n) + " per arm";
+    $("st1-n").textContent = L.fmtInt(n1); $("st1-n-s").textContent = "raw: " + L.fmtInt(n0) + " per arm (80% power)";
+    cls($("st1-n-b"), rho >= 0.5 ? "ok" : "");
+    $("st1-x").textContent = "×" + (1 / (1 - rho * rho)).toFixed(2);
+    $("s1-verdict").innerHTML = rho < 0.3
+      ? "A correlation of " + rho.toFixed(2) + " removes only <b>" + pct(rho * rho, 0) + "</b> of the variance. Barely worth the extra work for this metric."
+      : "At ρ = " + rho.toFixed(2) + " the variance falls by <b>" + pct(rho * rho, 0) + "</b>, the interval narrows by <b>" + pct(1 - Math.sqrt(1 - rho * rho), 0) + "</b>, and you need <b>" + pct(rho * rho, 0) + " fewer customers</b> for the same power. The slope θ fitted on this sample is " + (th / 1).toFixed(2) + " (true " + rho.toFixed(2) + ", since both spreads are equal).";
+  }
+  L.bind("s-rho", v => v.toFixed(2), v => { S1.rho = v; renderCuped(); });
+  L.bind("s-n1", v => L.fmtInt(Math.pow(10, v)), v => { S1.n = v; renderCuped(); });
+  $("b-adj").addEventListener("click", e => {
+    const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+    e.currentTarget.setAttribute("aria-pressed", String(on));
+    e.currentTarget.textContent = on ? "Undo the adjustment" : "Adjust for pre-test spend";
+    L.tween(S1.t, on ? 1 : 0, 900, v => { S1.t = v; renderCuped(); });
+  });
+
+  // =====================================================================
+  // Simulation 2: peeking and e-values
+  // =====================================================================
+  const P2 = 400, D2 = 30, K2 = 20, TAU2 = 0.01;
+  const Rn2 = normal(rng(77));
+  const Z2 = new Float64Array(P2 * D2).map(() => Rn2() * Math.sqrt(K2));
+  const LOOKS = [1, 2, 3, 5, 10, 30];
+  const S2 = { li: 0, z: 0 };
+  const seqBox = $("seq-chart");
+  function renderSeq() {
+    const every = LOOKS[S2.li], mu = S2.z / Math.sqrt(K2 * D2);
+    const cn = new Float64Array(D2), ce = new Float64Array(D2);
+    let fixedN = 0, stopSum = 0, stopCnt = 0;
+    for (let p = 0; p < P2; p++) {
+      let S = 0, fn = -1, fe = -1;
+      for (let d = 0; d < D2; d++) {
+        S += Z2[p * D2 + d] + mu * K2; const n = K2 * (d + 1);
+        if (fn < 0 && ((d + 1) % every === 0 || d === D2 - 1) && Math.abs(S) / Math.sqrt(n) > 1.96) fn = d;
+        const E = Math.exp(TAU2 * S * S / (2 * (1 + n * TAU2))) / Math.sqrt(1 + n * TAU2);
+        if (fe < 0 && E >= 20) fe = d;
+        if (d === D2 - 1 && Math.abs(S) / Math.sqrt(n) > 1.96) fixedN++;
+      }
+      if (fn >= 0) for (let d = fn; d < D2; d++) cn[d]++;
+      if (fe >= 0) { for (let d = fe; d < D2; d++) ce[d]++; stopSum += fe + 1; stopCnt++; }
+    }
+    const W = Math.max(300, seqBox.clientWidth), H = 280, m = { l: 48, r: 12, t: 14, b: 44 };
+    const svg = mk(seqBox, W, H, "Share of experiments flagged as significant by day");
+    const top = Math.max(0.1, Math.ceil(1.05 * Math.max(cn[D2 - 1], ce[D2 - 1], fixedN) / P2 * 10) / 10);
+    const x = L.scale(0, D2, m.l, W - m.r), y = L.scale(0, top, H - m.b, m.t);
+    const ticks = top <= 0.2 ? 0.05 : top <= 0.5 ? 0.1 : 0.25;
+    for (let v = 0; v <= top + 1e-9; v += ticks) {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, Math.round(v * 100) + "%", { "text-anchor": "end" });
+    }
+    [0, 5, 10, 15, 20, 25, 30].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Day of the experiment", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Share flagged so far", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(0.05), y2: y(0.05), class: "ln-ref" }, svg);
+    tx(svg, W - m.r - 4, y(0.05) - 5, "5%", { "text-anchor": "end" });
+    const pts = a => { const r = [[x(0), y(0)]]; for (let d = 0; d < D2; d++) r.push([x(d + 1), y(a[d] / P2)]); return r; };
+    L.svg("path", { d: L.path(pts(cn)), class: "ln-bad" }, svg);
+    L.svg("path", { d: L.path(pts(ce)), class: "ln-acc" }, svg);
+    L.svg("circle", { cx: x(D2), cy: y(fixedN / P2), r: 5, class: "cv-now", style: "fill:var(--ink);stroke:var(--surface);stroke-width:2" }, svg);
+    const pN = cn[D2 - 1] / P2, pE = ce[D2 - 1] / P2, pF = fixedN / P2;
+    const null_ = S2.z === 0;
+    $("st2-p").textContent = pct(pN, 0); $("st2-p-s").textContent = "looking " + (every === 30 ? "once, at day 30" : "every " + (every === 1 ? "day" : every + " days"));
+    cls($("st2-p-b"), null_ ? (pN > 0.1 ? "bad" : "ok") : "");
+    $("st2-f").textContent = pct(pF, 0);
+    $("st2-e").textContent = pct(pE, 0); $("st2-e-s").textContent = null_ ? "false alarms; guarantee is at most 5%" : "of tests with a real effect";
+    cls($("st2-e-b"), null_ ? (pE <= 0.07 ? "ok" : "bad") : "");
+    $("st2-d").textContent = stopCnt ? "day " + (stopSum / stopCnt).toFixed(0) : "none";
+    $("s2-verdict").innerHTML = null_
+      ? "No real effect, so every flag is wrong. Stopping at the first significant look gives <b>" + pct(pN, 0) + "</b> false alarms (budget: 5%). The e-value test gives <b>" + pct(pE, 1) + "</b>, whatever the looking schedule."
+      : "A real effect (z ≈ " + S2.z.toFixed(2) + " by day 30). A single look at day 30 detects <b>" + pct(pF, 0) + "</b>. The e-value test, looking daily, detects <b>" + pct(pE, 0) + "</b>: a cost for permission to look and stop early, with average stop on day " + (stopCnt ? (stopSum / stopCnt).toFixed(0) : "-") + ". Peeking with the classic test detects more (" + pct(pN, 0) + ") only because it also has a high false-alarm rate (see effect 0).";
+  }
+  L.bind("s-look", v => { const e = LOOKS[v]; return e === 30 ? "once, at day 30" : "every " + (e === 1 ? "day" : e + " days"); }, v => { S2.li = v; renderSeq(); });
+  L.bind("s-eff", v => v.toFixed(2), v => { S2.z = v; renderSeq(); });
+
+  // =====================================================================
+  // Simulation 3: interference and switchbacks
+  // =====================================================================
+  const REP3 = 300, DAYS = 28, BASE = 0.25, G3 = 0.02;
+  const BLK = [1, 2, 4, 7, 14];
+  const R3 = rng(131), N3 = normal(R3);
+  const shocks = [], keys = [], nvNoise = [];
+  for (let r = 0; r < REP3; r++) {
+    const sh = []; let e = N3();
+    for (let d = 0; d < DAYS; d++) { e = 0.6 * e + 0.8 * N3(); sh.push(0.03 * e); }
+    shocks.push(sh); keys.push(Array.from({ length: DAYS }, R3)); nvNoise.push(N3());
+  }
+  const S3 = { q: 0.5, lam: 1, bi: 2, car: 0 };
+  const interfBox = $("interf-chart");
+  function renderInterf() {
+    const q = S3.q, lam = S3.lam, b = BLK[S3.bi], c = S3.car;
+    const sq = BASE + G3 * q, pT = sq * (1 + lam) / (1 + q * lam), pC = sq / (1 + q * lam);
+    const naiveTrue = (pT - pC) * 100, truth = G3 * 100;
+    const nv = [], sw = [];
+    for (let r = 0; r < REP3; r++) {
+      nv.push(naiveTrue + nvNoise[r] * 0.2);
+      const K = DAYS / b;
+      const order = Array.from({ length: K }, (_, i) => i).sort((i, j) => keys[r][i] - keys[r][j]);
+      const treated = new Array(K).fill(0); order.slice(0, K / 2).forEach(i => { treated[i] = 1; });
+      let t = 0, tn = 0, cc = 0, cn = 0, prev = -1;
+      for (let d = 0; d < DAYS; d++) {
+        const cur = treated[Math.floor(d / b)];
+        let v = BASE + G3 * cur;
+        if (d % b === 0 && prev >= 0 && prev !== cur) v = (1 - c) * (BASE + G3 * cur) + c * (BASE + G3 * prev);
+        v += shocks[r][d];
+        if (cur) { t += v; tn++; } else { cc += v; cn++; }
+        prev = cur;
+      }
+      sw.push((t / tn - cc / cn) * 100);
+    }
+    const W = Math.max(300, interfBox.clientWidth), H = 250, m = { l: 14, r: 14, t: 18, b: 40 };
+    const svg = mk(interfBox, W, H, "Distribution of estimated effects from repeated experiments");
+    const lo = -6, hi = 24, nb = 30, x = L.scale(lo, hi, m.l, W - m.r);
+    const hist = a => { const h = new Array(nb).fill(0); a.forEach(v => { const i = Math.floor(L.clamp(v, lo, hi - 1e-6) - lo); h[i]++; }); return h; };
+    const hn = hist(nv), hs = hist(sw), y = L.scale(0, 1, H - m.b, m.t);
+    const mxn = Math.max(...hn), mxs = Math.max(...hs), bw = (W - m.l - m.r) / nb;
+    for (let v = -5; v <= 20; v += 5) {
+      L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, x(v), H - m.b + 16, (v > 0 ? "+" : "") + v + " pts", { "text-anchor": "middle" });
+    }
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, class: "ax" }, svg);
+    hn.forEach((h, i) => { if (h) L.svg("rect", { x: m.l + i * bw + 1, y: y(h / mxn), width: bw - 2, height: y(0) - y(h / mxn), class: "hb-n" }, svg); });
+    hs.forEach((h, i) => { if (h) L.svg("rect", { x: m.l + i * bw + 1, y: y(h / mxs * 0.8), width: bw - 2, height: y(0) - y(h / mxs * 0.8), class: "hb-s" }, svg); });
+    L.svg("line", { x1: x(truth), x2: x(truth), y1: m.t, y2: H - m.b, class: "ln-ink" }, svg);
+    tx(svg, x(truth) + (x(truth) > W * 0.6 ? -5 : 5), m.t + 8, "true: +" + truth.toFixed(0) + " pts", { class: "lbl-ink", "text-anchor": x(truth) > W * 0.6 ? "end" : "start" });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Estimated lift in booking rate (percentage points)", { "text-anchor": "middle" });
+    const mn = mean(nv), ms = mean(sw), ss = sdev(sw);
+    $("st3-n").textContent = (mn > 0 ? "+" : "") + mn.toFixed(1) + " pts"; $("st3-n-s").textContent = "spread across repeats: ±" + sdev(nv).toFixed(1);
+    cls($("st3-n-b"), Math.abs(mn - truth) > 3 ? "bad" : "ok");
+    $("st3-s").textContent = (ms > 0 ? "+" : "") + ms.toFixed(1) + " pts"; $("st3-s-s").textContent = "spread across repeats: ±" + ss.toFixed(1);
+    cls($("st3-s-b"), Math.abs(ms - truth) > 0.6 ? "warn" : "ok");
+    $("st3-t").textContent = "+" + truth.toFixed(1) + " pts";
+    $("st3-r").textContent = pct(pT, 0) + " vs " + pct(pC, 0);
+    $("s3-verdict").innerHTML = lam < 0.05
+      ? "No priority boost, so no competition: the split test and the switchback agree, apart from noise. Raise the boost."
+      : "The split test says <b>+" + mn.toFixed(1) + " points</b> and its repeats barely vary, yet rolling out to everyone is worth only <b>+" + truth.toFixed(0) + "</b>. The switchback averages <b>" + ms.toFixed(1) + "</b> (spread ±" + ss.toFixed(1) + ")" + (c > 0 && b <= 2 ? ", pulled down by carryover on " + Math.round(100 / b) + "% of days" : "") + ".";
+  }
+  L.bind("s-q", v => Math.round(v * 100) + "%", v => { S3.q = v; renderInterf(); });
+  L.bind("s-lam", v => "×" + (1 + v).toFixed(1), v => { S3.lam = v; renderInterf(); });
+  L.bind("s-blk", v => BLK[v] + (BLK[v] === 1 ? " day" : " days"), v => { S3.bi = v; renderInterf(); });
+  L.bind("s-car", v => Math.round(v * 100) + "%", v => { S3.car = v; renderInterf(); });
+
+  // =====================================================================
+  // Simulation 4: off-policy evaluation
+  // =====================================================================
+  const REP4 = 150, NM = 5000;
+  const R4 = rng(5), U4 = new Float32Array(REP4 * NM * 3);
+  for (let i = 0; i < U4.length; i++) U4[i] = R4();
+  const RW = [[0.05, 0.20, 0.30], [0.04, 0.10, 0.02]], PX = 0.7, USUAL = [1, 0], NEWP = [2, 2];
+  const TRUE4 = PX * RW[0][2] + (1 - PX) * RW[1][2];
+  const S4 = { n: 3.3, eps: 0.1, err: 0.05 };
+  const opeBox = $("ope-chart");
+  function renderOpe() {
+    const n = Math.round(Math.pow(10, S4.n)), eps = S4.eps, e = S4.err;
+    const dm = [], ips = [], dr = [];
+    for (let k = 0; k < REP4; k++) {
+      let c1 = 0, ipsS = 0, drS = 0;
+      for (let i = 0; i < n; i++) {
+        const b = (k * NM + i) * 3, xx = U4[b] < PX ? 0 : 1, us = USUAL[xx], u = U4[b + 1];
+        const others = us === 0 ? [1, 2] : us === 1 ? [0, 2] : [0, 1];
+        const a = u < 1 - eps ? us : (u < 1 - eps / 2 ? others[0] : others[1]);
+        const y = U4[b + 2] < RW[xx][a] ? 1 : 0;
+        const rh = aa => RW[xx][aa] + (aa === us ? 0 : e);
+        const w = a === NEWP[xx] ? 1 / (a === us ? 1 - eps : eps / 2) : 0;
+        if (xx === 1) c1++;
+        ipsS += w * y; drS += rh(NEWP[xx]) + w * (y - rh(a));
+      }
+      const p1 = c1 / n;
+      dm.push((1 - p1) * (RW[0][2] + e) + p1 * (RW[1][2] + e)); ips.push(ipsS / n); dr.push(drS / n);
+    }
+    const W = Math.max(300, opeBox.clientWidth), H = 250, m = { l: 14, r: 14, t: 16, b: 38 };
+    const svg = mk(opeBox, W, H, "Estimates of the new policy's value from repeated logs");
+    const lo = -0.05, hi = 0.6, x = L.scale(lo, hi, m.l, W - m.r);
+    [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6].forEach(v => {
+      L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, x(v), H - m.b + 16, Math.round(v * 100) + "%", { "text-anchor": "middle" });
+    });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Estimated share with a good outcome under the new policy", { "text-anchor": "middle" });
+    const V0 = PX * ((1 - eps) * RW[0][1] + eps / 2 * (RW[0][0] + RW[0][2])) + (1 - PX) * ((1 - eps) * RW[1][0] + eps / 2 * (RW[1][1] + RW[1][2]));
+    L.svg("line", { x1: x(V0), x2: x(V0), y1: m.t, y2: H - m.b, class: "ln-ref" }, svg);
+    L.svg("line", { x1: x(TRUE4), x2: x(TRUE4), y1: m.t, y2: H - m.b, class: "ln-ink" }, svg);
+    const rows = [["Direct method", dm, "band-w"], ["Importance weighting", ips, "band-b"], ["Doubly robust", dr, "band"]];
+    const rh = (H - m.t - m.b) / 3, Rj = rng(9);
+    rows.forEach(([name, arr, bc], ri) => {
+      const mid = m.t + rh * ri + rh / 2, s = arr.slice().sort((a, b) => a - b);
+      const a = x(L.clamp(quant(s, 0.05), lo, hi)), bb = x(L.clamp(quant(s, 0.95), lo, hi));
+      L.svg("rect", { x: a, y: mid - rh * 0.34, width: Math.max(2, bb - a), height: rh * 0.68, rx: 3, class: bc }, svg);
+      arr.forEach(v => L.svg("circle", { cx: x(L.clamp(v, lo, hi)), cy: mid + (Rj() - 0.5) * rh * 0.5, r: 2.2, class: ri === 0 ? "pt-w" : ri === 1 ? "pt-b" : "pt-a" }, svg));
+      tx(svg, m.l + 2, m.t + rh * ri + 12, name, { class: "lbl-ink" });
+    });
+    tx(svg, x(TRUE4) + 4, H - m.b - 4, "truth " + pct(TRUE4, 1), { class: "lbl-ink" });
+    const matches = n * eps / 2;
+    $("st4-m").textContent = L.fmtInt(matches); $("st4-m-s");
+    const biasDm = mean(dm) - TRUE4, sIps = sdev(ips), sDr = sdev(dr);
+    $("st4-dm").textContent = (biasDm >= 0 ? "+" : "") + (100 * biasDm).toFixed(1) + " pts"; $("st4-dm-s").textContent = "spread only ±" + (100 * sdev(dm)).toFixed(1);
+    cls($("st4-dm-b"), Math.abs(biasDm) > 0.02 ? "bad" : "ok");
+    $("st4-ips").textContent = "±" + (100 * sIps).toFixed(1) + " pts"; $("st4-ips-s").textContent = "average error " + ((mean(ips) - TRUE4) >= 0 ? "+" : "") + (100 * (mean(ips) - TRUE4)).toFixed(1);
+    cls($("st4-ips-b"), sIps > 0.06 ? "bad" : sIps > 0.03 ? "warn" : "ok");
+    $("st4-dr").textContent = "±" + (100 * sDr).toFixed(1) + " pts"; $("st4-dr-s").textContent = "average error " + ((mean(dr) - TRUE4) >= 0 ? "+" : "") + (100 * (mean(dr) - TRUE4)).toFixed(1);
+    cls($("st4-dr-b"), sDr > 0.06 ? "bad" : sDr > 0.03 ? "warn" : "ok");
+    $("s4-verdict").innerHTML = "Only about <b>" + L.fmtInt(matches) + "</b> logged rows match the new policy. " +
+      (Math.abs(e) < 0.005 ? "With a correct model, the direct method is precise and right; the weighted estimators add noise they do not need." : "The model's error of " + (e > 0 ? "+" : "") + Math.round(e * 100) + " points leaves the direct method off by about <b>" + (100 * biasDm).toFixed(1) + "</b> points, however many logs you add.") +
+      " Importance weighting is correct on average but swings by ±" + (100 * sIps).toFixed(1) + " points" + (sIps > 0.06 ? ", too wide to act on" : "") + ".";
+  }
+  L.bind("s-n", v => L.fmtInt(Math.pow(10, v)), v => { S4.n = v; renderOpe(); });
+  L.bind("s-eps", v => Math.round(v * 100) + "%", v => { S4.eps = v; renderOpe(); });
+  L.bind("s-err", v => (v > 0 ? "+" : "") + Math.round(v * 100) + " pts", v => { S4.err = v; renderOpe(); });
+
+  function renderAll() { renderCuped(); renderSeq(); renderInterf(); renderOpe(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
