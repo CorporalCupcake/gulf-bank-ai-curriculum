@@ -138,7 +138,22 @@ window.CATALOG = [
   {file: "a6-agentic-rag.html", module: "A6", title: "Agentic RAG, GraphRAG and Permission-Aware Retrieval", codes: ["A6.3","A6.4","A6.5"], label: "A6.3 – A6.5", tier: "n", minutes: 40},
   {file: "a7-what-validators-can-accept-today.html", module: "A7", title: "Validating an LLM You Cannot Explain: Evidence Packages, Test Bounds and Probes", codes: ["A7.1","A7.2"], label: "A7.1 · A7.2", tier: "n", minutes: 30, fast: true},
   {file: "a8-foundation-models-for-transaction-data.html", module: "A8", title: "Foundation Models for Transaction Data, and the Synthetic Data Privacy Trap", codes: ["A8.1","A8.2"], label: "A8.1 · A8.2", tier: "n", minutes: 35, star: true, fast: true},
-  {file: "a9-scams-on-instant-payment-rails.html", module: "A9", title: "Scams on Instant Rails, and the Mules Who Cash Them Out", codes: ["A9.1","A9.2"], label: "A9.1 · A9.2", tier: "n", minutes: 40, star: true, fast: true}
+  {file: "a9-scams-on-instant-payment-rails.html", module: "A9", title: "Scams on Instant Rails, and the Mules Who Cash Them Out", codes: ["A9.1","A9.2"], label: "A9.1 · A9.2", tier: "n", minutes: 40, star: true, fast: true},
+  {file: "a9-synthetic-identity-fraud.html", module: "A9", title: "Customers Who Never Existed, and Banks That Learn Together", codes: ["A9.3","A9.4"], label: "A9.3 · A9.4", tier: "n", minutes: 40, star: true, fast: true},
+  {file: "a9-behavioural-biometrics-and-device-intelligence.html", module: "A9", title: "Who Is Really Holding the Phone, and Can a Copilot Write the Case?", codes: ["A9.5","A9.6"], label: "A9.5 · A9.6", tier: "n", minutes: 40},
+  {file: "a10-cash-flow-underwriting-with-open.html", module: "A10", title: "Lending on Cash Flow, and Keeping It Fair", codes: ["A10.1","A10.2"], label: "A10.1 · A10.2", tier: "n", minutes: 38, fast: true},
+  {file: "a10-llms-for-credit-memos-and.html", module: "A10", title: "Credit Memos, Uplift and Climate Risk: Three Frontier Tools for the Credit Desk", codes: ["A10.3","A10.4","A10.5"], label: "A10.3 – A10.5", tier: "n", minutes: 40, fast: true},
+  {file: "a11-sovereign-ai-g42-and-core42.html", module: "A11", title: "Sovereign AI and Confidential Computing: Where Your Data Runs and Who Can See It", codes: ["A11.1","A11.2"], label: "A11.1 · A11.2", tier: "n", minutes: 35, star: true, fast: true},
+  {file: "a11-differential-privacy-clean-rooms-homomorphic.html", module: "A11", title: "Privacy-Enhancing Technologies: What Is Practical Today", codes: ["A11.3","A11.4"], label: "A11.3 · A11.4", tier: "e", minutes: 40},
+  {file: "a12-cbuae-sama-and-sdaia-expectations.html", module: "A12", title: "Who Expects What: CBUAE, SAMA, SDAIA and the Data Protection Laws", codes: ["A12.1","A12.2"], label: "A12.1 · A12.2", tier: "d", minutes: 30, star: true, fast: true},
+  {file: "a12-eu-ai-act-iso-iec.html", module: "A12", title: "AI Frameworks, Model Risk for LLMs and Agents, and AI Incidents", codes: ["A12.3","A12.4","A12.5"], label: "A12.3 – A12.5", tier: "n", minutes: 40, star: true, fast: true},
+  {file: "a13-iso-20022-payment-data.html", module: "A13", title: "ISO 20022 and Open Finance: Richer Data, and What It Is Worth", codes: ["A13.1","A13.2"], label: "A13.1 · A13.2", tier: "n", minutes: 35, fast: true},
+  {file: "a13-mbridge-cbdcs-and-the-digital.html", module: "A13", title: "Digital Money: mBridge, the Digital Dirham, Stablecoins and Tokenised Deposits", codes: ["A13.3","A13.4"], label: "A13.3 · A13.4", tier: "e", minutes: 28, fast: true},
+  {file: "a14-arabic-llms-jais-allam-falcon.html", module: "A14", title: "Arabic LLMs and the Language Customers Actually Type", codes: ["A14.1","A14.2"], label: "A14.1 · A14.2", tier: "n", minutes: 40, star: true, fast: true},
+  {file: "a14-arabic-ocr-and-document-ai.html", module: "A14", title: "Arabic Documents, Arabic Benchmarks and Islamic Finance", codes: ["A14.3","A14.4","A14.5"], label: "A14.3 – A14.5", tier: "n", minutes: 40, star: true, fast: true},
+  {file: "a15-governing-ai-coding-tools-in.html", module: "A15", title: "Governing AI Coding Tools, and Seeing What Your LLM Systems Do", codes: ["A15.1","A15.2"], label: "A15.1 · A15.2", tier: "d", minutes: 40, star: true},
+  {file: "a15-ai-gateways-guardrails-and-token.html", module: "A15", title: "The AI Gateway, Token Budgets and Spec-Driven Development", codes: ["A15.3","A15.4"], label: "A15.3 · A15.4", tier: "n", minutes: 38},
+  {file: "a16-measuring-genai-value-honestly.html", module: "A16", title: "Making GenAI Pay: Honest Value, the First Five Use Cases and the Operating Model", codes: ["A16.1","A16.2","A16.3"], label: "A16.1 – A16.3", tier: "n", minutes: 40}
 ];
 
 // Per-viewer progress, kept in this browser only. Every access is guarded: storage can be blocked.
