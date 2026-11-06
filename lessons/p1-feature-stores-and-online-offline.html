@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Feature Stores, Online-Offline Consistency and Data Contracts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 13px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-bad { fill: var(--bad) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .c-off { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 4 4; fill: none; }
+  .c-legit { stroke: var(--neutral); stroke-width: 2.6; fill: none; }
+  .c-fraud { stroke: var(--bad); stroke-width: 2.6; fill: none; }
+  .c-true { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .c-stale { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .c-cut { stroke: var(--warn); stroke-width: 1.6; stroke-dasharray: 3 3; }
+  .c-dot { fill: var(--ink); }
+  .c-dot.f { fill: var(--bad); }
+  .c-snap { stroke: var(--line); stroke-width: 1.5; }
+  .c-snap.pick { stroke: var(--accent); stroke-width: 3; }
+  .c-snap.leak { stroke: var(--bad); stroke-width: 3; }
+  .c-ev { stroke: var(--ink); stroke-width: 1.6; stroke-dasharray: 3 3; }
+  .c-band { fill: var(--accent); fill-opacity: .1; }
+  .chk-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 16px; }
+  .chk-list label { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+  .chk-list input { accent-color: var(--accent); width: 16px; height: 16px; }
+  td.pass { color: var(--ok); font-weight: 600; } td.fail { color: var(--bad); font-weight: 600; } td.off { color: var(--muted); }
+  .compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .compare > div { padding: 14px 16px; border-radius: 10px; background: var(--sunk); font-size: 15px; }
+  .compare h4 { font-family: var(--font-display); font-size: 16px; margin: 0 0 6px; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track P · Production, data and platforms</span>
+    <span>Module P1 · Data engineering</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>P1.3 · P1.4</span>
+        <span class="pill d">Day one</span>
+        <span class="star">★ Priority</span>
+        <span>About 42 minutes</span>
+      </div>
+      <h1>Same Features Live as in Training: Feature Stores, Consistency and Data Contracts</h1>
+      <p class="dek">Why a model that scored 0.98 AUC in the notebook can quietly drop to 0.85 in production, how feature stores and as-of joins prevent it, and how checks and contracts stop broken upstream data from ever reaching a model.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model is only as good as the match between the features it learned from and the features it is fed live, so define each feature once, compute it point-in-time correctly, serve it fresh enough for the decision, and make the data's producers promise (and be checked on) what they deliver.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A data scientist builds a card-fraud model. One of her best features is <em>number of transactions on this card in the last 24 hours</em>. She computes it in the data warehouse with a SQL window function over a training table. AUC is 0.98. The model is handed to engineers, who must score each transaction in under 50 milliseconds. A warehouse query takes seconds, so they rewrite the feature in the payments service, in Java, counting from a cache that is updated every few minutes. It looks the same. It is not.</p>
+        <p>The SQL window ended at the transaction time, exclusive of the transaction itself. The Java version includes the current transaction. The SQL treated midnight in Gulf Standard Time; the cache uses UTC. The SQL saw late-arriving records; the cache never does. Nobody wrote a bug. Two implementations of one idea drifted apart. Live, the model sees inputs shaped slightly differently from anything it trained on, and quietly performs worse. This failure has a name: <strong>training-serving skew</strong>.</p>
+        <p>Its mirror image happens when the training table is built wrongly. If the label for last Tuesday's fraud is joined to the <em>latest</em> value of the feature, the feature includes what happened after the fraud, including the fraud burst itself. The model "learns" a signal that will not exist at the moment of the decision. That is the leakage of F3.1, now seen as a plumbing problem.</p>
+      </div>
+      <div class="prose">
+        <p>A <strong>feature store</strong> is the platform answer to both. It is a place where each feature is defined once, computed one way, stored twice (a big history for training and a fast copy for serving), and joined to labels <em>as of</em> the moment of each decision. A <strong>data contract</strong> and <strong>data quality checks</strong> are the answer to a third failure: the upstream system changes something, and the feature silently turns to garbage. Both are about the same promise: the numbers in front of the model mean what the model thinks they mean.</p>
+      </div>
+
+      <figure class="figure" id="fig-skew">
+        <div class="fig-head"><span class="fig-title">What small skew costs a good model</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start with no skew: the live curves equal the offline ones. Drag <b>noise</b> up (a window boundary off by an hour, a stale cache) and watch the two curves overlap more, so the alert line you chose offline catches less fraud. Then drag <b>shift</b> (a null turned into zero, a time-zone slip) and see the false alarms balloon. The buttons set illustrative mixes.</p>
+        <div class="btns" role="group" aria-label="Skew presets">
+          <button class="btn" type="button" data-p="0,0">No skew</button>
+          <button class="btn" type="button" data-p="0.4,0">Window off by an hour</button>
+          <button class="btn" type="button" data-p="0.3,-0.6">Null becomes zero online</button>
+          <button class="btn" type="button" data-p="1,0">Stale cache</button>
+          <button class="btn" type="button" data-p="1.5,0.8">Unit mismatch</button>
+        </div>
+        <div class="chart-wrap" id="skew-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--neutral)"></i>Legitimate, live</span>
+          <span><i style="background:var(--bad)"></i>Fraud, live</span>
+          <span><i style="background:var(--muted)"></i>Offline (training) curves</span>
+          <span><i style="background:var(--warn)"></i>Alert line chosen offline</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-noise">Noise from skew (std dev of the score) <output for="s-noise"></output></label><input type="range" id="s-noise" min="0" max="2" step="0.05" value="0.4"></div>
+          <div class="ctl"><label for="s-shift">Shift of all scores <output for="s-shift"></output></label><input type="range" id="s-shift" min="-1" max="1" step="0.05" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st1-auc-b"><div class="k">AUC, offline then live</div><div class="v" id="st1-auc"></div><div class="s">the number the notebook promised</div></div>
+          <div class="stat" id="st1-rec-b"><div class="k">Fraud caught at the alert line</div><div class="v" id="st1-rec"></div><div class="s" id="st1-rec-s"></div></div>
+          <div class="stat" id="st1-alert-b"><div class="k">Alerts per 100,000</div><div class="v" id="st1-alert"></div><div class="s" id="st1-alert-s"></div></div>
+          <div class="stat" id="st1-cost-b"><div class="k">Cost per 100,000</div><div class="v" id="st1-cost"></div><div class="s" id="st1-cost-s"></div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: legitimate scores N(0,1), fraud N(3,1) offline; 0.5% fraud; the alert line is set offline to flag 1% of legitimate transactions. Live score = offline score + shift + noise. Costs: AED 40 per alert, AED 400 per missed fraud. The presets are illustrative, not measurements of any real system. Exact expected values.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Note what did not change: nothing is "broken". No error is raised, no job fails. The model still returns numbers between 0 and 1. That is why skew is dangerous, and why this lesson cares more about <em>design that makes skew impossible</em> than about debugging it afterwards.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Three promises make a model trustworthy in production: the feature is computed the same way in training and serving (consistency); it uses only what was known at decision time (point-in-time correctness); and what arrives upstream is what you expected (quality and contracts). A feature store is one way to enforce the first two. Checks and contracts enforce the third.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-store">What a feature store is made of</h3>
+      <div class="prose">
+        <p>Strip away the product names and a feature store has five parts.</p>
+        <ul>
+          <li><strong>A registry.</strong> A catalogue of feature definitions: name, entity (customer, card, merchant), the logic or source, the data type, the owner, the freshness promise, a description a human can read. The same definition feeds training and serving. This is what ends the "two implementations" problem.</li>
+          <li><strong>An offline store.</strong> The full history, usually tables in the warehouse or lakehouse (<a href="p1-warehouses-lakes-and-lakehouses.html">P1.1 – P1.2</a>). Big, cheap, slow. Used to build training sets and to backfill.</li>
+          <li><strong>An online store.</strong> The <em>latest</em> value per entity, in a key-value database built for single-digit-millisecond lookups (Redis, DynamoDB, Cassandra and similar). Small, fast, expensive per gigabyte. Used when a decision is made.</li>
+          <li><strong>Materialisation (the pipes).</strong> Jobs that compute features and write them to both stores: batch jobs that run every hour or night, and streaming jobs that update on every event. Materialising the same definition to both sides is what produces consistency.</li>
+          <li><strong>A point-in-time retrieval API.</strong> "Give me, for each (entity, timestamp, label) row, the feature values as they were known at that timestamp." The store does the as-of join so each data scientist does not reinvent it, wrongly.</li>
+        </ul>
+        <p>Feature types differ in how they are produced, and that decides how hard consistency is.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Feature kind</th><th>Example</th><th>How it is computed</th><th>Consistency risk</th></tr></thead>
+          <tbody>
+            <tr><td><b>Batch</b></td><td>Average monthly salary credit, last 6 months</td><td>Nightly job on the warehouse, pushed to the online store</td><td>Low. Staleness of up to a day is acceptable for slow-moving facts.</td></tr>
+            <tr><td><b>Streaming / windowed</b></td><td>Card transactions in the last 10 minutes</td><td>Stream processor updates on every event</td><td>Medium. Training must replay the same window logic over history.</td></tr>
+            <tr><td><b>On-demand (request-time)</b></td><td>This amount ÷ customer's usual amount; distance from home</td><td>Computed inside the request from the request plus stored values</td><td>High unless the <em>same code</em> runs in training. Best handled by one shared function.</td></tr>
+            <tr><td><b>Embeddings</b></td><td>Merchant vector, document vector</td><td>Produced by a model, stored like any feature</td><td>High. If the embedding model changes, old and new vectors are not comparable. Version them.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Not every bank needs a product called a feature store. A team with a handful of batch models can get 80% of the value with a disciplined feature table in the warehouse, a shared transformation library, and as-of joins. The product earns its cost when many models share features, when real-time decisions need fresh values, and when audit demands that you can show exactly what any past score was based on.</p>
+      </div>
+
+      <h3 class="sub" id="m-pit">Point-in-time correctness: the as-of join</h3>
+      <div class="prose">
+        <p>For each training row, a label at time <i>e</i> (the transaction being scored), you want the feature value that <em>the live system would have returned</em> at <i>e</i>. Features are stored as snapshots: (entity, value, event time, and the time the value became available). The right join takes, per entity, the most recent snapshot whose availability time is at or before <i>e</i>:</p>
+<pre><code>SELECT l.txn_id, l.card_id, l.event_ts, l.is_fraud,
+       f.txn_count_24h
+FROM labels l
+LEFT JOIN LATERAL (
+    SELECT txn_count_24h
+    FROM card_features f
+    WHERE f.card_id = l.card_id
+      AND f.available_ts &lt;= l.event_ts   -- not event_ts of the feature, when it arrived
+    ORDER BY f.available_ts DESC
+    LIMIT 1
+) f ON TRUE;</code></pre>
+        <p>The key word is <code>available_ts</code>: the time you could <em>use</em> the value, not the time it describes. A nightly job that summarises Tuesday finishes at 02:00 on Wednesday; it was not usable on Tuesday evening. The pandas version is <code>merge_asof</code> (see <a href="f11-time-and-dates-in-pandas.html">F11.2</a>). The failure is joining on the latest row, or on the date alone.</p>
+      </div>
+
+      <figure class="figure" id="fig-pit">
+        <div class="fig-head"><span class="fig-title">Which snapshot lands in the training row?</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> pick a transaction in the burst (the last one is the most extreme). In <b>latest</b> mode the training row quietly includes the burst, and the model learns a signal that is not there at decision time. <b>Nearest</b> sometimes picks a snapshot taken after the event. Only <b>as-of</b> equals what the online store would have returned. Then raise the publication lag and see the serving value get staler.</p>
+        <div class="btns" role="group" aria-label="Join mode" id="pit-mode">
+          <button class="btn" type="button" data-m="latest" aria-pressed="false">Latest snapshot</button>
+          <button class="btn" type="button" data-m="nearest" aria-pressed="false">Nearest snapshot</button>
+          <button class="btn" type="button" data-m="asof" aria-pressed="true">As-of (available at or before)</button>
+        </div>
+        <div class="btns" role="group" aria-label="Scored transaction" id="pit-ev"></div>
+        <div class="chart-wrap" id="pit-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--ink)"></i>Normal transaction</span>
+          <span><i class="sq" style="background:var(--bad)"></i>Fraud-burst transaction</span>
+          <span><i style="background:var(--line)"></i>Feature snapshot (every 6 hours)</span>
+          <span><i style="background:var(--accent)"></i>Chosen, correct</span>
+          <span><i style="background:var(--bad)"></i>Chosen, uses the future</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-lag">Hours before a snapshot is usable <output for="s-lag"></output></label><input type="range" id="s-lag" min="0" max="6" step="1" value="2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st2-train-b"><div class="k">Value in the training row</div><div class="v" id="st2-train"></div><div class="s" id="st2-train-s"></div></div>
+          <div class="stat"><div class="k">Value the live system would see</div><div class="v" id="st2-serve"></div><div class="s" id="st2-serve-s"></div></div>
+          <div class="stat" id="st2-gap-b"><div class="k">Training minus serving</div><div class="v" id="st2-gap"></div><div class="s">a gap means skew by construction</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: one card with 11 transactions over 48 hours (a burst after hour 38). The feature is "transactions in the 24 hours up to the snapshot", recomputed every 6 hours; a snapshot becomes usable after the chosen lag. The live system reads the latest usable snapshot. Counts are exact.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two details worth remembering. First, <strong>as-of equals serving</strong>: if the join takes the latest usable snapshot, the training row is what the online store would have said, staleness included. That is the point. A model should learn from the inputs it will really get, not from idealised fresh ones. Second, when late data is corrected after the fact (a backdated chargeback, a restated balance), the offline history may be <em>cleaner</em> than anything live ever saw. Stores that keep both the event time and the time the value was recorded ("bitemporal" tables) let you reproduce what was known then.</p>
+      </div>
+
+      <h3 class="sub" id="m-fresh">Freshness, latency and how fresh is fresh enough</h3>
+      <div class="prose">
+        <p>Consistency is not freshness. A feature can be perfectly consistent and uselessly stale. The right freshness depends on how fast the thing you detect moves.</p>
+        <ul>
+          <li><strong>A salary-credit average</strong> changes monthly. Daily batch is plenty.</li>
+          <li><strong>"Card used in three countries in an hour"</strong> changes in minutes. If the online store updates every 15 minutes, the attacker has already finished.</li>
+          <li><strong>Credit limit utilisation</strong> for an overnight collections list: hours are fine.</li>
+        </ul>
+        <p>On average a feature materialised every Δ minutes is Δ/2 minutes old when read, and up to Δ old at worst, plus pipeline delay. The cost of streaming everything is complexity and money, so you choose per feature. The second constraint is the lookup itself: if a decision has a 100 ms budget, reading 40 features from the online store at 5 ms each, serially, is already 200 ms. Stores fetch a whole feature set for an entity in one call, and keep feature vectors small, for this reason.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>age of value when read</mtext><mo>≈</mo><mfrac><mi>Δ</mi><mn>2</mn></mfrac><mo>+</mo><mi>ℓ</mi></math>
+        <p class="where">Δ is the materialisation interval and ℓ the pipeline delay between the event and the write. A 15-minute batch with a 2-minute delay has values that are on average 9.5 minutes old when read, and up to 17 minutes. Read it as a bound on how early any rule built on that feature can possibly fire.</p>
+      </div>
+
+      <figure class="figure" id="fig-fresh">
+        <div class="fig-head"><span class="fig-title">What a stale online store costs in a fast attack</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> an attack starts at minute 100 and ramps up. The rule says "block when the one-hour transaction count reaches 8". With a 5-minute refresh the blue steps lag only slightly. Slide to 60 or 240 minutes and the value stays flat while the attacker keeps going. Press <b>Streaming</b> to see the floor.</p>
+        <div class="btns" role="group" aria-label="Streaming"><button class="btn" type="button" id="b-stream" aria-pressed="false">Streaming (update on every event)</button></div>
+        <div class="chart-wrap" id="fresh-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>True one-hour count</span>
+          <span><i style="background:var(--accent)"></i>Value in the online store</span>
+          <span><i style="background:var(--warn)"></i>Block at 8</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-delta">Refresh interval Δ <output for="s-delta"></output></label><input type="range" id="s-delta" min="0" max="2.4" step="0.05" value="1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Average age of value when read</div><div class="v" id="st3-age"></div><div class="s">Δ/2 plus a 2-minute pipeline delay</div></div>
+          <div class="stat" id="st3-det-b"><div class="k">Rule fires at</div><div class="v" id="st3-det"></div><div class="s" id="st3-det-s"></div></div>
+          <div class="stat" id="st3-loss-b"><div class="k">Extra fraud let through</div><div class="v" id="st3-loss"></div><div class="s">against streaming</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: the true count is 2 until minute 100, then rises by 0.2 a minute (one extra transaction every 5 minutes, each AED 1,800) to a cap of 30. The store is written at multiples of Δ and each write lands 2 minutes later (streaming: 0.1 minute). The rule can use only what is in the store. Exact for this ramp.</p>
+      </figure>
+
+      <h3 class="sub" id="m-quality">Data quality checks: what to test and where</h3>
+      <div class="prose">
+        <p>Everything above assumes the raw data is right. Upstream it often is not: a core-banking release changes a column, a vendor feed stalls, a join silently drops customers. The model does not crash; it consumes garbage. Quality checks are cheap tests run on each batch (or window of a stream) <em>before</em> the features are used. They fall into a few families, taken from the tooling in Great Expectations, Soda, Deequ and the Google data validation work.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Family</th><th>Question</th><th>Example for a transactions table</th></tr></thead>
+          <tbody>
+            <tr><td><b>Schema</b></td><td>Are the columns and types as agreed?</td><td><code>amount</code> is decimal, <code>channel</code> exists, no new columns unannounced</td></tr>
+            <tr><td><b>Completeness</b></td><td>How much is missing?</td><td>Null share of <code>amount</code> ≤ 1%; row count within ±30% of the same weekday last month</td></tr>
+            <tr><td><b>Validity / range</b></td><td>Are values possible?</td><td>0 &lt; amount ≤ 200,000 AED; currency code in the ISO list</td></tr>
+            <tr><td><b>Uniqueness</b></td><td>Are keys unique?</td><td><code>txn_id</code> has no duplicates (a replayed message would double a feature)</td></tr>
+            <tr><td><b>Accepted values</b></td><td>Are categories known?</td><td><code>channel</code> in {POS, ECOM, ATM, APP}; a new "WALLET" must be reviewed</td></tr>
+            <tr><td><b>Freshness</b></td><td>Is the data current?</td><td>Newest event is under 15 minutes old</td></tr>
+            <tr><td><b>Distribution</b></td><td>Does the shape match what we know?</td><td>Population stability index of <code>amount</code> below 0.2 against a reference (F7.7)</td></tr>
+            <tr><td><b>Referential</b></td><td>Do joins find their partners?</td><td>99.5% of transactions match a known customer</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Checks sit at several points: at <strong>ingestion</strong> (cheap, stops bad raw data), after <strong>transformation</strong> (catches your own join bugs) and at <strong>feature-serving</strong> time (catches a feature out of range in a single request, with a safe default or a fallback). Each check needs a decision attached: <em>block</em> the load and keep yesterday's values, <em>warn</em> and continue, or <em>quarantine</em> the offending rows. A check that nobody acts on is noise.</p>
+        <p>Thresholds are the hard part. Too tight and the team learns to ignore alerts; too loose and nothing is caught. Start from history, flag on a high percentile of the usual variation, and review every false alarm as a chance to improve the check.</p>
+      </div>
+
+      <figure class="figure" id="fig-dq">
+        <div class="fig-head"><span class="fig-title">Which check catches which upstream accident?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> choose a fault, then switch checks off one at a time. Most faults are caught by exactly one or two checks. The last fault, a plausible 15% drift in amounts, passes every check: no rule substitutes for monitoring (F7.7). With every check off, see how many alerts the model would raise on corrupted input.</p>
+        <div class="btns" role="group" aria-label="Fault" id="dq-faults"></div>
+        <div class="chk-list" id="dq-checks"></div>
+        <div class="table-wrap"><div id="dq-table"></div></div>
+        <div class="stats">
+          <div class="stat" id="st4-alert-b"><div class="k">Alerts the model raises on this batch</div><div class="v" id="st4-alert"></div><div class="s" id="st4-alert-s"></div></div>
+          <div class="stat" id="st4-act-b"><div class="k">Pipeline action</div><div class="v" id="st4-act"></div><div class="s" id="st4-act-s"></div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: 2,000 transactions per batch; amounts lognormal with median AED 300, spread 1.1; four channels; ages 0 to 60 minutes. The reference for the distribution check is a separate clean batch of 2,000 (ten deciles). The toy model alerts when amount exceeds about AED 1,800 (risk above 0.5) and treats a null as zero. Faults are injected deterministically with a fixed seed; the values shown are computed from the batch.</p>
+      </figure>
+
+      <h3 class="sub" id="m-contract">Data contracts: moving the promise upstream</h3>
+      <div class="prose">
+        <p>Checks catch problems after the producer ships them. A <strong>data contract</strong> is the agreement made <em>before</em>: the team that owns a dataset publishes a machine-readable statement of what it delivers, and consumers (your feature pipelines) depend on that statement. It usually covers:</p>
+        <ul>
+          <li><strong>Schema:</strong> columns, types, which are nullable, units (AED, or fils?), time zone.</li>
+          <li><strong>Semantics:</strong> what each field means, how a transaction is defined, how reversals are represented.</li>
+          <li><strong>Quality and service levels:</strong> maximum null share, freshness, delivery time, retention.</li>
+          <li><strong>Ownership and change rules:</strong> a named owner, how breaking changes are announced and versioned, how long the old version continues.</li>
+          <li><strong>Classification:</strong> contains personal data, residency constraints, who may access (links to <a href="g2-privacy-basics-minimisation-consent-anonymisation.html">G2</a>).</li>
+        </ul>
+<pre><code>dataset: core_banking.card_transactions
+version: 2.1
+owner: payments-data@bank.example
+schema:
+  - name: txn_id        type: string   required: true   unique: true
+  - name: amount        type: decimal  unit: AED        required: true
+  - name: event_ts      type: timestamp tz: UTC
+  - name: channel       type: string   allowed: [POS, ECOM, ATM, APP]
+quality:
+  - freshness: event_ts within 15 minutes
+  - null_share(amount) &lt;= 0.01
+change_policy: breaking changes announced 30 days ahead, two versions run in parallel</code></pre>
+        <p>The point is the <em>process</em>: a contract in a repository, validated in CI against the producer's code, so a release that renames a column fails its own tests, not your model at 3 a.m. Open specifications exist (the Open Data Contract Standard from the Bitol project is one), and quality tools can turn the contract's clauses into executable checks. The honest limitation: a contract binds only the teams that sign it, and it needs a producer who accepts it as part of their job. At many banks the hard part is organisational, not technical.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson is where the modelling topics meet the plumbing. These are the connections to keep.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F3.1 · Leakage and point-in-time</span><span class="t"><a href="f3-leakage-point-in-time.html">The theory behind the as-of join</a></span><p>F3.1 explains why using later information is leakage. A feature store makes the right join the default instead of a discipline each analyst has to remember.</p></div>
+        <div class="link-card"><span class="code">F3.4 · Feature engineering</span><span class="t"><a href="f3-feature-engineering.html">What is worth storing</a></span><p>Behavioural aggregates and encodings are the content of a feature store. Their definitions (windows, units, missing-value rules) are exactly what must stay identical in training and serving.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift monitoring</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">Distribution checks are drift checks</a></span><p>The PSI check in Simulation 4 is the same statistic. Quality checks catch sudden breaks; drift monitoring catches the slow slide the checks pass.</p></div>
+        <div class="link-card"><span class="code">P1.1 – P1.2 · Warehouses and lakehouses</span><span class="t"><a href="p1-warehouses-lakes-and-lakehouses.html">The offline store lives here</a></span><p>The offline side of a feature store is tables in the warehouse or lakehouse. Table formats with time travel help you reproduce training sets.</p></div>
+        <div class="link-card"><span class="code">P1.5 · Lineage and metadata</span><span class="t"><a href="p1-lineage-and-metadata.html">Which model depends on which column?</a></span><p>When a producer wants to change a column, lineage tells you which features and models break. Contracts name the owner; lineage shows the consumers.</p></div>
+        <div class="link-card"><span class="code">P2 · Model lifecycle and deployment</span><span class="t"><a href="p2-deployment-patterns-batch-real-time.html">Batch versus real-time serving</a></span><p>Whether you need an online store at all depends on the deployment pattern. See also <a href="p2-the-model-lifecycle-from-experiment.html">the model lifecycle</a>, where feature versions are recorded with the model version.</p></div>
+        <div class="link-card"><span class="code">P5 · System design</span><span class="t"><a href="p5-designing-a-real-time-fraud.html">Real-time fraud architecture</a></span><p>The worked design case uses these building blocks, with latency budgets. The batch counterpart is <a href="p5-designing-batch-propensity-and-campaign.html">propensity and campaign scoring</a>.</p></div>
+        <div class="link-card"><span class="code">B1 · Fraud detection</span><span class="t"><a href="b1-transaction-and-card-fraud-detection.html">Velocity features, in anger</a></span><p>Counts and sums over short windows are the textbook online-offline consistency problem. Labels arriving late (<a href="b1-delayed-labels-and-feedback-loops.html">B1.2</a>) add a second time axis.</p></div>
+        <div class="link-card"><span class="code">F10.2 · Testing mindset</span><span class="t"><a href="f10-the-testing-mindset.html">Tests for data, not just code</a></span><p>A quality check is a unit test on data. The habits transfer: small, named, run automatically, failing loudly.</p></div>
+        <div class="link-card"><span class="code">G3 · Model risk and monitoring</span><span class="t"><a href="g3-ongoing-monitoring-and-periodic-review.html">Evidence for validators</a></span><p>Validators ask how inputs are controlled. Contracts, check results and reproducible training sets are the documents they want to see.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Card and payment fraud.</strong> Velocity, device and merchant features with sub-second budgets; streaming windows; consistency between replayed history and live.</li>
+          <li><strong>Credit decisioning.</strong> Bureau pulls, income and balance aggregates used in both a batch scorecard and an application-time decision. The scorecard and the live decision must read the same definition of "average monthly salary".</li>
+          <li><strong>Marketing and churn.</strong> Mostly batch features and a daily list; consistency problems are quieter but still real, for instance different definitions of "active customer" in two teams' tables.</li>
+          <li><strong>Regulatory and risk data.</strong> The principles for risk data aggregation and reporting from the Basel Committee (BCBS 239) ask banks for accuracy, completeness, timeliness and clear ownership of risk data. Contracts and checks are a practical way to evidence those. Check with the bank's own data governance team how its regulator (CBUAE or SAMA) frames this; I have not cited any specific local rule.</li>
+          <li><strong>LLM and RAG systems.</strong> The same idea in a different form: an index of documents and embeddings must be versioned and fresh, and a changed embedding model silently breaks retrieval.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The concepts are settled and the product landscape is still moving. The main shifts: feature stores are folding into data platforms, real-time features have become a mainstream expectation, and data contracts have moved from a blog idea to a standardised, tool-supported practice.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with light web searches. Much of what I found was blogs and comparison sites, so market claims below are marked as reported rather than confirmed.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2015</span><div><div class="t">ML debt is mostly data and plumbing</div><p>A widely cited Google paper argued that real ML systems are mostly glue code and data dependencies, naming undeclared consumers, unstable data and entanglement as sources of hidden cost.</p><div class="src">Sculley et al., NeurIPS 2015</div></div></li>
+        <li><span class="yr">2017</span><div><div class="t">Feature stores arrive in industry</div><p>Uber described the idea of a shared feature store in its Michelangelo platform; the pattern of one definition feeding offline and online use spread from there.</p><div class="src">Uber Engineering blog, 2017 (from memory; check the original post)</div></div></li>
+        <li><span class="yr">2018–19</span><div><div class="t">Automated data validation</div><p>Amazon's Deequ and Google's TFX data validation made "unit tests for data" a library: constraints and schema suggested from data, with checks on every batch and drift between batches.</p><div class="src">Schelter et al., VLDB 2018; Breck et al., SysML/MLSys 2019</div></div></li>
+        <li><span class="yr">2019–22</span><div><div class="t">Open-source stores and the data contract idea</div><p>Feast became the best-known open-source feature store; Hopsworks and others followed. In parallel the "data contract" idea spread from data-engineering practice as a response to upstream breakage.</p><div class="src">Feast and Hopsworks documentation</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Consolidation into the lakehouse</div><p>Reported: Databricks agreed to acquire Tecton, a leading managed feature platform, in 2025, and commentary describes the market as splitting between dedicated platforms and lakehouse- or warehouse-native features (for example, ordinary Delta tables in Unity Catalog serving as feature tables on Databricks). Feast is reported to have broadened its maintainer base and joined the PyTorch ecosystem in January 2026. These come from secondary sources.</p><div class="src">Pulse news item on the Tecton deal; Databricks feature engineering docs; vendor-neutral blog comparisons (treat as leads)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Data contracts get a standard and tooling</div><p>The Open Data Contract Standard (Bitol project, under the Linux Foundation) is the emerging common format. Version 3 is described as production-ready, tools such as Soda can translate its quality clauses into executable checks, and a report puts a 3.2 release in September 2026. I could not confirm the 3.2 date from an English primary source; check the Bitol repository.</p><div class="src">Bitol ODCS documentation; Soda documentation; secondary reports</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically (my assessment, not a survey):</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research or early adoption · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>As-of joins for training sets</b></td><td>Point-in-time retrieval, from a store or hand-written SQL.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Automated quality checks on pipelines</b></td><td>Null, range, freshness, uniqueness tests with alerts and owners.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Dedicated feature store with online serving</b></td><td>Registry plus offline and online stores, shared across models.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Streaming features for fraud</b></td><td>Windowed aggregates updated per event, with replay for training.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Data contracts enforced in producers' CI</b></td><td>Machine-readable contracts checked on every release.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Training-serving skew monitoring</b></td><td>Logging served features and comparing them to recomputed offline values.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Features computed once for ML and LLM agents</b></td><td>Feature and context services shared between models and agent tools.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Do not start with a product. Start with shared definitions, as-of joins, logged served features and checks with owners; add a store when many models or sub-second decisions make the duplication hurt.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each failure comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Two implementations of one feature</div><p>SQL in training, Java or Python in serving. Rounding, time zones, window edges and null handling all differ.</p><div class="spot"><b>Spot it</b>Log the features used at serving time and recompute them offline for the same transactions. The difference should be zero or explained.</div></li>
+        <li><div class="t">Joining on the latest value</div><p>Training rows get feature values from after the label. AUC is gorgeous, live performance is not.</p><div class="spot"><b>Spot it</b>Check the join key and timestamp. Any join on customer ID alone, or on date without time, is suspect. Compare offline AUC with a forward-in-time test.</div></li>
+        <li><div class="t">Joining on the time a value describes, not when it arrived</div><p>A nightly job writes Tuesday's totals at 02:00 Wednesday, but the training set treats them as available Tuesday.</p><div class="spot"><b>Spot it</b>Ask for the availability timestamp of each feature. If only an event timestamp exists, assume leakage until shown otherwise.</div></li>
+        <li><div class="t">Silent defaults</div><p>A missing feature becomes 0 online and NaN offline (or the reverse). The model has learned that NaN means something.</p><div class="spot"><b>Spot it</b>Compare missing-value rates per feature, offline and live. A feature that is never missing online but often missing in training is a warning.</div></li>
+        <li><div class="t">Stale online store</div><p>A stream stalls; the last value sits there for hours, looking normal.</p><div class="spot"><b>Spot it</b>Track the age of each served value and alert when it exceeds the promise. A freshness check on the online store is as important as on the source.</div></li>
+        <li><div class="t">Upstream change nobody told you about</div><p>A core system release switches amounts to fils, adds a currency, renames a code.</p><div class="spot"><b>Spot it</b>Range and accepted-value checks on ingestion, a contract with a change policy, and an on-call owner.</div></li>
+        <li><div class="t">Checks with no owner or no action</div><p>Hundreds of alerts, all muted.</p><div class="spot"><b>Spot it</b>For every check, name who is paged and whether the pipeline blocks. Review which checks have fired in the last quarter.</div></li>
+        <li><div class="t">A check suite that passes plausible nonsense</div><p>A slowly drifting definition or a 15% shift in an amount passes every rule.</p><div class="spot"><b>Spot it</b>Add distribution monitoring on features and outputs (F7.7), and reconcile against an independent source such as the general ledger.</div></li>
+        <li><div class="t">Feature versions that change under a model</div><p>Someone fixes a definition; the registered model, trained on the old version, now receives the new one.</p><div class="spot"><b>Spot it</b>Pin feature versions in the model's metadata. A change creates a new feature version and a retraining plan.</div></li>
+        <li><div class="t">Buying a platform to fix a process</div><p>The store goes live but definitions are still copied by hand, and nobody owns them.</p><div class="spot"><b>Spot it</b>Ask how many models share each feature, who approves a change, and how a change is rolled out.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“A model can pass every test and still underperform live if it is fed slightly different numbers than it learned from. That is the most common reason good models disappoint in production, and it makes no noise. The fix is not a bigger model: it is defining each input once, using it the same way in training and live, and checking what arrives from upstream systems. I'd start with the few inputs behind fraud and credit decisions, put owners and automatic checks on them, and expand from there.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To an engineer or validator</span>
+          <blockquote>“Features are defined once in a registry and materialised to an offline store for training and an online store for serving. Training sets are built with as-of joins on availability time, so each row equals what the online store would have returned. We log served feature vectors and compare them to offline recomputation to detect skew. Upstream datasets have contracts covering schema, units, freshness and change policy, with checks in CI and at ingestion; drift monitoring covers what checks can't.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Do we really need a feature store?”</summary><div class="ans"><p>Maybe not yet. The value is in shared definitions, point-in-time joins and a low-latency read path. With a few batch models, a well-governed feature table and shared transformation code may be enough. A store pays off when several models share features, when sub-second features matter, or when audit needs exact reproduction of past scores. Buy or build for the problems we actually have, and avoid adding a platform to cover a process gap.</p></div></details>
+        <details class="reveal"><summary>“The model scored well offline and is poor live. Where do you start?”</summary><div class="ans"><p>With the inputs, before the model. Log the live feature values and recompute them offline for the same transactions; check missing rates and distributions; check that the training join used availability time; compare against a forward-in-time test to rule out leakage. Only then look at drift in the world or label delay.</p></div></details>
+        <details class="reveal"><summary>“How fresh do the features need to be?”</summary><div class="ans"><p>As fresh as the behaviour we are trying to catch moves. An attack that completes in minutes needs minutes; a salary pattern needs a day. I'd set a freshness promise per feature, measure the age of served values, and spend streaming money only where the loss from delay justifies it.</p></div></details>
+        <details class="reveal"><summary>“Why do data contracts matter if we already have quality checks?”</summary><div class="ans"><p>Checks find problems after the producer ships them; a contract makes the producer responsible beforehand and fails their release, not our model. It also records meaning and units, which checks can't, and names an owner. We need both, and neither replaces drift monitoring.</p></div></details>
+        <details class="reveal"><summary>“Is the online store the source of truth?”</summary><div class="ans"><p>No. It holds the latest values for fast reads, rebuilt from the same definitions as the offline history. The offline store, plus the logged served values, is the record. If the two disagree, the offline recomputation is the thing to debug against, and the disagreement is the finding.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. In your own words: what is training-serving skew, and why does it not raise an error?</summary><div class="ans"><p>The features the model sees live differ from the ones it trained on, because they were computed by different code, from different data, or at a different time. Every value is still valid and in range, so nothing fails; the model just gets less accurate. You find it only by comparing live inputs to offline recomputation or by watching performance.</p></div></details>
+        <details class="reveal"><summary>2. A nightly job finishes writing Tuesday's customer totals at 02:00 on Wednesday. A fraud label occurred Tuesday 20:00. Which timestamp should the as-of join use and what goes wrong otherwise?</summary><div class="ans"><p>The availability time (Wednesday 02:00), so the Tuesday-20:00 row gets Monday's totals, which is what the live system would have had. Joining on the date or event time the totals describe gives the row values that were not available yet: a leak.</p></div></details>
+        <details class="reveal"><summary>3. A feature is refreshed every 30 minutes with a 3-minute pipeline delay. How old is it when read, on average and at worst?</summary><div class="ans"><p>Average Δ/2 + ℓ = 15 + 3 = 18 minutes. Worst case 30 + 3 = 33 minutes. A rule needing a signal within 5 minutes cannot rely on it.</p></div></details>
+        <details class="reveal"><summary>4. Why is the online store not the same as the offline store with a cache in front of it?</summary><div class="ans"><p>The online store holds only the latest value per entity in a key-value system built for millisecond lookups; the offline store holds full history in analytical tables for large scans. They are populated by the same definitions, but they are designed for opposite access patterns. A cache in front of a warehouse would still be too slow on a miss and cannot do windowed updates.</p></div></details>
+        <details class="reveal"><summary>5. Name two checks that would catch amounts suddenly arriving in fils instead of dirhams, and one that would not.</summary><div class="ans"><p>The range check (maximum amount) and the distribution check (PSI against a reference) would both fire. A null-rate, uniqueness or freshness check would not, since values are present, unique and recent.</p></div></details>
+        <details class="reveal"><summary>6. Your quality checks all pass, yet fraud losses rise and the model's average score has changed. What other safeguards should you have?</summary><div class="ans"><p>Drift monitoring on features and on scores (F7.7), reconciliation against an independent source, logged served features compared to offline, and monitoring of model performance once labels mature. Checks catch breaks, not slow or plausible shifts.</p></div></details>
+        <details class="reveal"><summary>7. A colleague proposes recomputing features in training using only the freshest, cleanest corrected history. What is the risk?</summary><div class="ans"><p>The model learns from inputs cleaner than anything it will receive live (late data included, corrections applied), so training is optimistic compared with serving. Prefer what was known at the time, or log the actual served values for later training.</p></div></details>
+        <details class="reveal"><summary>8. Sketch what would go in a data contract for a customer-income feed used by a credit model.</summary><div class="ans"><p>Schema and units (currency, monthly or annual, gross or net), nullability and what null means, source and definition of income, update frequency and freshness, accepted ranges, owner, change policy with notice period and versioning, personal-data classification and access rules.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>D. Sculley et al. <a href="https://papers.nips.cc/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html">Hidden Technical Debt in Machine Learning Systems</a>. NeurIPS, 2015.</li>
+        <li>Google. <a href="https://developers.google.com/machine-learning/guides/rules-of-ml">Rules of Machine Learning: Best Practices for ML Engineering</a>. Includes the sections on training-serving skew.</li>
+        <li>E. Breck et al. <a href="https://mlsys.org/Conferences/2019/doc/2019/167.pdf">Data Validation for Machine Learning</a>. MLSys, 2019.</li>
+        <li>S. Schelter et al. <a href="http://www.vldb.org/pvldb/vol11/p1781-schelter.pdf">Automating Large-Scale Data Quality Verification</a>. PVLDB, 2018 (Deequ).</li>
+        <li>M. Kleppmann. <a href="https://dataintensive.net/">Designing Data-Intensive Applications</a>. O'Reilly, 2017. Streams, time and consistency.</li>
+        <li><a href="https://docs.feast.dev/">Feast documentation</a>. Open-source feature store: registry, offline and online stores, point-in-time joins.</li>
+        <li><a href="https://docs.databricks.com/aws/en/machine-learning/feature-store/">Databricks feature engineering documentation</a>. A lakehouse-native approach to the same ideas.</li>
+        <li><a href="https://bitol-io.github.io/open-data-contract-standard/">Open Data Contract Standard</a>. Bitol project (Linux Foundation).</li>
+        <li><a href="https://docs.greatexpectations.io/">Great Expectations documentation</a> and <a href="https://docs.soda.io/">Soda documentation</a>. Quality checks and contract verification in practice.</li>
+        <li>Basel Committee on Banking Supervision. <a href="https://www.bis.org/publ/bcbs239.htm">Principles for effective risk data aggregation and risk reporting (BCBS 239)</a>. 2013.</li>
+        <li><a href="https://www.pulse.bot/big-data/news/databricks-acquires-tecton-to-accelerate-realtime-ai-agent-data-pipelines-ab21d26f-33ca-4339-b4a8-b955d644b93b">Databricks acquires Tecton</a>. News summary (secondary source, used for the market note in Part 4).</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in P1: Lineage and metadata (P1.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const Q = x => 1 - L.normCdf(x);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  const aed = v => "AED " + L.fmtInt(v);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: skew
+  // =====================================================================
+  const MU = 3, PI = 0.005, N = 100000, Z = 2.3263479;
+  const S1 = { s: 0.4, b: 0 };
+  const skBox = $("skew-chart");
+  function renderSkew() {
+    const sd = Math.sqrt(1 + S1.s * S1.s), b = S1.b;
+    const W = Math.max(300, skBox.clientWidth), H = 250, m = { l: 14, r: 14, t: 14, b: 40 };
+    const svg = mk(skBox, W, H, "Score distributions offline and live");
+    const x = L.scale(-4, 8, m.l, W - m.r), y = L.scale(0, 0.42, H - m.b, m.t);
+    [-4, -2, 0, 2, 4, 6, 8].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Model score (log-odds, higher is riskier)", { "text-anchor": "middle" });
+    const curve = (mu, s) => { const p = []; for (let t = -4; t <= 8.001; t += 0.1) p.push([x(t), y(L.normPdf((t - mu) / s) / s)]); return L.path(p); };
+    L.svg("path", { d: curve(0, 1), class: "c-off" }, svg);
+    L.svg("path", { d: curve(MU, 1), class: "c-off" }, svg);
+    L.svg("path", { d: curve(b, sd), class: "c-legit" }, svg);
+    L.svg("path", { d: curve(MU + b, sd), class: "c-fraud" }, svg);
+    L.svg("line", { x1: x(Z), x2: x(Z), y1: m.t, y2: H - m.b, class: "c-cut" }, svg);
+    tx(svg, x(Z) + 5, m.t + 10, "alert line", { class: "lbl-warn" });
+    const off = { fpr: 0.01, tpr: Q(Z - MU) }, on = { fpr: Q((Z - b) / sd), tpr: Q((Z - MU - b) / sd) };
+    const ev = r => { const a = N * (PI * r.tpr + (1 - PI) * r.fpr); return { a, cost: 40 * a + 400 * N * PI * (1 - r.tpr), prec: N * PI * r.tpr / a }; };
+    const e0 = ev(off), e1 = ev(on);
+    const auc0 = L.normCdf(MU / Math.SQRT2), auc1 = L.normCdf(MU / (sd * Math.SQRT2));
+    $("st1-auc").textContent = auc0.toFixed(3) + " → " + auc1.toFixed(3); cls($("st1-auc-b"), auc0 - auc1 > 0.05 ? "bad" : auc0 - auc1 > 0.01 ? "" : "ok");
+    $("st1-rec").textContent = pct(on.tpr, 0); $("st1-rec-s").textContent = "offline: " + pct(off.tpr, 0); cls($("st1-rec-b"), off.tpr - on.tpr > 0.1 ? "bad" : "");
+    $("st1-alert").textContent = L.fmtInt(e1.a); $("st1-alert-s").textContent = "offline: " + L.fmtInt(e0.a); cls($("st1-alert-b"), e1.a > 1.5 * e0.a ? "bad" : "");
+    $("st1-cost").textContent = aed(e1.cost); $("st1-cost-s").textContent = "offline: " + aed(e0.cost); cls($("st1-cost-b"), e1.cost > 1.15 * e0.cost ? "bad" : "ok");
+    $("s1-verdict").innerHTML = (S1.s < 0.01 && Math.abs(b) < 0.01)
+      ? "No skew: live behaviour matches the notebook. Nothing in the pipeline will tell you this stays true."
+      : "Same model, same alert line. Live it catches <b>" + pct(on.tpr, 0) + "</b> of fraud instead of " + pct(off.tpr, 0) + ", and about <b>" + pct(e1.prec, 0) + "</b> of alerts are real instead of " + pct(e0.prec, 0) + ". Cost goes from " + aed(e0.cost) + " to <b>" + aed(e1.cost) + "</b> per 100,000, and no error was raised.";
+  }
+  L.bind("s-noise", v => v.toFixed(2), v => { S1.s = v; renderSkew(); });
+  L.bind("s-shift", v => (v > 0 ? "+" : "") + v.toFixed(2), v => { S1.b = v; renderSkew(); });
+  document.querySelectorAll("[data-p]").forEach(btn => btn.addEventListener("click", () => {
+    const [s, b] = btn.dataset.p.split(",").map(Number);
+    S1.s = s; S1.b = b;
+    $("s-noise").value = s; $("s-shift").value = b;
+    $("s-noise").dispatchEvent(new Event("input")); $("s-shift").dispatchEvent(new Event("input"));
+  }));
+
+  // =====================================================================
+  // Simulation 2: point-in-time
+  // =====================================================================
+  const T = [2, 5, 8, 26, 27, 36, 38.5, 38.8, 39.1, 39.4, 39.7], BURST = 6; // index from which txns are the burst
+  const SNAPS = [0, 6, 12, 18, 24, 30, 36, 42, 48];
+  const cnt = s => T.filter(t => t > s - 24 && t <= s).length;
+  const S2 = { mode: "asof", ev: 8, lag: 2 };
+  const pitBox = $("pit-chart");
+  const evBox = $("pit-ev");
+  [6, 8, 10].forEach(i => {
+    const b = document.createElement("button");
+    b.className = "btn"; b.type = "button"; b.dataset.i = i; b.setAttribute("aria-pressed", String(i === S2.ev));
+    b.textContent = "Score the transaction at hour " + T[i];
+    b.addEventListener("click", () => { S2.ev = i; evBox.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(+x.dataset.i === i))); renderPit(); });
+    evBox.appendChild(b);
+  });
+  $("pit-mode").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    S2.mode = b.dataset.m; $("pit-mode").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); renderPit();
+  }));
+  function usable(e, lag) { const c = SNAPS.filter(s => s + lag <= e); return c.length ? c[c.length - 1] : null; }
+  function renderPit() {
+    const e = T[S2.ev], lag = S2.lag;
+    const serveS = usable(e, lag), serveV = serveS === null ? 0 : cnt(serveS);
+    let pick;
+    if (S2.mode === "latest") pick = 48;
+    else if (S2.mode === "nearest") { pick = SNAPS.reduce((a, s) => Math.abs(s - e) < Math.abs(a - e) || (Math.abs(s - e) === Math.abs(a - e) && s > a) ? s : a, SNAPS[0]); }
+    else pick = serveS === null ? 0 : serveS;
+    const leak = pick + (S2.mode === "asof" ? lag : 0) > e;
+    const W = Math.max(300, pitBox.clientWidth), H = 190, m = { l: 14, r: 14, t: 26, b: 34 };
+    const svg = mk(pitBox, W, H, "Timeline of transactions and feature snapshots");
+    const x = L.scale(0, 48, m.l, W - m.r), ym = 100;
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: ym, y2: ym, class: "ax" }, svg);
+    [0, 12, 24, 36, 48].forEach(v => tx(svg, x(v), H - m.b + 16, "h" + v, { "text-anchor": "middle" }));
+    L.svg("rect", { x: x(Math.max(0, pick - 24)), y: ym + 8, width: x(pick) - x(Math.max(0, pick - 24)), height: 16, class: "c-band" }, svg);
+    tx(svg, x(Math.max(0, pick - 24)) + 3, ym + 20, "window counted by the chosen snapshot", { class: "lbl-acc" });
+    SNAPS.forEach(s => {
+      const c = s === pick ? (leak ? "c-snap leak" : "c-snap pick") : "c-snap";
+      L.svg("line", { x1: x(s), x2: x(s), y1: ym - 36, y2: ym + 4, class: c }, svg);
+    });
+    T.forEach((t, i) => L.svg("rect", { x: x(t) - 3.5, y: ym - 22, width: 7, height: 12, rx: 1.5, class: "c-dot" + (i >= BURST ? " f" : "") }, svg));
+    L.svg("line", { x1: x(e), x2: x(e), y1: m.t, y2: ym + 4, class: "c-ev" }, svg);
+    tx(svg, x(e) + (x(e) > W * 0.7 ? -5 : 5), m.t + 4, "scored: hour " + e, { class: "lbl-ink", "text-anchor": x(e) > W * 0.7 ? "end" : "start" });
+    tx(svg, x(pick), ym - 42, "snapshot h" + pick, { class: leak ? "lbl-bad" : "lbl-acc", "text-anchor": pick > 40 ? "end" : "middle" });
+    const tv = cnt(pick);
+    $("st2-train").textContent = String(tv); $("st2-train-s").textContent = "snapshot at hour " + pick + (leak ? ", after the event" : "");
+    cls($("st2-train-b"), leak ? "bad" : "ok");
+    $("st2-serve").textContent = String(serveV); $("st2-serve-s").textContent = serveS === null ? "no snapshot usable yet" : "snapshot at hour " + serveS + ", usable from hour " + (serveS + lag);
+    const gap = tv - serveV; $("st2-gap").textContent = (gap > 0 ? "+" : "") + gap; cls($("st2-gap-b"), gap === 0 ? "ok" : "bad");
+    $("s2-verdict").innerHTML = S2.mode === "asof"
+      ? "As-of: the training row gets <b>" + tv + "</b>, exactly what the online store would have returned. The gap is zero by construction, even though that value is " + (e - (serveS === null ? 0 : serveS)).toFixed(1) + " hours old."
+      : leak ? "This join takes a snapshot built <b>after</b> the transaction. The training row counts <b>" + tv + "</b> transactions, but the live system would only have seen <b>" + serveV + "</b>. The model learns a burst signal that cannot exist at decision time."
+      : (gap === 0 ? "Here the choice happens to equal the live value, by luck. Change the transaction to see it fail." : "No future leak here, but the value (" + tv + ") still differs from what serving would give (" + serveV + "): a mismatch in staleness.");
+  }
+  L.bind("s-lag", v => v + " h", v => { S2.lag = v; renderPit(); });
+
+  // =====================================================================
+  // Simulation 3: freshness
+  // =====================================================================
+  const S3 = { k: 1, stream: false };
+  const frBox = $("fresh-chart");
+  const f = t => t < 100 ? 2 : Math.min(30, 2 + 0.2 * (t - 100));
+  function fireTime(D, lagMin) { // first time rule sees >= 8 in store
+    if (D === 0) return 130 + lagMin;
+    return Math.ceil(130 / D - 1e-9) * D + lagMin;
+  }
+  function renderFresh() {
+    const stream = S3.stream, D = stream ? 0 : Math.round(Math.pow(10, S3.k)), lag = stream ? 0.1 : 2;
+    const W = Math.max(300, frBox.clientWidth), H = 260, m = { l: 36, r: 12, t: 16, b: 40 };
+    const svg = mk(frBox, W, H, "True feature value and online store value over four hours");
+    const x = L.scale(0, 240, m.l, W - m.r), y = L.scale(0, 32, H - m.b, m.t);
+    [0, 8, 16, 24, 32].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" }); });
+    [0, 60, 120, 180, 240].forEach(v => tx(svg, x(v), H - m.b + 16, "min " + v, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Minutes (attack starts at 100)", { "text-anchor": "middle" });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(8), y2: y(8), class: "c-cut" }, svg);
+    const tp = [], sp = [];
+    for (let t = 0; t <= 240.001; t += 1) tp.push([x(t), y(f(t))]);
+    L.svg("path", { d: L.path(tp), class: "c-true" }, svg);
+    for (let t = 0; t <= 240.001; t += stream ? 1 : 0.5) {
+      const mt = stream ? Math.max(0, t - lag) : Math.floor((t - lag) / D) * D;
+      sp.push([x(t), y(f(Math.max(0, mt)))]);
+    }
+    L.svg("path", { d: L.path(sp), class: "c-stale" }, svg);
+    const tf = fireTime(D, lag), base = fireTime(0, 0.1);
+    if (tf <= 240) { L.svg("line", { x1: x(tf), x2: x(tf), y1: m.t, y2: H - m.b, class: "c-ev" }, svg); tx(svg, x(tf) + (x(tf) > W * 0.7 ? -5 : 5), m.t + 10, "blocks at min " + Math.round(tf), { class: "lbl-ink", "text-anchor": x(tf) > W * 0.7 ? "end" : "start" }); }
+    const age = D / 2 + lag;
+    $("st3-age").textContent = age < 1 ? "<1 min" : age.toFixed(1) + " min";
+    const beyond = tf > 240;
+    $("st3-det").textContent = beyond ? "never in window" : "minute " + Math.round(tf);
+    $("st3-det-s").textContent = "true count crosses 8 at minute 130"; cls($("st3-det-b"), beyond || tf - base > 30 ? "bad" : tf - base > 8 ? "" : "ok");
+    const extra = beyond ? (240 - base) * 360 : (tf - base) * 360;
+    $("st3-loss").textContent = (beyond ? "more than " : "") + aed(Math.round(extra / 10) * 10); cls($("st3-loss-b"), extra > 8000 ? "bad" : extra > 1500 ? "" : "ok");
+    $("s3-verdict").innerHTML = stream ? "Streaming: the store follows the true count within a fraction of a minute, so the rule fires almost as soon as it could."
+      : beyond ? "With a refresh every " + D + " minutes the store never reaches 8 inside the window. The attacker is invisible to this rule for the whole four hours."
+      : "Refreshing every <b>" + D + " minutes</b> delays the block until minute <b>" + Math.round(tf) + "</b>, about <b>" + Math.round(tf - base) + " minutes</b> later than streaming, and roughly <b>" + aed(Math.round(extra / 10) * 10) + "</b> more fraud gets through at one attacker transaction every 5 minutes.";
+  }
+  L.bind("s-delta", k => Math.round(Math.pow(10, k)) + " min", k => { S3.k = k; S3.stream = false; $("b-stream").setAttribute("aria-pressed", "false"); renderFresh(); });
+  $("b-stream").addEventListener("click", e => { S3.stream = !S3.stream; e.currentTarget.setAttribute("aria-pressed", String(S3.stream)); renderFresh(); });
+
+  // =====================================================================
+  // Simulation 4: data quality
+  // =====================================================================
+  function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  function gen(seed, n) {
+    const r = rng(seed), rows = [], CH = ["POS", "POS", "ECOM", "ATM", "APP", "POS", "ECOM", "APP"];
+    for (let i = 0; i < n; i++) {
+      const u = Math.max(1e-9, r()), v = r();
+      const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+      rows.push({ id: seed * 100000 + i, amt: Math.exp(Math.log(300) + 1.1 * z), ch: CH[Math.floor(r() * CH.length)], age: r() * 60 });
+    }
+    return rows;
+  }
+  const NB = 2000;
+  const REF = gen(11, NB);
+  const sortedRef = REF.map(r => r.amt).sort((a, b) => a - b);
+  const EDGES = []; for (let i = 1; i < 10; i++) EDGES.push(sortedRef[Math.floor(i * NB / 10)]);
+  const binOf = v => { let k = 0; while (k < EDGES.length && v > EDGES[k]) k++; return k; };
+  function dist(vals) { const c = new Array(10).fill(0); vals.forEach(v => c[binOf(v)]++); return c.map(x => Math.max(x / vals.length, 0.0005)); }
+  const REFD = dist(REF.map(r => r.amt));
+  const FAULTS = [
+    { k: "none", n: "No fault", d: "A normal day." },
+    { k: "nulls", n: "Join breaks: amount missing", d: "An upstream join stopped matching, so 12% of amounts are null." },
+    { k: "fils", n: "Some rows arrive in fils", d: "A new source system sends amounts in fils (×100) for 40% of rows." },
+    { k: "dupes", n: "Replayed messages", d: "A message-queue replay duplicates 8% of transactions." },
+    { k: "cat", n: "New channel appears", d: "A wallet product starts sending channel = WALLET (15% of rows)." },
+    { k: "stale", n: "Feed stalled for 3 hours", d: "The newest data is three hours old; values look normal." },
+    { k: "drift", n: "Plausible drift (+15%)", d: "Amounts creep up 15% because of a pricing change. Nothing is broken." }
+  ];
+  const CHECKS = [
+    { k: "null", n: "Null share of amount ≤ 1%" },
+    { k: "range", n: "0 < amount ≤ AED 200,000" },
+    { k: "uniq", n: "txn_id unique" },
+    { k: "acc", n: "channel in {POS, ECOM, ATM, APP}" },
+    { k: "fresh", n: "Newest event under 15 minutes old" },
+    { k: "psi", n: "PSI of amount below 0.2" }
+  ];
+  const S4 = { fault: "nulls", on: { null: true, range: true, uniq: true, acc: true, fresh: true, psi: true } };
+  function batch(fault) {
+    const rows = gen(22, NB).map(r => Object.assign({}, r));
+    const r = rng(77);
+    rows.forEach((x, i) => {
+      const u = r();
+      if (fault === "nulls" && u < 0.12) x.amt = null;
+      if (fault === "fils" && u < 0.40) x.amt *= 100;
+      if (fault === "cat" && u < 0.15) x.ch = "WALLET";
+      if (fault === "stale") x.age += 180;
+      if (fault === "drift") x.amt *= 1.15;
+    });
+    if (fault === "dupes") { const r2 = rng(5), extra = []; rows.forEach(x => { if (r2() < 0.08) extra.push(Object.assign({}, x)); }); return rows.concat(extra); }
+    return rows;
+  }
+  function measure(rows) {
+    const nn = rows.filter(r => r.amt !== null), ids = new Set(rows.map(r => r.id));
+    const accepted = new Set(["POS", "ECOM", "ATM", "APP"]);
+    const d = dist(nn.map(r => r.amt)); let psi = 0; for (let i = 0; i < 10; i++) psi += (d[i] - REFD[i]) * Math.log(d[i] / REFD[i]);
+    return {
+      null: (rows.length - nn.length) / rows.length,
+      range: nn.filter(r => r.amt <= 0 || r.amt > 200000).length,
+      uniq: rows.length - ids.size,
+      acc: rows.filter(r => !accepted.has(r.ch)).length,
+      fresh: Math.min.apply(null, rows.map(r => r.age)),
+      psi: psi,
+      alerts: nn.filter(r => r.amt > 1808).length
+    };
+  }
+  const BASE = measure(batch("none"));
+  const faultBox = $("dq-faults"), chkBox = $("dq-checks");
+  FAULTS.forEach(fl => {
+    const b = document.createElement("button");
+    b.className = "btn"; b.type = "button"; b.dataset.k = fl.k; b.textContent = fl.n; b.setAttribute("aria-pressed", String(fl.k === S4.fault));
+    b.addEventListener("click", () => { S4.fault = fl.k; faultBox.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); renderDq(); });
+    faultBox.appendChild(b);
+  });
+  CHECKS.forEach(c => {
+    const l = document.createElement("label"), i = document.createElement("input");
+    i.type = "checkbox"; i.checked = true;
+    i.addEventListener("change", () => { S4.on[c.k] = i.checked; renderDq(); });
+    l.appendChild(i); l.appendChild(document.createTextNode(c.n)); chkBox.appendChild(l);
+  });
+  function renderDq() {
+    const fl = FAULTS.find(x => x.k === S4.fault), M = measure(batch(S4.fault));
+    const res = {
+      null: [pct(M.null, 1), M.null > 0.01],
+      range: [L.fmtInt(M.range) + " rows out of range", M.range > 0],
+      uniq: [L.fmtInt(M.uniq) + " duplicate ids", M.uniq > 0],
+      acc: [L.fmtInt(M.acc) + " unknown values", M.acc > 0],
+      fresh: ["newest event " + M.fresh.toFixed(1) + " min old", M.fresh > 15],
+      psi: ["PSI " + M.psi.toFixed(3), M.psi >= 0.2]
+    };
+    let html = '<table class="data"><thead><tr><th>Check</th><th>Measured on this batch</th><th>Result</th></tr></thead><tbody>', fired = [];
+    CHECKS.forEach(c => {
+      const [val, bad] = res[c.k], on = S4.on[c.k];
+      const cl = !on ? "off" : bad ? "fail" : "pass", txt = !on ? "switched off" : bad ? "FAIL" : "pass";
+      if (on && bad) fired.push(c.n);
+      html += `<tr><td>${c.n}</td><td>${val}</td><td class="${cl}">${txt}</td></tr>`;
+    });
+    $("dq-table").innerHTML = html + "</tbody></table>";
+    const blocked = fired.length > 0;
+    $("st4-alert").textContent = blocked ? "none (batch held)" : L.fmtInt(M.alerts);
+    $("st4-alert-s").textContent = "a clean day gives " + L.fmtInt(BASE.alerts) + (blocked ? "; the features keep their last good values" : "");
+    const ratio = M.alerts / BASE.alerts;
+    cls($("st4-alert-b"), blocked ? "ok" : (ratio > 1.4 || ratio < 0.7) ? "bad" : "ok");
+    $("st4-act").textContent = blocked ? "Quarantined, owner paged" : "Loaded";
+    $("st4-act-s").textContent = blocked ? fired.length + " check" + (fired.length > 1 ? "s" : "") + " failed" : "no enabled check failed";
+    cls($("st4-act-b"), blocked ? "ok" : (ratio > 1.4 || ratio < 0.7) ? "bad" : "");
+    $("s4-verdict").innerHTML = "<b>" + fl.n + ".</b> " + fl.d + " " + (blocked
+      ? "Caught by: " + fired.join("; ") + "."
+      : S4.fault === "none" ? "No check fires, so the batch loads."
+      : S4.fault === "drift" ? "Every check passes: alerts rise to <b>" + L.fmtInt(M.alerts) + "</b> against " + L.fmtInt(BASE.alerts) + ", and only drift monitoring on outputs would notice."
+      : "Nothing is enabled that catches this, so the model runs on corrupted input and raises <b>" + L.fmtInt(M.alerts) + "</b> alerts against a normal " + L.fmtInt(BASE.alerts) + ".");
+  }
+
+  // initial render (bind() triggers the sliders; render the rest)
+  renderSkew(); renderPit(); renderFresh(); renderDq();
+  let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderSkew(); renderPit(); renderFresh(); }, 120); });
+})();
+</script>
+</body>
+</html>

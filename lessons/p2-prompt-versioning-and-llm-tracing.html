@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Seeing and Gating an LLM System: Prompt Versions, Traces and Evals in CI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  pre { margin: 14px 0; padding: 14px 16px; background: var(--sunk); border-radius: 10px; overflow-x: auto; max-width: 100%; font-size: 13px; line-height: 1.55; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .sp { fill: var(--accent); fill-opacity: .75; cursor: pointer; }
+  .sp.llm { fill: var(--warn); fill-opacity: .8; }
+  .sp.bad { fill: var(--bad); fill-opacity: .8; }
+  .sp.sel { stroke: var(--ink); stroke-width: 2; }
+  .sp-row { cursor: pointer; fill: transparent; }
+  .detail { font-family: var(--font-mono); font-size: 12px; padding: 10px 12px; background: var(--sunk); border-radius: 8px; overflow-wrap: anywhere; }
+  .detail div { margin-top: 2px; }
+  .detail .h { font-family: var(--font-display); font-size: 15px; font-weight: 600; margin-top: 0; }
+  .pc { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .pc-bad { fill: var(--bad); fill-opacity: .12; }
+  .pc-ok { fill: var(--ok); fill-opacity: .12; }
+  .thr-line { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; }
+  .now-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .alias-tag { font-family: var(--font-mono); font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin-left: 4px; }
+  .log { font-family: var(--font-mono); font-size: 12px; color: var(--muted); max-height: 7.5em; overflow-y: auto; padding: 8px 10px; background: var(--sunk); border-radius: 8px; }
+  .log div + div { margin-top: 2px; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track P · Production, data and platforms</span>
+    <span>Module P2 · MLOps and LLMOps</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>P2.5 · P2.6</span>
+        <span class="pill n">First 90 days</span>
+        <span>About 38 minutes</span>
+      </div>
+      <h1>Seeing and Gating an LLM System: Prompt Versions, Traces and Evals in CI</h1>
+      <p class="dek">A prompt is code that nobody can read the output of in advance. This lesson covers how to version it, how to see every step an LLM application took, and how to stop a bad change reaching customers by running tests automatically, including the arithmetic of how many test cases that takes.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Treat prompts, models and retrieval settings as versioned releases, record a trace of every step so a bad answer can be explained, and run a test set on every change as a statistical gate whose size you have chosen on purpose.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A bank's customer-service assistant answers questions about card fees from policy documents. On Tuesday a customer is told that the annual fee is waived after AED 20,000 of spend. The policy says AED 30,000. Complaints arrive. The team asks three questions at once.</p>
+        <ul>
+          <li><strong>What changed?</strong> Someone tweaked the system prompt last week, someone else changed the chunk size, and the provider quietly updated the model. Which one?</li>
+          <li><strong>What happened on that call?</strong> What was retrieved? Which prompt text was sent? Did the model see the right paragraph and ignore it, or never see it?</li>
+          <li><strong>How do we stop it happening again?</strong> Without a human re-reading a hundred answers after every edit.</li>
+        </ul>
+        <p>Each question has an ordinary software answer, with one twist. <strong>Versioning</strong> answers the first: every prompt, model name and setting is a numbered, immutable release. <strong>Tracing</strong> answers the second: every request leaves a record of each step, with inputs, outputs, timings and cost. <strong>Evals in CI</strong> answers the third: a test set runs automatically on each change and blocks the release if quality drops.</p>
+        <p>The twist is that the output is free text and varies from run to run. A normal unit test says "equals 42". An LLM test says "was this answer acceptable", scored by rules, by another model, or by a person, and a score from 100 cases is itself a noisy estimate. The third simulation shows how noisy.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>An LLM application has no single function to read. Its behaviour is the product of a prompt, a model, retrieval settings, tools and data. If you cannot name the exact combination that handled a request, you cannot debug it, audit it or roll it back.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-trace">Tracing: a request as a tree of timed steps</h3>
+      <div class="prose">
+        <p>A <strong>trace</strong> is the record of one request. It is made of <strong>spans</strong>: one per step, such as "retrieve", "rerank", "call model", "run output check". Each span has a start time, a duration, a parent span, and <strong>attributes</strong>: for a model call, the model name, prompt version, input and output token counts, and (if you choose to keep them) the prompt and completion text. Spans nest, so the picture is a tree, usually drawn as a waterfall of bars on a time axis.</p>
+        <p>This is the same idea as distributed tracing for microservices, and the standard is the same: OpenTelemetry. It has a set of "GenAI semantic conventions", agreed attribute names such as <code>gen_ai.request.model</code> and <code>gen_ai.usage.input_tokens</code>, so different tools can read each other's data. A minimal hand-written span looks like this:</p>
+<pre><code>with tracer.start_as_current_span("generate_answer") as span:
+    span.set_attribute("gen_ai.request.model", MODEL)
+    span.set_attribute("app.prompt_name", "card-faq")
+    span.set_attribute("app.prompt_version", 7)      # link trace to release
+    reply = client.call(messages)
+    span.set_attribute("gen_ai.usage.input_tokens", reply.usage.input)
+    span.set_attribute("gen_ai.usage.output_tokens", reply.usage.output)</code></pre>
+        <p>In practice the SDKs and platforms auto-instrument most of this. What you must add yourself is the business context: customer segment (never raw identifiers), channel, language, prompt version, retrieved document IDs and their versions. That is what lets you ask "show me every answer in Arabic that used policy document 118 version 2022".</p>
+        <p>Three things traces give you that logs do not:</p>
+        <ul>
+          <li><strong>Where the time and money went.</strong> The generation span usually dominates both. Retrieval often dominates variance.</li>
+          <li><strong>Why the answer was wrong.</strong> Right paragraph retrieved but ignored is a prompt or model problem. Wrong paragraph retrieved is a search problem (M3). Right paragraph, stale version is a data problem.</li>
+          <li><strong>A path from complaint to fix.</strong> Pull the trace, copy it into a test case, fix, and keep the case forever (M5, "building test sets from real failures").</li>
+        </ul>
+        <p>Two practical limits. <strong>Sampling</strong>: storing every full prompt and answer at volume is expensive, so teams keep all error and low-score traces and a random fraction of the rest. <strong>Privacy</strong>: prompts contain customer data. Decide what is redacted before it is stored, who can read traces, how long they are kept and where they live. Whether a managed tracing service is acceptable for a bank's data is a question for security and the regulator's data rules (CBUAE or SAMA), not something to settle in a notebook.</p>
+      </div>
+
+      <figure class="figure" id="fig-trace">
+        <div class="fig-head"><span class="fig-title">Read a trace: where did the time and money go?</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> start with the healthy trace and click any bar to see its attributes. Then switch on faults one at a time. Notice which fault changes latency, which changes cost, and which changes <em>neither</em> yet makes the answer wrong. That last one is invisible without a quality score attached to the trace.</p>
+        <div class="toggles" role="group" aria-label="Faults">
+          <button class="toggle" type="button" id="f-slow" aria-pressed="false">Slow vector store</button>
+          <button class="toggle" type="button" id="f-retry" aria-pressed="false">Model rate-limited, one retry</button>
+          <button class="toggle" type="button" id="f-topk" aria-pressed="false">Prompt v8 stuffs 12 chunks, not 4</button>
+          <button class="toggle" type="button" id="f-stale" aria-pressed="false">Index serves the 2022 fee policy</button>
+        </div>
+        <div class="chart-wrap" id="tr-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--accent);opacity:.75"></i>Ordinary step</span>
+          <span><i class="sq" style="background:var(--warn);opacity:.8"></i>Model call</span>
+          <span><i class="sq" style="background:var(--bad);opacity:.8"></i>Step affected by a fault</span>
+        </div>
+        <div class="detail" id="tr-detail"></div>
+        <div class="stats">
+          <div class="stat" id="tr-lat-b"><div class="k">End-to-end latency</div><div class="v" id="tr-lat"></div><div class="s" id="tr-lat-s"></div></div>
+          <div class="stat" id="tr-tok-b"><div class="k">Tokens in / out</div><div class="v" id="tr-tok"></div><div class="s">across both model calls</div></div>
+          <div class="stat" id="tr-cost-b"><div class="k">Cost of this request</div><div class="v" id="tr-cost"></div><div class="s" id="tr-cost-s"></div></div>
+          <div class="stat" id="tr-q-b"><div class="k">Answer correct?</div><div class="v" id="tr-q"></div><div class="s">only a quality score can tell</div></div>
+        </div>
+        <p class="verdict" id="tr-verdict"></p>
+        <p class="sim-note">Simulated: one request through a seven-step retrieval-augmented assistant. Durations and token counts are invented but plausible. Prices are illustrative: AED 11 per million input tokens and AED 55 per million output tokens; check your provider's actual rates. Costs are exact sums of those assumptions.</p>
+      </figure>
+
+      <div class="prose">
+        <p>A good habit when reading a trace: first the shape (one long bar, or many short ones?), then the model spans (token counts), then the retrieval span (what came back), and only then the text. Most incidents are visible before you read a word of the answer.</p>
+      </div>
+
+      <h3 class="sub" id="m-version">Prompt versioning: immutable releases, movable labels</h3>
+      <div class="prose">
+        <p>The thing you version is bigger than the prompt text. A <strong>prompt release</strong> is the template, the model name and pinned model version, the sampling settings (temperature and so on), the tool definitions, the retrieval settings (top-k, chunking) and, for structured output, the schema. Change any one and behaviour changes, so they travel together under one number.</p>
+        <p>The working pattern, used by prompt registries and by MLflow's and Langfuse's prompt features alike, has two parts:</p>
+        <ul>
+          <li><strong>Versions are immutable.</strong> Version 7 is always the same bytes. An edit creates version 8. Nothing is overwritten, so an old trace can always be replayed against the exact prompt it used.</li>
+          <li><strong>Labels or aliases are movable.</strong> "production", "staging" and "candidate" are pointers to a version. Promotion is moving a pointer; rollback is moving it back. Application code asks for "card-faq at production" and never hard-codes a number, so a rollback needs no redeploy.</li>
+        </ul>
+        <p>Where should the text live? Two honest options. In <strong>git beside the code</strong> you get review, blame, branches and CI for free, and prompt changes go through the same change control as everything else. In a <strong>registry</strong> that non-engineers can edit you get fast iteration and a product owner who can tune wording, but you need your own approvals and audit trail. Many banks will want the git route, or a registry whose promotions require sign-off, because a prompt change is a change to customer-facing behaviour. Either way, the trace must record which version answered.</p>
+        <p>Pin the model too. A provider's alias such as "latest" can move under you. Use a dated or versioned identifier where one exists, and expect that providers retire old versions on a schedule: a model change forces a re-evaluation exactly like a prompt change.</p>
+      </div>
+
+      <figure class="figure" id="fig-reg">
+        <div class="fig-head"><span class="fig-title">A registry, and why "better overall" is not enough</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> select <b>v4</b> as the candidate. Its overall score beats production, which is how it would look on a dashboard. Now read the slice table: Arabic questions fell. Then try v5, promote it, and use <b>Roll back</b> to move the alias back. Every move is logged, and no version is ever edited.</p>
+        <div class="btns" role="group" aria-label="Candidate version" id="reg-btns"></div>
+        <div class="table-wrap"><div id="reg-table"></div></div>
+        <div class="detail" id="reg-diff"></div>
+        <div class="btns" role="group" aria-label="Alias actions">
+          <button class="btn" type="button" id="b-promote">Promote candidate to production</button>
+          <button class="btn" type="button" id="b-roll">Roll back production</button>
+        </div>
+        <p class="verdict" id="reg-verdict"></p>
+        <div class="log" id="reg-log" aria-live="polite"></div>
+        <p class="sim-note">Simulated: five prompt versions for a card-FAQ assistant scored on 200 invented test cases (120 English, 50 Arabic, 30 complaints). Pass rates are made up to show the pattern; the 95% intervals use the usual normal approximation √(p(1−p)/n), which is rough at small n.</p>
+      </figure>
+
+      <h3 class="sub" id="m-ci">Evals in CI: a test set as a release gate</h3>
+      <div class="prose">
+        <p>An <strong>eval</strong> runs the application, or a part of it, over a fixed set of cases and scores the outputs. <strong>In CI</strong> means it runs automatically whenever something that can change behaviour changes: a prompt, a model name, retrieval settings, a tool, a library. The pipeline compares scores with a threshold and fails the build if they drop. Tools such as Promptfoo are built for this, and platforms such as Langfuse and MLflow store the datasets and results; the mechanics are the same whichever you pick.</p>
+        <p>Cheap checks first, expensive ones last:</p>
+        <div class="table-wrap" style="margin-top:12px">
+          <table class="data">
+            <thead><tr><th>Layer</th><th>What it checks</th><th>Cost and speed</th><th>Blind spot</th></tr></thead>
+            <tbody>
+              <tr><td><b>Deterministic checks</b></td><td>Valid JSON, schema, required fields, no card number in the output, language matches the question, citation points to a retrieved document.</td><td>Free, milliseconds. Run on every case, every commit.</td><td>Says nothing about whether the content is right.</td></tr>
+              <tr><td><b>Golden answers</b></td><td>Key facts present ("AED 30,000"), or exact match for classification and extraction.</td><td>Free. Fast.</td><td>Brittle for free text. A correct paraphrase fails.</td></tr>
+              <tr><td><b>LLM-as-judge</b></td><td>Another model grades helpfulness, faithfulness to the sources, tone, against a rubric.</td><td>Costs tokens, takes minutes. Run on the full set on pull requests.</td><td>Judges have biases and drift; calibrate against human labels first (M5).</td></tr>
+              <tr><td><b>Human review</b></td><td>Experts grade a sample, resolve disputes, refresh labels.</td><td>Slow and costly. Run before major releases, not every commit.</td><td>Small samples, annotator disagreement.</td></tr>
+              <tr><td><b>Adversarial and red-team cases</b></td><td>Prompt injection, requests to reveal data, off-policy advice.</td><td>Moderate. Run on a schedule and before release.</td><td>Only finds attacks someone thought of.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>A skeleton of the gate, in the style of any test runner:</p>
+<pre><code>results = run_suite("card-faq-cases.jsonl", prompt="card-faq@candidate")
+assert results.schema_failures == 0                    # hard rules: zero tolerance
+assert results.pass_rate("faithfulness") &gt;= 0.88       # soft score vs a threshold
+for sl in results.slices():                            # never only the average
+    assert sl.pass_rate &gt;= baseline[sl.name] - 0.05, sl.name</code></pre>
+        <p>Where do the cases come from? From production traces, especially the failures; from policy documents (turn each rule into questions); from compliance and product staff who know the awkward ones; and from deliberately hard variants in Arabic, mixed Arabic and English, typos and unusual dialects. Keep a held-out set that nobody tunes prompts against, or you are measuring memorisation of the test.</p>
+        <p>The hard part is the statistics. Each case is a pass or fail, so the pass rate over <i>n</i> cases has a standard error</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>SE</mi><mo>≈</mo><msqrt><mfrac><mrow><mi>p</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>p</mi><mo stretchy="false">)</mo></mrow><mi>n</mi></mfrac></msqrt></math>
+        <p class="where"><i>p</i> is the true pass rate and <i>n</i> the number of cases. At <i>p</i> = 90% and <i>n</i> = 100 the standard error is 3 points, so two runs of an identical system routinely differ by 6. This is the interval logic of F2.1. It means that a gate "fail if the score drops below baseline minus 3 points" on 100 cases will wrongly block a perfectly good change about one time in eight, and wave through a change that is really 5 points worse about a third of the time. Model non-determinism and judge noise add to this on top.</p>
+      </div>
+
+      <figure class="figure" id="fig-gate">
+        <div class="fig-head"><span class="fig-title">How good is your gate? The block-probability curve</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> with 100 cases and a 3-point margin, place the candidate at 85% (really 5 points worse). The gate misses it about a third of the time. Raise the case count to 400 and the curve steepens: good changes pass, bad ones are caught. Then tighten the margin to 0 and see how many good changes get wrongly blocked.</p>
+        <div class="chart-wrap" id="gate-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Chance the gate blocks, by the candidate's true pass rate</span>
+          <span><i style="background:var(--muted)"></i>Baseline 90%</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="g-n">Cases in the test set <output for="g-n"></output></label><input type="range" id="g-n" min="1.3" max="3.2" step="0.02" value="2"></div>
+          <div class="ctl"><label for="g-m">Margin: block if score is below baseline minus <output for="g-m"></output></label><input type="range" id="g-m" min="0" max="10" step="0.5" value="3"></div>
+          <div class="ctl"><label for="g-p">Candidate's true pass rate <output for="g-p"></output></label><input type="range" id="g-p" min="70" max="95" step="0.5" value="85"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="g-a-b"><div class="k">Good change wrongly blocked</div><div class="v" id="g-a"></div><div class="s">true rate = baseline 90%</div></div>
+          <div class="stat" id="g-b-b"><div class="k">Chance this candidate is blocked</div><div class="v" id="g-b"></div><div class="s" id="g-b-s"></div></div>
+          <div class="stat" id="g-c-b"><div class="k">5-point regression slips through</div><div class="v" id="g-c"></div><div class="s">true rate 85%</div></div>
+          <div class="stat"><div class="k">Gate trips below a measured</div><div class="v" id="g-t"></div><div class="s" id="g-t-s"></div></div>
+        </div>
+        <p class="verdict" id="g-verdict"></p>
+        <p class="sim-note">Simulated: each case passes independently with the candidate's true probability, and the gate blocks when the measured pass count falls below the threshold. Probabilities are exact binomial sums, not sampled. The baseline is treated as a known 90%; in practice it is also measured with error, which makes the gate noisier. Real cases are not independent (similar questions fail together).</p>
+      </figure>
+
+      <div class="prose">
+        <p>What to do about the noise, in order of value:</p>
+        <ul>
+          <li><strong>More cases where it matters.</strong> The curve steepens with √<i>n</i>, so quadrupling the set halves the noise. Go bigger on the cases that are expensive when wrong (fees, eligibility, complaints).</li>
+          <li><strong>Paired comparison.</strong> Run baseline and candidate on the <em>same</em> cases and look at the cases that flipped. If 9 got worse and 2 got better, that is far stronger evidence than two overlapping pass rates. A paired test uses the flips only.</li>
+          <li><strong>Hard rules versus soft scores.</strong> Zero tolerance for structural and safety checks; a margin with intervals for quality scores.</li>
+          <li><strong>Repeat runs.</strong> For stochastic systems, run each case a few times and average; set temperature low, though even then providers do not guarantee identical output.</li>
+          <li><strong>Slices.</strong> Gate separately on language, product and risk tier, as in Simulation 2. Small slices need a wider margin, or a human look rather than an automatic block.</li>
+          <li><strong>A human override with a record.</strong> A blocked release can be shipped by a named approver who writes down why. That is the normal model-risk pattern (G3), applied to prompts.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson is the operating layer for everything built in the M tracks. It is MLOps, adapted to systems whose logic lives in text.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">P2.1 – P2.2 · Lifecycle, tracking, registries</span><span class="t"><a href="p2-the-model-lifecycle-from-experiment.html">The classic version of the same story</a></span><p>Experiment tracking and model registries already give you versions, stages and lineage. Prompt versioning reuses the ideas; the artefact is text plus configuration.</p></div>
+        <div class="link-card"><span class="code">P2.3 – P2.4 · Deployment and monitoring</span><span class="t"><a href="p2-deployment-patterns-batch-real-time.html">Shadow, canary and drift</a></span><p>A new prompt version can be shadowed or canaried like a model. Tracing is the data source for monitoring quality, cost and latency in production.</p></div>
+        <div class="link-card"><span class="code">M5 · LLM-as-judge and test sets</span><span class="t"><a href="m5-reference-based-metrics-bleu-rouge.html">Where the scores come from</a></span><p>The CI gate is only as good as its scorer. Judge reliability, bias and calibration are covered there.</p></div>
+        <div class="link-card"><span class="code">M5 · Human evaluation, failure-based test sets</span><span class="t"><a href="m5-human-evaluation-and-annotator-agreement.html">Where the cases and labels come from</a></span><p>Traces feed the test set: each real failure becomes a permanent regression case, labelled by people who agree with each other.</p></div>
+        <div class="link-card"><span class="code">M5 · Agents and online evaluation</span><span class="t"><a href="m5-evaluating-agents-trajectories-tool-use.html">Trajectories are traces</a></span><p>Agent evaluation scores the sequence of tool calls, which is exactly what a trace records. Online feedback attaches scores to live traces.</p></div>
+        <div class="link-card"><span class="code">M4 · Guardrails and approval gates</span><span class="t"><a href="m4-guardrails-and-approval-gates.html">Guardrails show up as spans</a></span><p>Each guardrail check is a step you want timed and logged, including what it blocked and why.</p></div>
+        <div class="link-card"><span class="code">M2 · Prompting and context engineering</span><span class="t"><a href="m2-prompting-and-context-engineering.html">What you are versioning</a></span><p>Prompt structure, examples and context assembly are the content of each version.</p></div>
+        <div class="link-card"><span class="code">M3 · Retrieval</span><span class="t"><a href="m3-hybrid-search-and-reciprocal-rank.html">Debugging search through traces</a></span><p>Retrieval settings are part of the release. A trace shows what the retriever returned, so search failures are separated from generation failures.</p></div>
+        <div class="link-card"><span class="code">F2.1 · Intervals; F10.3 · Testing mindset</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">Noise in a score</a></span><p>Simulation 3 is a confidence-interval problem. The testing mindset (<a href="f10-the-testing-mindset.html">F10</a>) supplies the discipline of regression tests.</p></div>
+        <div class="link-card"><span class="code">G3 · Validation and monitoring</span><span class="t"><a href="g3-ongoing-monitoring-and-periodic-review.html">Evidence for model risk</a></span><p>Versions, traces and gate results are the audit trail that <a href="g3-independent-validation.html">independent validation</a> will ask to see.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Customer-service assistant.</strong> Answers on fees and products must match current policy. Version the prompt and the document index together; gate on faithfulness to sources, with Arabic and English slices.</li>
+          <li><strong>Complaints and KYC document summarisation.</strong> Traces let a reviewer see which passage a summary came from. Hard rules catch missing mandatory fields.</li>
+          <li><strong>Internal copilots for analysts and compliance.</strong> Trace retention and redaction are the main design question, because prompts may contain customer data.</li>
+          <li><strong>Agentic workflows (payments queries, case triage).</strong> Traces are the record of what the system did and why; they are what an investigator or auditor reads after an incident.</li>
+          <li><strong>Vendor-hosted models.</strong> When the provider changes the model, your gate is the only early warning. Ask what notice the contract gives (G3, vendor risk).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The practice has converged quickly: versioned prompts with labels, OpenTelemetry-style traces, and eval suites run in pull requests. What is unsettled is the standardisation of the data, how to evaluate long-running agents, and how far to trust automated judges.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with two light searches; results were mostly vendor blogs, so treat details as secondary and verify against the official docs.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2024–25</span><div><div class="t">OpenTelemetry begins GenAI conventions</div><p>A working group defined standard span and attribute names for model calls, embeddings and retrieval, so traces from different frameworks look alike.</p><div class="src">OpenTelemetry project, semantic conventions for generative AI</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Conventions still in Development, moved to their own repository</div><p>Secondary sources report that the GenAI, provider-specific and MCP conventions moved into a dedicated repository around mid-2026, still marked Development with no official release, and that agent operations (create, invoke, plan, execute tool) and an evaluation-result event are part of the work. Content capture of prompts and completions is opt-in. Practical meaning: usable now, but pin versions, because attribute names may change.</p><div class="src">TrueFoundry blog, August 2026 (secondary); confirm on opentelemetry.io</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Eval gates in pull requests are routine tooling</div><p>Write-ups describe an open-source CLI (Promptfoo) as the deploy gate in GitHub Actions, with a platform (Langfuse) holding datasets, experiments, judge scoring, online scores on production traces and prompt versioning. MLflow added tracing, evaluation and a prompt registry (aliases over immutable versions), though commentators describe its LLM side as less developed than dedicated tools.</p><div class="src">Langfuse migration guide; practitioner and vendor comparison articles, 2026 (several authors sell competing products)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, as far as I can tell for banking:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Prompts in git with review</b></td><td>Prompt files and config reviewed like code and tied to a release.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Request tracing for LLM calls</b></td><td>Spans for retrieval and generation, token and cost attributes, prompt version recorded.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Deterministic checks in CI</b></td><td>Schema, format and safety rules on every change.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>LLM-judge scores as a merge gate</b></td><td>Faithfulness and helpfulness rubrics with a threshold. Judge calibrated against human labels at the better teams.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Production traces auto-scored and fed back to test sets</b></td><td>Online scorers flag poor traces; reviewers promote them to regression cases.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Statistically designed gates</b></td><td>Paired tests, intervals, sample sizes chosen from the cost of a miss.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Automated prompt optimisation inside CI</b></td><td>Systems that rewrite prompts to raise an eval score. Raises over-fitting to the test set unless a held-out set is kept.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Version everything that changes behaviour, trace every request with the version attached, run cheap deterministic checks always and judge-based checks on pull requests, and size the test set to the risk, not to what is convenient.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Prompt edited live in a console, no version</div><p>A "small wording tweak" in production. Behaviour changes and nobody can say when.</p><div class="spot"><b>Spot it</b>Pick a trace from last month and ask if you can recover the exact prompt used. If not, versions are not immutable.</div></li>
+        <li><div class="t">Only the prompt is versioned</div><p>The model alias, top-k or chunk size changes and the prompt number stays the same.</p><div class="spot"><b>Spot it</b>Check what a release identifier covers. It should include model version, parameters, tools and retrieval settings.</div></li>
+        <li><div class="t">Gate on a tiny or unrepresentative set</div><p>Fifty hand-picked cases, all English, all easy. The gate passes everything.</p><div class="spot"><b>Spot it</b>Ask for the case count per slice and the interval on the score. Compute the block-probability curve as in Simulation 3.</div></li>
+        <li><div class="t">Overfitting to the eval</div><p>Prompts tuned until the score rises; the same cases used every time. Live quality does not follow.</p><div class="spot"><b>Spot it</b>Keep a held-out set that no one tunes against, and compare scores on it with the tuning set.</div></li>
+        <li><div class="t">Uncalibrated LLM judge</div><p>The judge prefers long, polite answers, or its own model family. It drifts when the judge model is updated.</p><div class="spot"><b>Spot it</b>Measure agreement between judge and human labels on a sample, and pin the judge version.</div></li>
+        <li><div class="t">Average hides a slice</div><p>Overall score rises while Arabic or complaints fall.</p><div class="spot"><b>Spot it</b>Demand a per-slice table beside every headline number.</div></li>
+        <li><div class="t">Traces full of customer data</div><p>Raw prompts with names, account numbers and IDs stored in a third-party service with broad access.</p><div class="spot"><b>Spot it</b>Sample stored traces and search for IBAN or card patterns. Check retention, access and hosting location against policy.</div></li>
+        <li><div class="t">Flaky tests teach people to ignore the gate</div><p>The gate fails on noise, people rerun until green, and a real regression gets rerun away.</p><div class="spot"><b>Spot it</b>Count how often failures pass on rerun. A high rate means the gate is under-sized or the margin is wrong.</div></li>
+        <li><div class="t">Quality problems with healthy latency</div><p>All dashboards green while answers are stale or wrong.</p><div class="spot"><b>Spot it</b>Ask whether quality scores are attached to traces. Latency and cost alone cannot show it (Simulation 1, stale index).</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Every answer our assistant gives will be traceable to an exact version of the instructions, the model and the documents it used, and every change is tested automatically before customers see it. If something goes wrong, we can show what happened on that call and roll back in minutes. The tests cannot be perfect, so for high-risk topics like fees and eligibility we use a larger test set and a human sign-off.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“A release pins prompt, model version, sampling parameters, tools and retrieval settings under an immutable version, with production as a movable alias. Each request is traced with that version and retrieved document IDs, with redaction before storage. CI runs deterministic checks on every change and judge-scored suites on pull requests, gated per slice. I size the set from the binomial noise: at 100 cases a 3-point margin blocks good changes about one time in eight, so I go to several hundred cases on high-risk slices and use paired comparisons.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just test the prompt by trying it a few times?”</summary><div class="ans"><p>Because behaviour varies between runs and between inputs, and a few good answers say little. A fixed test set run on every change gives a number you can compare over time. Ten hand-tried examples have a margin of error of roughly ±20 points on a pass rate.</p></div></details>
+        <details class="reveal"><summary>“The gate failed but the change looks fine. Can we override?”</summary><div class="ans"><p>Yes, with a record. First check whether it is noise: rerun, and look at the paired flips. If the drop is within the interval and the slices are stable, a named approver can release it with the reason logged. If one safety or hard-rule check failed, no override without a fix.</p></div></details>
+        <details class="reveal"><summary>“Is it safe to send our prompts to a hosted tracing tool?”</summary><div class="ans"><p>Not by default. Prompts contain customer data, so I'd check redaction before storage, where the data is hosted, retention, access, and what our data-protection and regulator rules require. A self-hosted option or tracing inside our own cloud is often the safer starting point. I would not assume a specific legal answer; that is for security and compliance to sign off.</p></div></details>
+        <details class="reveal"><summary>“The provider updated the model. Do we need to re-test?”</summary><div class="ans"><p>Yes. A model change is a release. Pin a version where the provider allows it, run the full suite on the new one before switching, and watch the slices. A silent alias change is the reason to pin and to keep production traces scored.</p></div></details>
+        <details class="reveal"><summary>“Can an LLM judge replace human reviewers in CI?”</summary><div class="ans"><p>For routine gating, if it has been calibrated: it agrees with human labels at an acceptable rate on a sample, its version is pinned, and humans still review a sample regularly and all the blocked or borderline cases. It is not a replacement for human sign-off on high-risk behaviour.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Why are prompt versions immutable while labels such as "production" move?</summary><div class="ans"><p>Immutability means any old trace can be replayed against exactly what ran, which is what debugging and audit need. Movable labels make promotion and rollback a pointer change with no redeploy, because the app asks for "production" rather than a number.</p></div></details>
+        <details class="reveal"><summary>2. Name four things besides prompt text that belong in a release.</summary><div class="ans"><p>Model name and pinned version, sampling parameters, tool definitions, retrieval settings (top-k, chunking), and the output schema. Possibly the document index version too.</p></div></details>
+        <details class="reveal"><summary>3. A trace shows normal latency and cost, yet the answer quotes an old fee. Where is the fault likely to be and how would you have caught it?</summary><div class="ans"><p>In the data: retrieval returned a stale document version. The trace attributes (document IDs and versions) show it. A quality or faithfulness score attached to the trace, or a CI case on that fee, would have flagged it. Latency and cost cannot.</p></div></details>
+        <details class="reveal"><summary>4. Your suite has 100 cases and baseline 90%. Roughly what is the standard error of the candidate's measured pass rate if it is truly 90%?</summary><div class="ans"><p>√(0.9 × 0.1 ÷ 100) = 0.03, so 3 points. A 95% interval is about ±6. A difference of 3 points between two runs is well within noise.</p></div></details>
+        <details class="reveal"><summary>5. You want to halve the noise in the pass rate. How many more cases?</summary><div class="ans"><p>The standard error falls with √<i>n</i>, so four times as many: 100 becomes 400, and the SE goes from 3 to 1.5 points.</p></div></details>
+        <details class="reveal"><summary>6. The overall score rose from 83% to 87%. What do you check before promoting?</summary><div class="ans"><p>The per-slice scores (language, product, risk tier) with their sample sizes and intervals; the paired flips (what got worse); hard-rule checks; and a held-out set not used for tuning. Simulation 2's v4 is the example: better overall, worse in Arabic.</p></div></details>
+        <details class="reveal"><summary>7. Why record the prompt version on every trace?</summary><div class="ans"><p>So any complaint can be tied to the exact release that produced it, so scores in monitoring can be compared by version, and so a failing trace can be copied into a regression test with the right context.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry: Semantic conventions for generative AI</a>. The standard attribute names for model calls, and its current status.</li>
+        <li><a href="https://www.truefoundry.com/blog/opentelemetry-genai-semantic-conventions">TrueFoundry: OpenTelemetry GenAI semantic conventions</a>. Secondary summary used for the August 2026 status; verify against the official docs.</li>
+        <li><a href="https://langfuse.com/resources/engineering/migrate-from-promptfoo">Langfuse: Migrate a Promptfoo eval suite to Langfuse</a>. How CLI eval gates map to datasets and experiments.</li>
+        <li><a href="https://www.promptfoo.dev/docs/intro/">Promptfoo documentation</a>. Test cases, assertions and CI integration.</li>
+        <li><a href="https://mlflow.org/docs/latest/genai/">MLflow GenAI documentation</a>. Tracing, evaluation and the prompt registry.</li>
+        <li><a href="https://langfuse.com/docs/prompt-management/overview">Langfuse documentation: prompt management</a>. Versions and labels in practice.</li>
+        <li>L. Zheng et al. <a href="https://arxiv.org/abs/2306.05685">Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena</a>. NeurIPS Datasets and Benchmarks, 2023. Strengths and biases of model judges.</li>
+        <li>D. Sculley et al. <a href="https://papers.nips.cc/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html">Hidden Technical Debt in Machine Learning Systems</a>. NeurIPS, 2015. Why unversioned configuration and data dependencies hurt.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in P2: Deployment patterns (P2.3 · P2.4)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: trace waterfall
+  // =====================================================================
+  const PIN = 11, POUT = 55; // AED per million tokens
+  const F = { slow: false, retry: false, topk: false, stale: false };
+  let selSpan = null;
+  const trBox = $("tr-chart");
+  function buildSpans() {
+    const sp = [];
+    let t = 0;
+    const add = (name, dur, o) => { const s = Object.assign({ name, start: t, dur, llm: false, bad: false, tin: 0, tout: 0, attrs: [] }, o || {}); sp.push(s); t += dur; return s; };
+    add("gateway + auth", 20, { attrs: ["channel = mobile-app", "language = ar"] });
+    add("input guardrail", 100, { attrs: ["checks = pii, injection", "result = pass"] });
+    add("rewrite query (small model)", 300, { llm: true, tin: 180, tout: 40, attrs: ["gen_ai.request.model = small-model-v2", "prompt = rewrite@4"] });
+    add("retrieve (hybrid search)", F.slow ? 1600 : 200, { bad: F.slow, attrs: ["top_k = " + (F.topk ? 12 : 4), "index = card-policies", F.stale ? "doc 118 version = 2022 (current: 2024)" : "doc 118 version = 2024 (current)", F.slow ? "vector store p99 latency spike" : "vector store normal"] });
+    add("rerank", 160, { attrs: ["reranker = cross-encoder", "kept = " + (F.topk ? 12 : 4)] });
+    const tin = F.topk ? 7400 : 3200;
+    const gdur = F.topk ? 3900 : 2400;
+    if (F.retry) add("generate: attempt 1 (429)", 1800, { llm: true, bad: true, tin: 0, tout: 0, attrs: ["status = 429 rate limited", "backoff = 1.8 s", "no tokens billed"] });
+    add(F.retry ? "generate: attempt 2" : "generate answer", gdur, { llm: true, bad: F.topk, tin, tout: 350, attrs: ["gen_ai.request.model = large-model-2026-08", "prompt = card-faq@" + (F.topk ? 8 : 7), "temperature = 0.2", "input tokens = " + tin + (F.topk ? " (12 chunks)" : " (4 chunks)"), "output tokens = 350"] });
+    add("output check", 200, { attrs: ["checks = schema, citation, banned-claims", "result = pass"] });
+    return sp;
+  }
+  function renderTrace() {
+    const sp = buildSpans();
+    const total = sp[sp.length - 1].start + sp[sp.length - 1].dur;
+    if (selSpan === null || selSpan >= sp.length || !sp[selSpan]) selSpan = sp.findIndex(s => s.dur === Math.max(...sp.map(q => q.dur)));
+    const W = Math.max(300, trBox.clientWidth), rh = 30, m = { l: 150, r: 14, t: 8, b: 26 }, H = m.t + m.b + rh * sp.length;
+    const svg = mk(trBox, W, H, "Waterfall of the steps in one request");
+    const maxT = Math.max(total, 4000), X = L.scale(0, maxT, m.l, W - m.r);
+    for (let s = 0; s <= maxT; s += 1000) {
+      L.svg("line", { x1: X(s), x2: X(s), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(s), H - m.b + 16, (s / 1000) + " s", { "text-anchor": "middle" });
+    }
+    sp.forEach((s, i) => {
+      const y = m.t + i * rh;
+      tx(svg, m.l - 8, y + rh / 2 + 4, s.name.length > 24 ? s.name.slice(0, 23) + "…" : s.name, { "text-anchor": "end", class: "lbl-ink", "font-weight": i === selSpan ? 700 : 500 });
+      L.svg("rect", { x: X(s.start), y: y + 5, width: Math.max(3, X(s.start + s.dur) - X(s.start)), height: rh - 10, rx: 3, class: "sp" + (s.llm ? " llm" : "") + (s.bad ? " bad" : "") + (i === selSpan ? " sel" : "") }, svg);
+      tx(svg, Math.min(X(s.start + s.dur) + 5, W - 44), y + rh / 2 + 4, s.dur + " ms", { class: "lbl-ink" });
+      const hit = L.svg("rect", { x: 0, y, width: W, height: rh, class: "sp-row" }, svg);
+      hit.addEventListener("click", () => { selSpan = i; renderTrace(); });
+    });
+    const s = sp[selSpan];
+    $("tr-detail").innerHTML = '<div class="h">' + s.name + "</div><div>start " + s.start + " ms, duration " + s.dur + " ms</div>" + (s.tin || s.tout ? "<div>tokens in " + L.fmtInt(s.tin) + ", out " + s.tout + ", cost AED " + ((s.tin * PIN + s.tout * POUT) / 1e6).toFixed(4) + "</div>" : "") + s.attrs.map(a => "<div>" + a + "</div>").join("");
+    const tin = sp.reduce((a, b) => a + b.tin, 0), tout = sp.reduce((a, b) => a + b.tout, 0), cost = (tin * PIN + tout * POUT) / 1e6;
+    const baseCost = (3380 * PIN + 390 * POUT) / 1e6;
+    $("tr-lat").textContent = (total / 1000).toFixed(2) + " s"; $("tr-lat-s").textContent = "healthy: 3.38 s";
+    cls($("tr-lat-b"), total > 5000 ? "bad" : total > 3600 ? "warn" : "ok");
+    $("tr-tok").textContent = L.fmtInt(tin) + " / " + tout;
+    cls($("tr-tok-b"), tin > 5000 ? "warn" : "ok");
+    $("tr-cost").textContent = "AED " + cost.toFixed(4); $("tr-cost-s").textContent = "healthy: AED " + baseCost.toFixed(4);
+    cls($("tr-cost-b"), cost > 1.5 * baseCost ? "bad" : "ok");
+    $("tr-q").textContent = F.stale ? "No" : "Yes";
+    cls($("tr-q-b"), F.stale ? "bad" : "ok");
+    const notes = [];
+    if (F.slow) notes.push("Retrieval grew from 200 ms to 1,600 ms. Cost and answer unchanged; only latency suffers. Look at the retrieval span, not the model.");
+    if (F.retry) notes.push("A failed first attempt added 1.8 s with no tokens billed. Cost looks normal but users wait longer. Check rate limits and fallbacks (P5).");
+    if (F.topk) notes.push("Input tokens more than doubled (" + L.fmtInt(7400) + " vs " + L.fmtInt(3200) + "), so cost per request rises about " + ((7400 * PIN + 350 * POUT) / (3200 * PIN + 350 * POUT)).toFixed(1) + " times on the main call, and generation is slower. Prompt version 8 is the culprit, visible in the span attribute.");
+    if (F.stale) notes.push("Latency and cost are normal. The only clue is the document version attribute (2022 vs 2024). Without a faithfulness score or a test case on this fee, the dashboard stays green.");
+    $("tr-verdict").innerHTML = notes.length ? "<ul><li>" + notes.join("</li><li>") + "</li></ul>" : "Healthy trace: the model call takes about 80% of the time and almost all of the cost. Click bars to inspect them; switch on faults above.";
+  }
+  [["f-slow", "slow"], ["f-retry", "retry"], ["f-topk", "topk"], ["f-stale", "stale"]].forEach(([id, k]) => {
+    $(id).addEventListener("click", e => { F[k] = !F[k]; e.currentTarget.setAttribute("aria-pressed", String(F[k])); selSpan = null; renderTrace(); });
+  });
+
+  // =====================================================================
+  // Simulation 2: prompt registry
+  // =====================================================================
+  const SL = [["English FAQ", 120], ["Arabic FAQ", 50], ["Complaints", 30]];
+  const V = [
+    { v: 1, rates: [0.86, 0.78, 0.80], note: "Initial prompt: plain instructions, no examples." },
+    { v: 2, rates: [0.90, 0.80, 0.83], note: "Added three worked examples (all English)." },
+    { v: 3, rates: [0.92, 0.84, 0.87], note: "Added instruction: quote the policy paragraph before answering." },
+    { v: 4, rates: [0.98, 0.70, 0.93], note: "Shortened prompt to cut cost; removed the bilingual note and kept English-only examples." },
+    { v: 5, rates: [0.94, 0.86, 0.90], note: "Restored bilingual note; added two Arabic examples; kept shorter format." }
+  ];
+  const overall = r => SL.reduce((a, [, n], i) => a + n * r[i], 0) / 200;
+  const R = { prod: 3, cand: 4, hist: [3] };
+  const logLines = ["alias production -> v3 (initial)"];
+  function renderReg() {
+    const bb = $("reg-btns"); bb.innerHTML = "";
+    V.forEach(o => {
+      const b = document.createElement("button");
+      b.className = "btn"; b.type = "button"; b.setAttribute("aria-pressed", String(R.cand === o.v));
+      b.innerHTML = "v" + o.v + (R.prod === o.v ? ' <span class="alias-tag">production</span>' : "");
+      b.addEventListener("click", () => { R.cand = o.v; renderReg(); });
+      bb.appendChild(b);
+    });
+    const p = V[R.prod - 1], c = V[R.cand - 1];
+    const ci = (r, n) => 1.96 * Math.sqrt(r * (1 - r) / n);
+    let h = '<table class="data"><thead><tr><th>Slice (cases)</th><th>Production v' + p.v + "</th><th>Candidate v" + c.v + "</th><th>Change</th><th>95% interval on candidate</th></tr></thead><tbody>";
+    const rows = SL.map(([n, k], i) => ({ n, k, a: p.rates[i], b: c.rates[i] }));
+    rows.forEach(r => { const d = r.b - r.a; h += "<tr><td><b>" + r.n + "</b> (" + r.k + ")</td><td>" + pct(r.a) + "</td><td>" + pct(r.b) + "</td><td>" + (d > 0 ? "+" : "") + (100 * d).toFixed(0) + " pts</td><td>± " + (100 * ci(r.b, r.k)).toFixed(0) + " pts</td></tr>"; });
+    const po = overall(p.rates), co = overall(c.rates);
+    h += "<tr><td><b>Overall (200)</b></td><td>" + pct(po, 1) + "</td><td>" + pct(co, 1) + "</td><td>" + (co - po >= 0 ? "+" : "") + (100 * (co - po)).toFixed(1) + " pts</td><td>± " + (100 * ci(co, 200)).toFixed(1) + " pts</td></tr></tbody></table>";
+    $("reg-table").innerHTML = h;
+    $("reg-diff").innerHTML = '<div class="h">v' + c.v + " vs production v" + p.v + "</div><div>" + (R.cand === R.prod ? "Candidate is the production version." : "Change in v" + c.v + ": " + c.note) + "</div>";
+    const worst = rows.reduce((a, r) => (r.b - r.a < a.d ? { d: r.b - r.a, n: r.n } : a), { d: 0, n: "" });
+    let msg;
+    if (R.cand === R.prod) msg = "Pick a different candidate to compare.";
+    else if (worst.d <= -0.05) msg = "Overall " + ((co - po) >= 0 ? "up " : "down ") + Math.abs(100 * (co - po)).toFixed(1) + " points, but <b>" + worst.n + " fell " + Math.abs(100 * worst.d).toFixed(0) + " points</b>. A per-slice gate (drop of more than 5 points) blocks this. With only 50 cases the interval is wide, so the sensible step is to add cases and look at the flips, not to ignore it.";
+    else if (co > po) msg = "Better overall and no slice dropped by 5 points or more: passes this gate.";
+    else msg = "No gain over production; nothing to promote.";
+    $("reg-verdict").innerHTML = msg;
+    $("b-promote").disabled = R.cand === R.prod;
+    $("b-roll").disabled = R.hist.length < 2;
+    $("reg-log").innerHTML = logLines.map(l => "<div>" + l + "</div>").join("");
+    $("reg-log").scrollTop = $("reg-log").scrollHeight;
+  }
+  $("b-promote").addEventListener("click", () => { logLines.push("alias production: v" + R.prod + " -> v" + R.cand); R.prod = R.cand; R.hist.push(R.cand); renderReg(); });
+  $("b-roll").addEventListener("click", () => {
+    const cur = R.hist.pop(), prev = R.hist[R.hist.length - 1];
+    logLines.push("rollback: alias production: v" + cur + " -> v" + prev + " (no version edited, no redeploy)");
+    R.prod = prev; if (R.cand === prev) R.cand = cur; renderReg();
+  });
+
+  // =====================================================================
+  // Simulation 3: gate power curve (exact binomial)
+  // =====================================================================
+  const LF = [0]; for (let i = 1; i <= 1700; i++) LF[i] = LF[i - 1] + Math.log(i);
+  function cdfBelow(n, p, kmax) { // P(X <= kmax)
+    if (kmax < 0) return 0; if (kmax >= n) return 1;
+    if (p <= 0) return 1; if (p >= 1) return 0;
+    let s = 0;
+    for (let k = 0; k <= kmax; k++) s += Math.exp(LF[n] - LF[k] - LF[n - k] + k * Math.log(p) + (n - k) * Math.log(1 - p));
+    return Math.min(1, s);
+  }
+  const BASE = 0.90, G = { k: 2, m: 3, p: 85 };
+  const gBox = $("gate-chart");
+  const nFrom = k => Math.round(Math.pow(10, k));
+  function pBlock(n, margin, p) {
+    const T = (BASE - margin / 100) * n; // block if X < T
+    return cdfBelow(n, p, Math.ceil(T - 1e-9) - 1);
+  }
+  function renderGate() {
+    const n = nFrom(G.k), T = (BASE - G.m / 100) * n;
+    const W = Math.max(300, gBox.clientWidth), H = 260, m = { l: 46, r: 12, t: 14, b: 42 };
+    const svg = mk(gBox, W, H, "Chance the gate blocks, by the candidate's true pass rate");
+    const x = L.scale(70, 95, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" }); });
+    [70, 75, 80, 85, 90, 95].forEach(v => tx(svg, x(v), H - m.b + 16, v + "%", { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Candidate's true pass rate", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Chance gate blocks", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: x(90), x2: x(90), y1: m.t, y2: H - m.b, class: "thr-line" }, svg);
+    L.svg("rect", { x: x(90), y: m.t, width: x(95) - x(90), height: H - m.b - m.t, class: "pc-ok" }, svg);
+    L.svg("rect", { x: x(70), y: m.t, width: x(90) - x(70), height: H - m.b - m.t, class: "pc-bad" }, svg);
+    tx(svg, x(70) + 6, m.t + 14, "worse than baseline: should block", { class: "lbl-warn" });
+    tx(svg, x(95) - 6, m.t + 14, "as good: should pass", { class: "lbl-acc", "text-anchor": "end" });
+    const pts = [];
+    for (let p = 70; p <= 95.001; p += 0.25) pts.push([x(p), y(pBlock(n, G.m, p / 100))]);
+    L.svg("path", { d: L.path(pts), class: "pc" }, svg);
+    const pn = pBlock(n, G.m, G.p / 100);
+    L.svg("circle", { cx: x(G.p), cy: y(pn), r: 6, class: "now-dot" }, svg);
+    const fb = pBlock(n, G.m, BASE), miss = 1 - pBlock(n, G.m, 0.85);
+    $("g-a").textContent = pct(fb, 0); cls($("g-a-b"), fb > 0.2 ? "bad" : fb > 0.08 ? "warn" : "ok");
+    $("g-b").textContent = pct(pn, 0); $("g-b-s").textContent = G.p < 90 ? "should block (worse than baseline)" : G.p > 90 ? "should pass (better)" : "should pass (equal)"; cls($("g-b-b"), "");
+    $("g-c").textContent = pct(miss, 0); cls($("g-c-b"), miss > 0.3 ? "bad" : miss > 0.1 ? "warn" : "ok");
+    $("g-t").textContent = (100 * Math.ceil(T - 1e-9) / n).toFixed(1) + "%"; $("g-t-s").textContent = "i.e. fewer than " + Math.ceil(T - 1e-9) + " of " + n + " cases";
+    const se = Math.sqrt(0.9 * 0.1 / n);
+    $("g-verdict").innerHTML = "At " + n + " cases the standard error of a 90% pass rate is <b>" + (100 * se).toFixed(1) + " points</b>. With a margin of " + G.m + " points the gate wrongly blocks <b>" + pct(fb, 0) + "</b> of good changes and misses <b>" + pct(miss, 0) + "</b> of real 5-point regressions. " + (fb > 0.15 ? "Many false blocks teach people to rerun until green." : miss > 0.3 ? "Many regressions slip through." : "A reasonable balance for this risk level.");
+  }
+  L.bind("g-n", k => L.fmtInt(nFrom(k)) + " cases", v => { G.k = v; renderGate(); });
+  L.bind("g-m", v => v.toFixed(1) + " pts", v => { G.m = v; renderGate(); });
+  L.bind("g-p", v => v.toFixed(1) + "%", v => { G.p = v; renderGate(); });
+
+  function renderAll() { renderTrace(); renderReg(); renderGate(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderTrace(); renderGate(); }, 120); });
+})();
+</script>
+</body>
+</html>

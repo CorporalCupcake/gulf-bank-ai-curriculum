@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Where Bank Data Lives, and When It Moves: Warehouses, Lakes, Lakehouses, Batch and Streaming</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .sorter { display: grid; gap: 10px; margin: 10px 0; }
+  .srow { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: grid; gap: 8px; }
+  .srow .nm { font-weight: 600; font-size: 15px; }
+  .srow .ds { font-size: 13px; color: var(--muted); }
+  .srow .fb { font-size: 14px; display: none; }
+  .srow.done .fb { display: block; }
+  .srow.right { border-left: 3px solid var(--ok); }
+  .srow.wrong { border-left: 3px solid var(--warn); }
+
+  td.diff { background: var(--warn-soft); font-weight: 600; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-line { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 4 4; fill: none; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .dot-ok { fill: var(--neutral); fill-opacity: .7; }
+  .dot-late { fill: var(--bad); fill-opacity: .8; }
+  .cv-wm { stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 3 3; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track P · Production, data and platforms</span>
+    <span>Module P1 · Data engineering</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>P1.1 · P1.2</span>
+        <span class="pill d">Day one</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Where Bank Data Lives, and When It Moves: Warehouses, Lakes, Lakehouses, Batch and Streaming</h1>
+      <p class="dek">What a warehouse, a lake and a lakehouse each give a modeller, why the way tables keep history decides whether your training data is honest, and how much a fraud decision loses for every minute it waits.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A bank's data lives in a few kinds of store, each a trade between cheap storage, trustworthy tables and flexible formats; what a modeller needs from them is history that can be replayed as of any date, and a delivery speed (nightly, minutes, milliseconds) chosen by what a late decision costs, not by what sounds modern.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Picture the bank's data as a city's water supply. There is the <strong>treated, piped network</strong>: clean, metered, safe to drink, and everything that goes into it is checked first. There is the <strong>reservoir</strong>: huge, cheap, takes anything that rains, and nobody should drink from it directly. And there is the newer idea of <strong>treating water where it sits</strong>, so the reservoir itself can serve the taps.</p>
+        <p>Those are the three storage ideas. A <strong>data warehouse</strong> is the piped network: structured tables, a fixed schema, SQL, finance-grade numbers. A <strong>data lake</strong> is the reservoir: files of any shape (card messages, call recordings, scanned letters of credit) in cheap object storage. A <strong>lakehouse</strong> keeps the reservoir and adds a table layer on top, so you get versioned, transactional tables over open files. It is an attempt to stop paying for two copies of the data.</p>
+        <p>The second question is about <em>time</em>. A nightly job that scores every customer for churn, and a model that approves or declines a card payment while the customer is standing at the till, both read the same transactions. They differ in how long the bank is willing to wait between something happening and something being decided. That is <strong>batch versus streaming</strong>.</p>
+        <p>Neither choice is about fashion. A modeller cares for two specific reasons. First, the store decides whether you can ask "what did this customer look like on 1 March?" and get a true answer, which is the heart of leakage-free training (F3.1). Second, the delivery speed decides what a model can be used for at all: a churn model needs yesterday's data; a card-fraud model needs the last thirty seconds.</p>
+      </div>
+
+      <figure class="figure" id="fig-sort">
+        <div class="fig-head"><span class="fig-title">Put each dataset where it belongs</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> for each dataset below, pick the store you would use as its main home. You will get a reason straight away. Reasonable engineers disagree on some of these, so read the reasoning as a default, not a law.</p>
+        <div class="sorter" id="sorter"></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Matches the default</div><div class="v" id="st1-score">0 of 6</div><div class="s" id="st1-s">answer all six</div></div>
+        </div>
+        <p class="sim-note">Not a simulation of data: a sorting exercise. The "default" answers are common practice and judgement, not a standard; many banks also keep a copy of a dataset in more than one store.</p>
+      </figure>
+
+      <div class="callout key"><span class="k">Hold onto this</span>Three words, three jobs. <b>Warehouse</b>: trusted, governed numbers for reporting. <b>Lake</b>: cheap, raw, any format. <b>Lakehouse</b>: tables with history and transactions on lake storage. Then a second, separate question: <b>how fresh must the answer be?</b> Storage choice and freshness choice are independent, and mixing them up is the usual mistake.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-stores">Warehouses, lakes and lakehouses</h3>
+      <div class="prose">
+        <p>The three designs differ along four axes. Know these and you can place any product name (Snowflake, BigQuery, Synapse, Redshift, Databricks, Hive, Trino) in the right box.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th></th><th>Warehouse</th><th>Lake</th><th>Lakehouse</th></tr></thead>
+          <tbody>
+            <tr><td><b>What is stored</b></td><td>Structured tables in the engine's own managed format</td><td>Files of any kind (Parquet, JSON, CSV, audio, PDF, images) in object storage</td><td>Open column files (usually Parquet) plus a table-format log that tracks which files form the table</td></tr>
+            <tr><td><b>Schema</b></td><td>Schema-on-write: data must fit the table before it goes in</td><td>Schema-on-read: anything is accepted; you impose structure when you read</td><td>Schema enforced at the table level, and it can evolve with recorded versions</td></tr>
+            <tr><td><b>Transactions</b></td><td>Yes (ACID). A report never sees half a load.</td><td>No. A job that fails halfway leaves partial files that readers can see.</td><td>Yes, through the table-format log</td></tr>
+            <tr><td><b>Typical users</b></td><td>Finance, risk reporting, BI analysts, regulatory returns</td><td>Data engineers, ML engineers, anything unstructured</td><td>Data scientists and engineers who want SQL, Python and Spark over the same tables</td></tr>
+            <tr><td><b>Weak spot</b></td><td>Cost at scale; awkward for images, audio and free text; Python and ML access is by export</td><td>Reliability and governance: "data swamp" with no owner, no quality gate</td><td>Newer and more moving parts; performance tuning and catalogues need care</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Why the lakehouse exists.</strong> For years banks ran both: a lake for raw and ML data, and a warehouse for trusted reporting. That meant two copies, nightly jobs to copy between them, and arguments about which number was right. The lakehouse idea (Armbrust et al., CIDR 2021) is that the missing ingredient in the lake was not storage but a <em>transaction log</em>. If every change to a table is recorded as an atomic commit in a log next to the files, the lake gets reliable tables, schema enforcement, and the ability to read the table as it was at an earlier commit. The open table formats that do this are Delta Lake, Apache Iceberg and Apache Hudi.</p>
+        <p><strong>A common layout: bronze, silver, gold.</strong> Raw data lands unchanged in a bronze layer (so you can always replay it). Silver holds cleaned, de-duplicated, conformed tables: one definition of "customer", one currency convention. Gold holds business-ready tables for a purpose, such as a monthly risk mart or a feature table for a model. This is sometimes called the medallion pattern. The names are vendor language, but the idea is plain: keep the raw record, clean in steps, publish curated views.</p>
+        <p><strong>Columns and why they make analytics cheap.</strong> Parquet and warehouse storage keep each column together, not each row. A query for "average balance" reads one column from billions of rows and skips the other 200. Files carry min and max values per block, so a filter on <code>txn_date = '2026-03-01'</code> skips most files unread. Partitioning (folders by date, say) does this coarsely. It is why an analytics query over a year of card data can finish in seconds and why scanning the same data as CSV would not.</p>
+        <p><strong>Where a bank's data actually comes from.</strong> Core banking (balances, accounts), card switch (authorisations, as ISO 8583 or JSON messages), payments hubs (see <a href="a13-iso-20022-payment-data.html">ISO 20022 payment data</a>), CRM, call-centre systems, channel logs from the mobile app, and external feeds (credit bureau such as AECB in the UAE or SIMAH in Saudi Arabia, sanctions lists). The operational systems are <strong>OLTP</strong>: built for many tiny, fast writes. Analytics wants <strong>OLAP</strong>: few big reads over history. Running heavy model queries on the core banking database would slow customer payments, which is why data is copied out to a separate analytical store. How it is copied is the subject of the second half of this lesson.</p>
+      </div>
+
+      <h3 class="sub" id="m-history">History is a feature of the table, not a courtesy</h3>
+      <div class="prose">
+        <p>Here is the part that matters most to a modeller. Many operational tables hold only the <strong>current state</strong>: one row per account, overwritten when something changes. The credit limit today is 4,000; the fact that it was 12,000 last spring has gone. If you build a training table by joining labels to that current row, every feature carries information from after the moment you are pretending to predict from. That is leakage (see <a href="f3-leakage-point-in-time.html">point-in-time correctness</a>), and it is invisible in the code.</p>
+        <p>Three ways a store can keep history, from weakest to strongest:</p>
+        <ul>
+          <li><strong>Periodic snapshots.</strong> Copy the whole table every night or month-end. Simple and robust, storage-heavy, and you can only ask about snapshot dates.</li>
+          <li><strong>Change records with valid dates</strong> (slowly changing dimensions, type 2). Each change adds a row with <code>valid_from</code> and <code>valid_to</code>. You can ask about any date, but only if everyone writes the joins correctly.</li>
+          <li><strong>Table-format time travel.</strong> Delta and Iceberg keep old versions of files; you can read the table as of a timestamp or version number. Handy for audit and for reproducing a past training set, with a retention window after which old versions are cleaned up. Time travel records when <em>the data platform</em> changed. It is not the same as when the <em>event</em> happened, a difference called <em>bitemporal</em> (event time versus recorded time) that causes real trouble when records are corrected late.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-asof">
+        <div class="fig-head"><span class="fig-title">One card account, two versions of the truth</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> move the as-of date through the year. The left column is what was really true on that date. The right column is the same account in a "current state" table, overwritten as things changed. Highlighted rows are values the model could not have known. Pick a date in March and see how different they are, then check what the model would be trained to predict.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-asof">Training example built as of <output for="s-asof"></output></label><input type="range" id="s-asof" min="0" max="11" step="1" value="5"></div>
+        </div>
+        <div class="table-wrap"><div id="asof-table"></div></div>
+        <div class="stats" style="margin-top:12px">
+          <div class="stat" id="st2-leak-b"><div class="k">Fields where "now" differs from "then"</div><div class="v" id="st2-leak"></div><div class="s">out of 4</div></div>
+          <div class="stat" id="st2-label-b"><div class="k">Label for this example</div><div class="v" id="st2-label"></div><div class="s">charged off within 90 days of the as-of date</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: one invented account with six dated changes (opened 1 Jan; limit raised to AED 12,000 on 15 Mar; salary transfer stops 2 Jun; limit cut to AED 4,000 on 20 Aug; 1–30 days late from 10 Oct, then 31–60 from 10 Nov; charged off 5 Dec). As-of dates are the first of each month. The "now" column is the account's state after 5 Dec.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Notice what happens near the end of the year. The charged-off status in the "now" column is a near-perfect predictor of the label, because it <em>is</em> the label. A model trained that way scores brilliantly offline and is useless live. The cure is not clever modelling. It is choosing stores and table designs that keep history, and a rule that training tables are built with an as-of join: for each (customer, date) pair, take the latest record whose valid time is on or before that date. <a href="f3-sql-thinking.html">SQL thinking</a> shows the window-function pattern; <a href="p1-feature-stores-and-online-offline.html">feature stores</a> package this so you do not rewrite it per project.</p>
+        <p>Also worth knowing: <strong>warehouses are catching up</strong>. Modern cloud warehouses read open table formats such as Iceberg and offer their own time travel; lakehouse engines run warehouse-style SQL. The sharp distinction in the table above is blurring, which is why the better question is "what guarantees do I need?" than "which product category is this?".</p>
+      </div>
+
+      <h3 class="sub" id="m-batch">Batch versus streaming</h3>
+      <div class="prose">
+        <p><strong>Batch</strong> processes data in chunks on a schedule: a nightly job, an hourly job. It is simple to reason about (the input is fixed when the job starts), easy to re-run after a bug, and cheap, because compute is used in bursts. <strong>Streaming</strong> processes each event as it arrives, continuously, with state held between events (for example, "this card's last ten transactions"). The usual stack is an event log such as Apache Kafka that stores the events, and a stream processor such as Apache Flink or Spark Structured Streaming that computes on them. In between sits <strong>micro-batch</strong>: small batches every few seconds or minutes, which is how many "streaming" jobs actually run.</p>
+        <p>Choosing is a calculation about delay. For a decision whose value decays with time, ask: how much damage happens per minute of waiting, and how many minutes does each design add? The expected wait of a scheduled job has a simple form:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>E</mi><mo stretchy="false">[</mo><mtext>delay</mtext><mo stretchy="false">]</mo><mo>≈</mo><mfrac><mi>T</mi><mn>2</mn></mfrac><mo>+</mo><mi>P</mi></math>
+        <p class="where"><i>T</i> is the gap between runs and <i>P</i> is how long a run takes to produce its answer. An event happens at a random moment between runs, so on average it waits half a gap for the next run to start, then <i>P</i> for the run to finish. A nightly job (<i>T</i> = 24 hours) adds about 12 hours plus its runtime to the average event, and nearly a full day to the unluckiest. This ignores the first moments after an event during which a pattern is not yet visible; the simulation below includes that.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The right answer depends on the use case, and many are not close calls:</p>
+        <ul>
+          <li><strong>Card fraud at authorisation</strong>: the decision must come back in tens of milliseconds, while the customer waits. Streaming plus an online store of precomputed features. See <a href="p5-designing-a-real-time-fraud.html">designing a real-time fraud system</a>.</li>
+          <li><strong>Transaction monitoring for AML</strong>: alerts are reviewed by people over days. Batch (daily) is usually fine, and regulators care more about coverage and explainability than speed. Sanctions screening of a payment before it is released is the exception: that one blocks the payment, so it is real-time.</li>
+          <li><strong>Churn, propensity, credit refresh</strong>: batch, daily or weekly. Nothing improves by scoring a customer's churn risk every second. See <a href="p5-designing-batch-propensity-and-campaign.html">batch propensity design</a>.</li>
+          <li><strong>Intraday liquidity</strong>: somewhere between, near-real-time dashboards fed every few minutes.</li>
+        </ul>
+        <p>The first sensible question is rarely "can we stream?" but "what does an hour of delay cost?" The simulation puts numbers on one case.</p>
+      </div>
+
+      <figure class="figure" id="fig-batch">
+        <div class="fig-head"><span class="fig-title">What does waiting cost in a card-testing attack?</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start at the nightly setting (1,440 minutes) and read the loss per attack. Shorten the gap and watch the curve fall, steeply at first, then flatten. Then raise the job runtime and watch the curve shift up. Press <b>Score at the till</b> to compare with a streaming design, and look at the platform cost beside the loss.</p>
+        <div class="btns" role="group" aria-label="Mode">
+          <button class="btn" type="button" id="b-stream" aria-pressed="false">Score at the till (streaming)</button>
+        </div>
+        <div class="chart-wrap" id="batch-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Expected loss per attack, scheduled scoring</span>
+          <span><i style="background:var(--muted)"></i>Streaming (declines the second charge)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-gap">Gap between scoring runs <output for="s-gap"></output></label><input type="range" id="s-gap" min="0" max="3.16" step="0.02" value="3.16"></div>
+          <div class="ctl"><label for="s-run">Job runtime to produce an answer <output for="s-run"></output></label><input type="range" id="s-run" min="1" max="60" step="1" value="30"></div>
+          <div class="ctl"><label for="s-att">Attacks per month <output for="s-att"></output></label><input type="range" id="s-att" min="50" max="2000" step="50" value="300"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-loss-b"><div class="k">Expected loss per attack</div><div class="v" id="st3-loss"></div><div class="s" id="st3-n"></div></div>
+          <div class="stat"><div class="k">Loss per month</div><div class="v" id="st3-month"></div><div class="s" id="st3-month-s"></div></div>
+          <div class="stat"><div class="k">Platform cost per month</div><div class="v" id="st3-cost"></div><div class="s">assumed, illustrative</div></div>
+          <div class="stat" id="st3-tot-b"><div class="k">Loss plus platform</div><div class="v" id="st3-tot"></div><div class="s" id="st3-tot-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: a stolen card is used for AED 900 every 3 minutes for at most 2 hours (40 charges). The model needs two charges to see the pattern. A scheduled run at time r sees every charge so far, and its block takes effect r plus the runtime later; the start of the attack is spread evenly across the gap (averaged over 200 start phases, so it is exact up to that sampling). Streaming declines the second charge, so one charge (AED 900) gets through. Platform costs (AED 10,000 for gaps of 6 hours or more; 40,000 from 15 minutes to 6 hours; 150,000 under 15 minutes; 220,000 for streaming) are made-up round numbers to show the shape of the trade, not market prices.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to read from it. First, the curve flattens: going from a day to an hour saves a great deal, from an hour to a minute saves less, and below the 3-minute rhythm of the attacker, extra speed buys only the last charge or two. Second, <strong>runtime matters as much as frequency</strong>. A job that runs every five minutes but takes forty to finish is a forty-minute system. Third, the right place on the curve depends on how often attacks happen and how big they are. With a small monthly count, the cheap design wins; with thousands of attacks, streaming pays for itself. That break-even is exactly the number to bring to a meeting.</p>
+      </div>
+
+      <h3 class="sub" id="m-stream-hard">What makes streaming harder than it looks</h3>
+      <div class="prose">
+        <p>Streaming is not batch made quicker. It changes three things.</p>
+        <ul>
+          <li><strong>Event time versus processing time.</strong> A tap on a phone at 14:00:02 may reach your system at 14:00:40, or at 14:04 if the phone was in a lift. If you group events by arrival time, the same customer behaviour gives different features on different days. Group by <em>event time</em> instead, and accept that some events arrive late.</li>
+          <li><strong>Watermarks.</strong> The engine must decide when a window ("transactions in the last 5 minutes") is complete. A watermark is its running guess: "I assume no event older than <i>t</i> minus <i>W</i> will still arrive." A short <i>W</i> gives fast answers but misses late events; a long <i>W</i> is complete but slow. It is the same accuracy-versus-delay trade as batch, one level down (Akidau et al., 2015).</li>
+          <li><strong>State, duplicates and failure.</strong> A streaming job remembers things between events (counts, last location), and that state must survive a crash. Systems provide "at-least-once" delivery (an event may come twice) or "exactly-once" processing within the platform, at a cost. A duplicated payment event that doubles a velocity count is a bug no batch re-run would show you.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-wm">
+        <div class="fig-head"><span class="fig-title">How long should a window wait for stragglers?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> each dot is one transaction event in a five-minute window for one card. Height is how late it reached us. Dots above the dashed line (red) arrive after the window closed and are missed. Slide the wait up from zero and watch the count converge, and see what each extra second of waiting costs in decision time.</p>
+        <div class="chart-wrap" id="wm-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral);opacity:.7"></i>Counted when the window closes</span>
+          <span><i class="sq" style="background:var(--bad);opacity:.8"></i>Arrived too late: missed</span>
+          <span><i style="background:var(--accent)"></i>Watermark wait</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-wm">Wait after the window ends <output for="s-wm"></output></label><input type="range" id="s-wm" min="0" max="300" step="1" value="10"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st4-cnt-b"><div class="k">Events counted</div><div class="v" id="st4-cnt"></div><div class="s" id="st4-cnt-s"></div></div>
+          <div class="stat"><div class="k">Decision available after</div><div class="v" id="st4-lat"></div><div class="s">from the end of the window</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: 150 events with event times spread evenly across a 300-second window, from a seeded random generator so the picture is stable. About 85% reach us after a short delay (average 3 seconds); about 15% are slow (average 100 seconds; think mobile offline or retried messages). Delays are capped at 300 seconds. The exact counts are those of this one draw, not a law.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The slow 15% is the point. Most events are on time, so a tiny wait gets you most of the count. The last few percent need disproportionately long waits, and in fraud those late stragglers are sometimes the interesting ones (offline merchant terminals that upload in bulk). The common design answer is a <strong>hybrid</strong>: decide at the till on what you have, and let a batch job reconcile later with complete data. This reaches the idea sometimes called the <em>lambda architecture</em> (a fast path and a complete path) and its streaming-only alternative, <em>kappa</em>, where one replayable log is the single source and reprocessing is just replaying it (Kreps, 2014). Neither is free: two paths mean two codebases that must agree, and one path means the stream engine must be good enough for everything.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Storage and freshness sit under almost every model the bank runs. These are the places they matter.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F3.1 · Point-in-time correctness</span><span class="t"><a href="f3-leakage-point-in-time.html">History in the table is what makes it possible</a></span><p>Simulation 2 is leakage in miniature. Time travel and valid-from/valid-to rows are the machinery that lets you rebuild any past day.</p></div>
+        <div class="link-card"><span class="code">F3.3 · SQL thinking</span><span class="t"><a href="f3-sql-thinking.html">Query the store properly</a></span><p>Warehouses and lakehouses both speak SQL. The as-of join, window functions and partition filters are what make your queries correct and cheap.</p></div>
+        <div class="link-card"><span class="code">P1.3 · Feature stores</span><span class="t"><a href="p1-feature-stores-and-online-offline.html">The bridge between this lesson and serving</a></span><p>An offline store (lakehouse tables) for training and an online store (key-value) for serving, kept consistent. The batch versus stream choice decides how features are filled.</p></div>
+        <div class="link-card"><span class="code">P1.4 · Lineage and metadata</span><span class="t"><a href="p1-lineage-and-metadata.html">Knowing where a number came from</a></span><p>A lake with no catalogue is a swamp. Lineage tells a validator which silver tables fed a model, and which gold table breaks if a source changes.</p></div>
+        <div class="link-card"><span class="code">P2 · Deployment patterns</span><span class="t"><a href="p2-deployment-patterns-batch-real-time.html">Batch scoring versus real-time serving</a></span><p>The same trade seen from the model side: a batch job writing scores to a table, or a service answering one request at a time.</p></div>
+        <div class="link-card"><span class="code">P5 · Reference designs</span><span class="t"><a href="p5-designing-a-real-time-fraud.html">Putting streaming to work</a></span><p>The real-time fraud design uses everything in Simulation 3 and 4: event log, stream processor, online features and a hybrid reconciler.</p></div>
+        <div class="link-card"><span class="code">P4 · Cloud and hybrid</span><span class="t"><a href="p4-cloud-building-blocks-compute-storage.html">Where the stores physically run</a></span><p>Object storage, compute that scales apart from storage, and the question of in-country regions. See also <a href="p4-hybrid-and-on-premises-deployment.html">hybrid and on-premises</a>.</p></div>
+        <div class="link-card"><span class="code">B1 · Fraud and feedback</span><span class="t"><a href="b1-transaction-and-card-fraud-detection.html">The use case that drives streaming</a></span><p>Labels arrive late (<a href="b1-delayed-labels-and-feedback-loops.html">delayed labels</a>), so a store must hold both the event and the later outcome keyed to it, with their dates.</p></div>
+        <div class="link-card"><span class="code">F7 · Drift monitoring</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">Late data is a source of false drift</a></span><p>A monitoring job that reads partly arrived data will see "drift" that is just incompleteness. Read from a mature partition.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Regulatory and finance reporting.</strong> Warehouse-style gold tables that reconcile to the ledger. Models that feed provisioning (<a href="b4-pd-lgd-ead-and-expected.html">PD, LGD, EAD</a>) must be traceable to those same numbers.</li>
+          <li><strong>Data residency.</strong> Where the store physically sits matters. The CBUAE and SAMA expect banks to keep customer data and critical systems under defined controls, with specific rules on outsourcing and cloud. I have not quoted the rules here: check the current text with your compliance team, because they differ by data type and have changed recently. See <a href="a11-sovereign-ai-g42-and-core42.html">sovereign AI</a> for the in-country cloud context.</li>
+          <li><strong>Unstructured sources.</strong> Call recordings, scanned trade documents and Arabic complaint text sit in the lake. Models over them (<a href="m3-parsing-messy-pdfs-and-scans.html">parsing PDFs and scans</a>) start with a file path, not a table.</li>
+          <li><strong>Reproducibility for validators.</strong> "Which exact data trained this model?" has an answer only if the table version or snapshot is recorded with the run (<a href="p2-the-model-lifecycle-from-experiment.html">model lifecycle</a>).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The big ideas are settled. The live questions are about open table formats converging, how real streaming is becoming a default tool rather than a specialist one, and how all of this is placed under sovereignty rules.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with three web searches. Most sources found were vendor blogs, so only claims backed by an official page or consistent across sources are included; items I could not confirm are said so.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2013–15</span><div><div class="t">Streaming gets a theory</div><p>Kreps argued for one replayable log instead of separate fast and slow paths. Akidau and colleagues' Dataflow model gave the vocabulary of event time, windows and watermarks that engines such as Flink and Beam now use.</p><div class="src">Kreps, O'Reilly Radar, 2014; Akidau et al., VLDB, 2015</div></div></li>
+        <li><span class="yr">2020–21</span><div><div class="t">The lakehouse is named and the table formats mature</div><p>Delta Lake was described at VLDB 2020, and the Lakehouse paper at CIDR 2021 argued that warehouse features can be built over open files. Apache Iceberg and Hudi followed the same idea with their own designs.</p><div class="src">Armbrust et al., VLDB 2020 and CIDR 2021</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Apache Flink 2.0</div><p>The first major Flink release in years, announced in March 2025. It removed old APIs, added support for Java 21, and introduced disaggregated state, which stores operator state remotely rather than only on local disk. The Flink site lists 2.0.2 as released in May 2026, and one release tracker shows a later 2.3 line; check the project page for the current version before you pin one.</p><div class="src">Apache Flink project announcements, 2025 and 2026</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Table formats converge, with caveats</div><p>Iceberg's third specification version adds features such as deletion vectors and row-level lineage, and Databricks states that these line up with Delta's equivalents so the two formats can be read interchangeably. Snowflake and Databricks both describe v3 support. Independent sources disagreed on dates and on how far <em>writing</em> across formats works, so treat "read both" as largely true and "write both" as still engine-dependent until you test it.</p><div class="src">Apache Iceberg specification; Databricks engineering blog, 2026 (vendor)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">In-country financial cloud in the UAE</div><p>Secondary reports say the Central Bank of the UAE launched a sovereign financial cloud with Core42 in February 2026 under its financial infrastructure programme. I could not confirm the details from a primary page, so verify it, and confirm which workloads and which providers' regions your own bank is allowed to use.</p><div class="src">Industry compliance summaries (secondary); verify with the CBUAE</div></div></li>
+      </ol>
+      <div class="table-wrap" style="margin-top:20px">
+        <table class="data">
+          <thead><tr><th>Open question</th><th>Where things stand</th></tr></thead>
+          <tbody>
+            <tr><td><b>One table format or several?</b></td><td>Delta, Iceberg and Hudi coexist. Catalog interfaces and metadata translation are making them substitutable for reads. Banks usually pick the one their primary engine supports best and avoid betting on full interoperability.</td></tr>
+            <tr><td><b>Streaming and batch with one engine and one code path</b></td><td>Flink and Spark both claim unified APIs. In practice many teams still have different code for training features and serving features, and that gap is the root of training-serving skew (see feature stores).</td></tr>
+            <tr><td><b>Streaming SQL and incremental tables</b></td><td>Materialised views and "streaming tables" in warehouses and lakehouses try to give streaming freshness with SQL skills. Maturity varies by vendor, and the semantics of late data are the detail to probe.</td></tr>
+            <tr><td><b>Data for AI beyond tables</b></td><td>Lakes and lakehouses are increasingly where vector indexes, document stores and LLM training corpora sit alongside tables. Governance of those unstructured assets is less settled than for tables.</td></tr>
+            <tr><td><b>Open standards inside banks</b></td><td>Banks are cautious. Most run a mix of an incumbent warehouse and a new lakehouse for years, with a migration plan measured in years and a regulator watching outsourcing risk.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Keep the raw record, publish curated tables with history, choose open formats where you can, and match freshness to the cost of delay: most bank models are happy with batch, and a few (card authorisation, payment screening) need streaming.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These turn up in real projects and in AI-written pipelines. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Training from the current-state table</div><p>Features are joined from tables that overwrite history. Offline results are excellent, live results are not.</p><div class="spot"><b>Spot it</b>Ask: for a customer in last March's sample, what table did the credit limit come from, and would it have given the same value in March? Any feature that "would have been different" is a leak.</div></li>
+        <li><div class="t">The data swamp</div><p>A lake with no owners, no schemas and no catalogue. Fifty copies of "customers", none agreeing.</p><div class="spot"><b>Spot it</b>Ask who owns the table and when it was last validated. If nobody can say, it is not a source to train a regulated model on.</div></li>
+        <li><div class="t">Time travel treated as an audit trail</div><p>Old versions are removed by routine clean-up after a retention window, so the training set you used cannot be rebuilt a year later.</p><div class="spot"><b>Spot it</b>Check the retention setting against your model-validation and record-keeping period. Record the table version or export a snapshot with each model run.</div></li>
+        <li><div class="t">Event time confused with load time</div><p>Using the date a row landed as the transaction date. Corrections and late files then shift history.</p><div class="spot"><b>Spot it</b>Count rows whose load date is much later than their event date. Always keep both columns and say which one a feature uses.</div></li>
+        <li><div class="t">Streaming where batch would do</div><p>Months of platform work for a churn score that is read once a week.</p><div class="spot"><b>Spot it</b>Ask who or what consumes the output and how often. If it is read daily, hourly compute is waste.</div></li>
+        <li><div class="t">Batch where an attack needs minutes</div><p>A nightly fraud score on a product that attackers drain in an hour.</p><div class="spot"><b>Spot it</b>Estimate the damage per hour of delay as in Simulation 3, and compare it to the platform cost. Ask how long attackers typically take to cash out.</div></li>
+        <li><div class="t">Training-serving skew</div><p>Features computed in SQL for training and in different code for the live stream. Same name, different numbers.</p><div class="spot"><b>Spot it</b>Log live features and recompute the same rows offline. Compare distributions and row-by-row values. Differences show the skew.</div></li>
+        <li><div class="t">Short watermark, silent loss</div><p>Late events are dropped without anyone being told, so velocity features undercount for exactly the customers on weak connections.</p><div class="spot"><b>Spot it</b>Ask for the rate of late and dropped events as a monitored metric, by channel.</div></li>
+        <li><div class="t">Duplicates and double counting</div><p>At-least-once delivery plus a counter. A retried message counts twice.</p><div class="spot"><b>Spot it</b>Check that events carry a unique id and that the job de-duplicates on it, then test by replaying the same hour twice.</div></li>
+        <li><div class="t">Copies drifting apart</div><p>The warehouse says AED 1.84bn, the lake says AED 1.79bn, and each team trusts its own.</p><div class="spot"><b>Spot it</b>Name the system of record for each number, and reconcile the copies on a schedule.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“We don't need to rebuild everything to get models into production. The question for each use case is how fresh the answer must be. Churn and campaign scoring can run overnight at low cost. Card fraud can't: attackers drain a card in minutes, so that one needs decisions at the till. For the data itself, we should keep the full history of every table, because without it we can't train honestly or show a validator what a model saw. I'd start with those two decisions and let the technology follow.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a data engineer or architect</span>
+          <blockquote>“For training I need point-in-time-correct tables: either type-2 history or a table format with time travel, with the table version recorded per run. I'd like event time and load time both on the rows. For serving, I'd want the same feature definitions computed once and used in both paths, with late-event and duplicate rates monitored. Where do we stand on in-country regions for the lakehouse, and who owns the silver customer table?”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“What's the difference between a data lake and a lakehouse?”</summary><div class="ans"><p>A lake is files in cheap storage with no guarantees. A lakehouse adds a transaction log over those files, which gives you real tables: atomic updates, enforced schemas and the ability to read the table as of an earlier version. So the data stays in open formats on cheap storage, and you get most of what a warehouse offers.</p></div></details>
+        <details class="reveal"><summary>“Do we still need a warehouse if we have a lakehouse?”</summary><div class="ans"><p>Often yes, for a while. The warehouse holds the finance-reconciled numbers that regulatory reporting relies on and is operated by a team that owns them. The lakehouse is where data science and unstructured data live. Over time the line blurs, since warehouses read open tables and lakehouses run warehouse SQL, but I wouldn't migrate trusted reporting only for tidiness.</p></div></details>
+        <details class="reveal"><summary>“Why can't we just query the core banking database?”</summary><div class="ans"><p>It's built for fast small transactions, and a heavy model query can slow payments for customers. It also usually holds only current state, so you cannot rebuild what a customer looked like in the past, and several systems each hold part of the picture. So we copy to an analytical store that keeps history.</p></div></details>
+        <details class="reveal"><summary>“Should the fraud model be real-time?”</summary><div class="ans"><p>For card payments at authorisation, yes: the decision happens while the customer waits, and a nightly job would let an attack run all day. I'd put numbers on it: loss per hour of delay times attack volume, against the extra platform cost. For a monitoring queue reviewed by analysts the next morning, batch is the right answer.</p></div></details>
+        <details class="reveal"><summary>“What is Kafka, and what is Flink?”</summary><div class="ans"><p>Kafka is a durable log of events: producers append, consumers read at their own pace, and old events can be replayed. Flink is an engine that computes on those events as they arrive, holding state such as "this card's transactions in the last ten minutes". One stores and delivers events, the other computes on them.</p></div></details>
+        <details class="reveal"><summary>“Is streaming always more accurate because it's fresher?”</summary><div class="ans"><p>No. Streaming sees data before late events have arrived, so some features are less complete than in a batch run. You trade completeness for speed. That's why strong designs decide fast on what they have and reconcile later with complete data.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A scheduled job runs every 6 hours and takes 45 minutes to finish. What is the average delay between an event and the result, and the longest?</summary><div class="ans"><p>Average ≈ T/2 + P = 3 hours + 45 minutes = 3 hours 45 minutes. The longest is an event that just misses a run: a full 6 hours of waiting plus 45 minutes of runtime, so 6 hours 45 minutes.</p></div></details>
+        <details class="reveal"><summary>2. Why does a lake need a transaction log before it behaves like a warehouse table?</summary><div class="ans"><p>Without one, a job that writes 200 files and fails after 120 leaves 120 files that readers can see. A log records a commit only once all files are written, so readers see either the old table or the new one, never a mixture. The same log lets you read the table as of an earlier commit.</p></div></details>
+        <details class="reveal"><summary>3. You build a default-risk training table by joining labels to the customers table as it stands today. What goes wrong, and what are two ways to fix it?</summary><div class="ans"><p>Features reflect the state after the moment you are predicting from (a status that changed because of the default, for example), so they leak the answer. Fix by building snapshots at each as-of date (monthly copies, or type-2 history with valid dates and an as-of join), or by reading a table-format version as of that timestamp. Check the result against the live data to confirm.</p></div></details>
+        <details class="reveal"><summary>4. Name three use cases at a bank and say whether each should be batch, micro-batch or streaming, with one reason each.</summary><div class="ans"><p>Card authorisation: streaming, the customer waits and attackers cash out in minutes. AML transaction monitoring: daily batch, alerts are worked by people over days and coverage matters more than speed. Intraday liquidity view: micro-batch every few minutes, treasury needs a current picture but not per-event decisions. (Sanctions screening of a payment before release is real-time, because it gates the payment.)</p></div></details>
+        <details class="reveal"><summary>5. In Simulation 4, 85% of events arrive within seconds and 15% are slow. Why does adding more waiting give diminishing returns?</summary><div class="ans"><p>The fast majority is counted by a short wait. After that, each extra second only collects the few slow stragglers, whose delays are long and spread out. The count rises quickly, then creeps, while the decision time keeps growing linearly with the wait.</p></div></details>
+        <details class="reveal"><summary>6. What is the difference between event time and load time, and why can it break history?</summary><div class="ans"><p>Event time is when the thing happened; load time is when the platform recorded it. If a correction lands three weeks later and is stored with its load date, a query as of last month could include or exclude it depending on which date you filter on. For training, features should use what was <em>known</em> at the as-of date (load time), while analysis uses what <em>happened</em> (event time). Know which one you use.</p></div></details>
+        <details class="reveal"><summary>7. A colleague says "we should move everything to streaming, it's more modern." What do you ask?</summary><div class="ans"><p>What decision gets better if it is made sooner, and by how much? What does an hour of delay cost here? Who reads the result, and how often? If the output is read once a day, streaming adds cost and failure modes without adding value. Reserve it for the decisions where the value of the answer decays in minutes.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>M. Armbrust et al. <a href="https://www.cidrdb.org/cidr2021/papers/cidr2021_paper17.pdf">Lakehouse: A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a>. CIDR, 2021.</li>
+        <li>M. Armbrust et al. <a href="https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf">Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores</a>. PVLDB, 2020.</li>
+        <li>T. Akidau et al. <a href="https://www.vldb.org/pvldb/vol8/p1792-Akidau.pdf">The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massive-Scale, Unbounded, Out-of-Order Data Processing</a>. PVLDB, 2015.</li>
+        <li>J. Kreps. <a href="https://www.oreilly.com/radar/questioning-the-lambda-architecture/">Questioning the Lambda Architecture</a>. O'Reilly Radar, 2014.</li>
+        <li>M. Kleppmann. <a href="https://dataintensive.net/">Designing Data-Intensive Applications</a>. O'Reilly, 2017 (2nd ed. in progress). The best single book on storage, batch and streams.</li>
+        <li>R. Kimball, M. Ross. <a href="https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/data-warehouse-dw-toolkit/">The Data Warehouse Toolkit</a>. Wiley, 3rd ed., 2013. Dimensional modelling and slowly changing dimensions.</li>
+        <li><a href="https://iceberg.apache.org/spec/">Apache Iceberg table specification</a>. The authoritative description of the format and its versions.</li>
+        <li><a href="https://docs.delta.io/">Delta Lake documentation</a>. Time travel, retention and table protocols.</li>
+        <li><a href="https://flink.apache.org/2025/03/24/apache-flink-2.0.0-a-new-era-of-real-time-data-processing/">Apache Flink 2.0.0 release announcement</a>. March 2025.</li>
+        <li><a href="https://www.databricks.com/blog/apache-icebergtm-v3-moving-ecosystem-towards-unification">Apache Iceberg v3: Moving the Ecosystem Towards Unification</a>. Databricks blog (vendor source; read as a claim, then test).</li>
+        <li><a href="https://kafka.apache.org/documentation/">Apache Kafka documentation</a>. Logs, partitions, consumer groups and delivery guarantees.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in P1: Feature stores and online/offline consistency (P1.3)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const aed = v => "AED " + L.fmtInt(Math.round(v));
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: sorter
+  // =====================================================================
+  const STORES = ["Warehouse", "Lake", "Lakehouse"];
+  const ITEMS = [
+    ["Month-end general-ledger balances and regulatory returns", "Structured, reconciled to finance, read by BI tools and auditors.", 0, "Warehouse. This is the trusted, governed number; schema-on-write and a clear owner matter more than flexibility. A lakehouse gold table could also serve if the bank has standardised on one."],
+    ["Raw card-authorisation messages, millions a day, semi-structured", "Arrive as JSON or switch messages; schema changes with each scheme update; needed for replay.", 2, "Lakehouse. Land the raw messages unchanged (bronze), then clean into tables with history. A plain lake would work for storage but leaves you without transactions or time travel."],
+    ["Call-centre audio recordings", "Large binary files; used for speech-to-text and quality review.", 1, "Lake. Cheap object storage is the right home for audio. Only the metadata and transcripts become tables, and those can sit in the lakehouse."],
+    ["Monthly customer snapshots for a churn model", "Wide feature table; Python and SQL users; needs to be rebuilt as of past dates.", 2, "Lakehouse. Versioned tables with time travel and a Python-friendly format are what a model builder needs, and it avoids exporting from a warehouse."],
+    ["Board dashboard of net interest margin by segment", "Few numbers, high trust, many viewers, must match the finance report.", 0, "Warehouse. The point is one reconciled number for non-technical readers. Gold tables in a lakehouse could also feed it."],
+    ["Scanned letters of credit and trade documents", "PDFs and images; read by OCR and document-AI models.", 1, "Lake. Files in object storage, with a table that points to each file and its extracted fields."]
+  ];
+  const picks = new Array(ITEMS.length).fill(null);
+  const sorter = $("sorter");
+  ITEMS.forEach((it, i) => {
+    const row = document.createElement("div"); row.className = "srow";
+    row.innerHTML = `<div><div class="nm">${it[0]}</div><div class="ds">${it[1]}</div></div><div class="btns" role="group" aria-label="Choose a store for ${it[0]}"></div><div class="fb"></div>`;
+    const g = row.querySelector(".btns");
+    STORES.forEach((s, k) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = s; b.setAttribute("aria-pressed", "false");
+      b.addEventListener("click", () => {
+        picks[i] = k;
+        g.querySelectorAll("button").forEach((x, j) => x.setAttribute("aria-pressed", String(j === k)));
+        row.classList.add("done"); row.classList.toggle("right", k === it[2]); row.classList.toggle("wrong", k !== it[2]);
+        row.querySelector(".fb").innerHTML = (k === it[2] ? "<b>Matches the default.</b> " : "<b>Not the default pick.</b> ") + it[3];
+        score();
+      });
+      g.appendChild(b);
+    });
+    sorter.appendChild(row);
+  });
+  function score() {
+    const done = picks.filter(p => p !== null).length;
+    const ok = picks.filter((p, i) => p === ITEMS[i][2]).length;
+    $("st1-score").textContent = ok + " of " + ITEMS.length;
+    $("st1-s").textContent = done < ITEMS.length ? done + " answered" : (ok >= 5 ? "good instincts" : "read the reasons again");
+  }
+
+  // =====================================================================
+  // Simulation 2: as-of
+  // =====================================================================
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const EV = [
+    [0, "limit", "AED 5,000"], [0, "salary", "Yes"], [0, "dpd", "Current"], [0, "status", "Active"],
+    [2.5, "limit", "AED 12,000"], [5.03, "salary", "No"], [7.6, "limit", "AED 4,000"],
+    [9.3, "dpd", "1–30 days late"], [10.3, "dpd", "31–60 days late"], [11.15, "dpd", "90+ days late"], [11.15, "status", "Charged off"]
+  ];
+  const FIELDS = [["limit", "Credit limit"], ["salary", "Salary credited"], ["dpd", "Payment status"], ["status", "Account status"]];
+  const CHARGE = 11.15;
+  function stateAt(t) { const s = {}; EV.forEach(e => { if (e[0] <= t) s[e[1]] = e[2]; }); return s; }
+  function renderAsof(m) {
+    const then = stateAt(m), now = stateAt(99);
+    let diff = 0, html = '<table class="data"><thead><tr><th>Field</th><th>True on ' + "1 " + MON[m] + '</th><th>"Current state" table</th></tr></thead><tbody>';
+    FIELDS.forEach(f => {
+      const d = then[f[0]] !== now[f[0]]; if (d) diff++;
+      html += `<tr><td><b>${f[1]}</b></td><td>${then[f[0]]}</td><td${d ? ' class="diff"' : ""}>${now[f[0]]}</td></tr>`;
+    });
+    $("asof-table").innerHTML = html + "</tbody></table>";
+    $("st2-leak").textContent = diff; cls($("st2-leak-b"), diff >= 3 ? "bad" : diff >= 1 ? "warn" : "ok");
+    const pos = CHARGE > m && CHARGE <= m + 3;
+    $("st2-label").textContent = pos ? "Default" : (CHARGE <= m ? "Already defaulted" : "No default"); cls($("st2-label-b"), pos ? "bad" : "");
+    let v;
+    if (diff === 0) v = "At the start of the year nothing has changed yet, so both versions agree. This is the only date where the shortcut happens to work.";
+    else if (CHARGE <= m) v = "The account has already been charged off. A real model would never score it. Dropping already-defaulted accounts from the population is another step that has to be done as of the date.";
+    else v = `${diff} of 4 features differ. The "current state" column shows <b>${now.status}</b> and <b>${now.dpd}</b>, the answer itself.` + (pos ? " This example is labelled Default, and a model trained on the right-hand column would simply read the label from its inputs." : " A model trained on the right-hand column sees this account looking like a defaulter even though, on this date, it was not due to default within 90 days: the model learns the wrong thing.");
+    $("s2-verdict").innerHTML = v;
+  }
+  const MFULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  L.bind("s-asof", v => "1 " + MFULL[v], renderAsof);
+  renderAsof(5);
+
+  // =====================================================================
+  // Simulation 3: batch vs streaming
+  // =====================================================================
+  const S3 = { gap: 3.16, run: 30, att: 300, stream: false };
+  const CH = 900, EVERY = 3, MAXN = 40;
+  function lossFor(T, P) {
+    let sum = 0, cnt = 0; const n = 200;
+    for (let i = 0; i < n; i++) {
+      const phi = (i + 0.5) / n * T;
+      let r = phi; if (r < EVERY) r += Math.ceil((EVERY - phi) / T) * T;
+      const det = r + P, c = Math.min(MAXN, Math.ceil(det / EVERY));
+      sum += c; cnt++;
+    }
+    return sum / cnt; // mean number of charges
+  }
+  const platform = (T, stream) => stream ? 220000 : T >= 360 ? 10000 : T >= 15 ? 40000 : 150000;
+  const gapFmt = v => { const m = Math.pow(10, v); return m >= 120 ? (m / 60).toFixed(m >= 600 ? 0 : 1) + " hours" : (m < 10 ? m.toFixed(1) : Math.round(m)) + " min"; };
+  const batchBox = $("batch-chart");
+  function renderBatch() {
+    const T = Math.pow(10, S3.gap), P = S3.run;
+    const W = Math.max(300, batchBox.clientWidth), H = 280, m = { l: 62, r: 14, t: 14, b: 44 };
+    const svg = mk(batchBox, W, H, "Expected loss per attack against the gap between scoring runs");
+    const x = L.scale(0, 3.16, m.l, W - m.r), y = L.scale(0, MAXN * CH, H - m.b, m.t);
+    [0, 10000, 20000, 30000].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, v === 0 ? "0" : (v / 1000) + "k", { "text-anchor": "end" });
+    });
+    [[0, "1 min"], [1, "10 min"], [1.78, "1 hour"], [2.56, "6 hours"], [3.16, "24 hours"]].forEach(([v, l]) => {
+      tx(svg, x(v), H - m.b + 16, l, { "text-anchor": v === 0 ? "start" : v > 3 ? "end" : "middle" });
+    });
+    const pts = []; for (let v = 0; v <= 3.1601; v += 0.04) pts.push([x(v), y(lossFor(Math.pow(10, v), P) * CH)]);
+    L.svg("path", { d: L.path(pts), class: "cv-curve" }, svg);
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(CH), y2: y(CH), class: "cv-line" }, svg);
+    tx(svg, W - m.r - 4, y(CH) - 6, "streaming: AED 900", { "text-anchor": "end", class: "lbl-ink" });
+    const cur = S3.stream ? CH : lossFor(T, P) * CH;
+    if (!S3.stream) L.svg("circle", { cx: x(S3.gap), cy: y(cur), r: 6, class: "cv-now" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Gap between scoring runs (log scale)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Loss per attack (AED)", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+
+    const n = S3.stream ? 1 : lossFor(T, P), loss = n * CH, month = loss * S3.att, plat = platform(T, S3.stream), tot = month + plat;
+    const sMonth = CH * S3.att, sTot = sMonth + platform(0, true);
+    $("st3-loss").textContent = aed(loss); $("st3-n").textContent = "about " + n.toFixed(1) + " charges get through";
+    cls($("st3-loss-b"), loss > 20000 ? "bad" : loss > 5000 ? "warn" : "ok");
+    $("st3-month").textContent = aed(month); $("st3-month-s").textContent = S3.att + " attacks";
+    $("st3-cost").textContent = aed(plat);
+    $("st3-tot").textContent = aed(tot);
+    if (S3.stream) { $("st3-tot-s").textContent = "the streaming option"; cls($("st3-tot-b"), ""); }
+    else { $("st3-tot-s").textContent = tot < sTot ? "cheaper than streaming" : "dearer than streaming"; cls($("st3-tot-b"), tot < sTot ? "ok" : "bad"); }
+    const nightly = lossFor(1440, P) * CH * S3.att + platform(1440, false);
+    const saved = (lossFor(1440, P) - 1) * CH;
+    const be = Math.ceil((220000 - 10000) / saved);
+    $("s3-verdict").innerHTML = S3.stream
+      ? `Streaming leaves only the first charge. Against a nightly design it saves about ${aed(saved)} per attack, so the extra AED 210,000 a month in platform cost pays back above roughly <b>${L.fmtInt(be)}</b> attacks a month (with these assumed costs).`
+      : `At this setting the design loses <b>${aed(loss)}</b> per attack. Moving to streaming would cut that to AED 900 and change total monthly cost from ${aed(tot)} to ${aed(sTot)}. ${tot < sTot ? "At this attack volume the cheaper design still wins." : "At this volume the faster design is worth it."} Break-even against nightly is around ${L.fmtInt(be)} attacks a month.`;
+  }
+  L.bind("s-gap", gapFmt, v => { S3.gap = v; renderBatch(); });
+  L.bind("s-run", v => v + " min", v => { S3.run = v; renderBatch(); });
+  L.bind("s-att", v => L.fmtInt(v), v => { S3.att = v; renderBatch(); });
+  $("b-stream").addEventListener("click", e => { S3.stream = !S3.stream; e.currentTarget.setAttribute("aria-pressed", String(S3.stream)); renderBatch(); });
+
+  // =====================================================================
+  // Simulation 4: watermark
+  // =====================================================================
+  function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const rnd = mulberry(55), EVT = [];
+  for (let i = 0; i < 150; i++) {
+    const et = (i + rnd()) / 150 * 300;
+    const slow = rnd() < 0.15, mean = slow ? 100 : 3;
+    const d = Math.min(300, -Math.log(1 - rnd()) * mean);
+    EVT.push({ et, d });
+  }
+  const wmBox = $("wm-chart");
+  function renderWm(w) {
+    const W = Math.max(300, wmBox.clientWidth), H = 240, m = { l: 46, r: 12, t: 12, b: 44 };
+    const svg = mk(wmBox, W, H, "Event delays against the watermark wait");
+    const x = L.scale(0, 300, m.l, W - m.r), y = L.scale(0, 300, H - m.b, m.t);
+    [0, 100, 200, 300].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, v + "s", { "text-anchor": "end" });
+    });
+    [0, 60, 120, 180, 240, 300].forEach(v => tx(svg, x(v), H - m.b + 16, v + "s", { "text-anchor": "middle" }));
+    // an event at time et with delay d arrives at et+d; window closes at 300+w; counted if et+d <= 300+w
+    let c = 0;
+    EVT.forEach(e => {
+      const late = e.et + e.d > 300 + w; if (!late) c++;
+      L.svg("circle", { cx: x(e.et), cy: y(e.d), r: 3.2, class: late ? "dot-late" : "dot-ok" }, svg);
+    });
+    // boundary: delay <= 300 + w - et  (a diagonal line)
+    L.svg("line", { x1: x(0), y1: y(Math.min(300, 300 + w)), x2: x(300), y2: y(Math.min(300, w)), class: "cv-wm" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "When the transaction happened, in the window (seconds)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Delay before we saw it", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const share = c / EVT.length;
+    $("st4-cnt").textContent = c + " of " + EVT.length; $("st4-cnt-s").textContent = Math.round(share * 100) + "% of the true count";
+    cls($("st4-cnt-b"), share >= 0.97 ? "ok" : share >= 0.88 ? "warn" : "bad");
+    $("st4-lat").textContent = w + " s";
+    $("s4-verdict").innerHTML = share >= 0.97
+      ? `Nearly complete, but the answer arrives <b>${w} seconds</b> after the window ends. If the card is at the till, that wait may be longer than the customer will tolerate.`
+      : `The window closes with <b>${EVT.length - c}</b> events missing. A velocity rule such as "more than 10 charges in 5 minutes" would undercount, most for customers with weak connections.`;
+  }
+  L.bind("s-wm", v => v + " s", renderWm);
+  renderWm(10);
+
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderBatch(); renderWm(+$("s-wm").value); }, 120); });
+  renderBatch();
+})();
+</script>
+</body>
+</html>

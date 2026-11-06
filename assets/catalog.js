@@ -68,6 +68,16 @@ window.CATALOG = [
   {file: "b4-pd-lgd-ead-and-expected.html", module: "B4", title: "PD, LGD, EAD and the Scorecard: How a Bank Prices What Might Go Wrong", codes: ["B4.1","B4.2"], label: "B4.1 · B4.2", tier: "d", minutes: 45, star: true},
   {file: "b4-ifrs-9-staging-and-expected.html", module: "B4", title: "From Model to Balance Sheet: IFRS 9 Provisions, Stress Tests and the Applicants You Never Saw", codes: ["B4.3","B4.4","B4.5"], label: "B4.3 – B4.5", tier: "n", minutes: 42, star: true},
   {file: "b5-liquidity-forecasting-and-asset-liability.html", module: "B5", title: "Treasury Risk: Liquidity, Asset-Liability Management, VaR and Hedging", codes: ["B5.1","B5.2","B5.3"], label: "B5.1 – B5.3", tier: "n", minutes: 42},
+  {file: "b6-churn-and-retention-modelling.html", module: "B6", title: "Churn, Propensity and Uplift: Who Leaves, Who to Call, and Whether the Call Changes Anything", codes: ["B6.1","B6.2"], label: "B6.1 · B6.2", tier: "d", minutes: 42},
+  {file: "b6-segmentation-and-lifetime-value.html", module: "B6", title: "Customers as a Portfolio: Segmentation, Lifetime Value and Personalisation Within the Rules", codes: ["B6.3","B6.4"], label: "B6.3 · B6.4", tier: "n", minutes: 40},
+  {file: "b7-document-ai-for-trade-finance.html", module: "B7", title: "Reading Paper and Listening to Calls: Document AI and Contact-Centre AI", codes: ["B7.1","B7.2"], label: "B7.1 · B7.2", tier: "n", minutes: 40},
+  {file: "b7-internal-copilots-for-staff.html", module: "B7", title: "Staff Copilots and Reconciliation: Policy Search, Drafting and Routing the Exceptions", codes: ["B7.3","B7.4"], label: "B7.3 · B7.4", tier: "n", minutes: 40},
+  {file: "p1-warehouses-lakes-and-lakehouses.html", module: "P1", title: "Where Bank Data Lives, and When It Moves: Warehouses, Lakes, Lakehouses, Batch and Streaming", codes: ["P1.1","P1.2"], label: "P1.1 · P1.2", tier: "d", minutes: 40},
+  {file: "p1-feature-stores-and-online-offline.html", module: "P1", title: "Same Features Live as in Training: Feature Stores, Consistency and Data Contracts", codes: ["P1.3","P1.4"], label: "P1.3 · P1.4", tier: "d", minutes: 42, star: true},
+  {file: "p1-lineage-and-metadata.html", module: "P1", title: "Lineage, Columnar Formats and Spark: Knowing Where Data Came From and Moving It Fast", codes: ["P1.5","P1.6","P1.7"], label: "P1.5 – P1.7", tier: "n", minutes: 40},
+  {file: "p2-the-model-lifecycle-from-experiment.html", module: "P2", title: "The Model Lifecycle, and Knowing Exactly Which Model Is Running", codes: ["P2.1","P2.2"], label: "P2.1 · P2.2", tier: "d", minutes: 38},
+  {file: "p2-deployment-patterns-batch-real-time.html", module: "P2", title: "Releasing and Watching Models: Batch, Real-Time, Shadow, Canary and Monitoring", codes: ["P2.3","P2.4"], label: "P2.3 · P2.4", tier: "d", minutes: 40, star: true},
+  {file: "p2-prompt-versioning-and-llm-tracing.html", module: "P2", title: "Seeing and Gating an LLM System: Prompt Versions, Traces and Evals in CI", codes: ["P2.5","P2.6"], label: "P2.5 · P2.6", tier: "n", minutes: 38},
   {file: "a1-know-your-agent.html", module: "A1", title: "Know Your Agent: How AI Agents Get Permission to Pay", codes: ["A1.1","A1.2","A1.3","A1.4","A1.5"], label: "A1.1 – A1.5", tier: "n", star: true, fast: true, minutes: 40}
 ];
 

@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Model Lifecycle, and Knowing Exactly Which Model Is Running</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .cv-line { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-bad { stroke: var(--bad); stroke-width: 2.6; fill: none; }
+  .cv-true { stroke: var(--ink); stroke-width: 2; stroke-dasharray: 5 4; fill: none; }
+  .cv-floor { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-rev { stroke: var(--neutral); stroke-width: 1.2; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .cv-det { fill: var(--bad); stroke: var(--surface); stroke-width: 2; }
+  .stagebar { display: flex; flex-wrap: wrap; gap: 6px; }
+  .stagebar .btn { font-size: 13px; padding: 6px 10px; }
+  .stagepanel { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .stagepanel > div { padding: 10px 12px; border-radius: 8px; background: var(--sunk); font-size: 14px; min-width: 0; }
+  .stagepanel .k { display: block; font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .stagepanel .skipbox.on { background: var(--bad-soft); }
+  table.data tr.sel td { background: var(--sunk); }
+  table.data tr.champ td { font-weight: 600; }
+  .log { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; font-family: var(--font-mono); font-size: 12px; max-height: 190px; overflow: auto; }
+  .log li.blk { color: var(--bad); }
+  .log li.ok { color: var(--ok); }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track P · Production, data and platforms</span>
+    <span>Module P2 · MLOps and LLMOps</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>P2.1 · P2.2</span>
+        <span class="pill d">Day one</span>
+        <span>About 38 minutes</span>
+      </div>
+      <h1>The Model Lifecycle, and Knowing Exactly Which Model Is Running</h1>
+      <p class="dek">The stages a bank model passes through from idea to retirement, why decay and review cadence are an engineering question, how experiment tracking stops you fooling yourself, and what a registry must be able to answer when an auditor asks.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model is not a file you ship once but a controlled asset with a life: it has stages, owners and gates, it decays, and at every moment the bank must be able to say which version is running, what data and code built it, who approved it, and how to go back.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A data scientist at a Gulf bank builds a card-fraud model in a notebook. It scores well. Someone copies the notebook's output into a scoring service. Nine months later the fraud team says alerts have got worse. A regulator asks: <em>which model is this, who approved it, what data trained it, and when was it last checked?</em></p>
+        <p>Nobody can answer. The notebook was edited after the copy. The training table was overwritten by a refresh. The person who approved it has moved teams. Fifty experiments were run, and nobody remembers which one became the production model or how many were tried before it looked good. The model may be fine. The bank cannot show that it is.</p>
+        <p>The lifecycle is the fix. Think of a model as an aircraft part, not a document. It has a design stage, test stages, a certificate, a serial number, scheduled inspections and a retirement date. None of this makes the model more accurate. It makes the model <strong>trustworthy, reproducible and reversible</strong>, which in a regulated bank matters as much.</p>
+      </div>
+      <div class="prose">
+        <p>Two ideas carry the lesson.</p>
+        <ul>
+          <li><strong>Models decay, so the work is never finished.</strong> The world moves: fraud tactics change, customers change, the economy changes. A model that was right at deployment becomes wrong slowly and silently. The lifecycle has a monitoring and review loop built in, and Simulation 2 shows what the review interval costs.</li>
+          <li><strong>Identity is the foundation.</strong> You cannot monitor, audit, roll back or retire "the model" unless "the model" is a precise, versioned thing: this code, this data snapshot, these parameters, this environment, this approval. Experiment tracking records how a model was made; the registry records what is live and why.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Every serious question about a production model reduces to one of four: what is it exactly, how was it made, who allowed it, and how do we undo it. Lifecycle stages, trackers and registries are the machinery for answering those four.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-lifecycle">The model lifecycle, stage by stage</h3>
+      <div class="prose">
+        <p>Banks differ in naming, but the same nine stages appear in model risk policies worldwide. The US supervisory guidance SR 11-7 (2011) set the pattern: development and implementation, validation, and governance, with ongoing monitoring in between. The Central Bank of the UAE's Model Management Standards, issued in 2022, describe a similar span of stages: development, validation before implementation, implementation, use and monitoring, independent validation, and changes such as recalibration or redevelopment. Saudi banks work under SAMA's own expectations; read the current text for your institution rather than rely on a summary, including this one.</p>
+        <p>Click through the stages below. For each one: what happens, what <em>artefact</em> it leaves behind, who must sign, and what goes wrong if the stage is skipped.</p>
+      </div>
+
+      <figure class="figure" id="fig-stage">
+        <div class="fig-head"><span class="fig-title">Nine stages, each leaving evidence</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> step through the stages with the buttons, then press <b>Show what happens if skipped</b> on a few. Notice that the damage is rarely immediate. It shows up at the next audit, incident or retraining.</p>
+        <div class="stagebar" id="stagebar" role="group" aria-label="Lifecycle stages"></div>
+        <div class="stagepanel" id="stagepanel"></div>
+        <div class="btns" role="group" aria-label="Skip view"><button class="btn" type="button" id="b-skip" aria-pressed="false">Show what happens if skipped</button></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Stage</div><div class="v" id="st1-n"></div><div class="s" id="st1-name"></div></div>
+          <div class="stat"><div class="k">Evidence artefacts so far</div><div class="v" id="st1-art"></div><div class="s">things an auditor could ask to see</div></div>
+        </div>
+        <p class="sim-note">Illustrative: a generic bank lifecycle assembled from public supervisory guidance. Your bank's policy names and tiers stages differently; use it as the reference.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three details separate real practice from the diagram.</p>
+        <ul>
+          <li><strong>It is a loop, not a line.</strong> Monitoring feeds back into change, and change re-enters development and validation. A recalibration is not "just a refit": it is a new model version, and under most policies it needs its own approval. How much validation depends on how material the change is.</li>
+          <li><strong>Tiering sets the effort.</strong> A fraud model that can block thousands of customers, or an IFRS 9 model that moves provisions by millions of dirhams, is high tier: full independent validation, frequent review. A model that routes internal emails is low tier. The bank spends scarce validator time where harm is largest.</li>
+          <li><strong>Independence is structural.</strong> The builder cannot validate their own model. The validators report separately, and the model owner (usually the business) remains accountable for use. G3 covers independent validation and review in depth; here the point is that the lifecycle must leave behind <em>evidence a third party can use</em>.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-decay">Decay and review cadence</h3>
+      <div class="prose">
+        <p>The reason the loop exists is decay. Performance after deployment usually falls, not in a cliff but along a slope with noise: new fraud tactics, a changed customer mix, a rate change that alters who defaults. Sometimes it falls suddenly, because a rule upstream changed or a feed broke. F7.7 covers how to detect drift; the lifecycle question is different: <strong>how often do you look, and how stale will the answer be?</strong></p>
+        <p>Suppose a model's measured quality falls steadily, and the bank has agreed that below some floor the model is unfit. If you review every <i>c</i> months, a breach at time <i>m</i>* is not found until the next review, and the metric itself is only trustworthy once labels have matured (the delay problem from F3.5 and B1.2). So</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>detected at</mtext><mo>=</mo><mrow><mo>⌈</mo><mfrac><mrow><msup><mi>m</mi><mo>*</mo></msup><mo>+</mo><mi>δ</mi></mrow><mi>c</mi></mfrac><mo>⌉</mo></mrow><mo>·</mo><mi>c</mi></math>
+        <p class="where"><i>m</i>* is the month the true quality crosses the floor, <i>δ</i> the label delay in months, <i>c</i> the review interval. The ceiling brackets mean "round up to the next review". On average you wait about half an interval plus the label delay after the real breach, and in the worst case a full interval. Months spent below the floor are months of harm: missed fraud, wrong provisions, mispriced loans.</p>
+      </div>
+
+      <figure class="figure" id="fig-decay">
+        <div class="fig-head"><span class="fig-title">How long a broken model runs before anyone knows</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> with decline 0.010 a month, label delay 2 months and a 6-month review, the breach goes unnoticed for months. Shorten the interval, then switch on weekly automated monitoring and watch the red marker snap close to the real breach. Then raise the label delay and see what monitoring alone cannot fix.</p>
+        <div class="btns" role="group" aria-label="Monitoring"><button class="btn" type="button" id="b-auto" aria-pressed="false">Add weekly automated monitoring</button></div>
+        <div class="chart-wrap" id="decay-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Model quality (AUC) while fine</span>
+          <span><i style="background:var(--bad)"></i>Below the floor</span>
+          <span><i style="background:var(--warn)"></i>Agreed floor 0.75</span>
+          <span><i style="background:var(--neutral)"></i>Scheduled review</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-dec">Quality lost per month (AUC) <output for="s-dec"></output></label><input type="range" id="s-dec" min="0.004" max="0.02" step="0.001" value="0.01"></div>
+          <div class="ctl"><label for="s-cad">Review interval <output for="s-cad"></output></label><input type="range" id="s-cad" min="0" max="3" step="1" value="2"></div>
+          <div class="ctl"><label for="s-lab">Label delay before quality is measurable <output for="s-lab"></output></label><input type="range" id="s-lab" min="0" max="6" step="0.5" value="2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">True breach</div><div class="v" id="st2-m"></div><div class="s">month quality hits 0.75</div></div>
+          <div class="stat" id="st2-d-b"><div class="k">Detected</div><div class="v" id="st2-d"></div><div class="s">month someone can know</div></div>
+          <div class="stat" id="st2-w-b"><div class="k">Months running below floor</div><div class="v" id="st2-w"></div><div class="s">undetected</div></div>
+          <div class="stat" id="st2-c-b"><div class="k">Illustrative harm</div><div class="v" id="st2-c"></div><div class="s">AED, see note</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: AUC starts at 0.82 at deployment and falls linearly; the floor is 0.75; reviews fall at multiples of the interval. Weekly monitoring is assumed to see the breach after 0.25 months plus the label delay. Harm is invented for illustration: AED 100,000 per AUC-point-month below the floor, so it grows with the square of the time undetected. Real decay is noisy and sometimes sudden.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two lessons hide here. First, <strong>review cadence is a risk decision, with a price you can estimate</strong>. A quarterly review for a high-tier model is not bureaucracy; it is the interval at which you accept being wrong. Second, <strong>automation shrinks the first term but not the second</strong>. A dashboard can check weekly, but if fraud labels take eight weeks to mature, true performance is invisible for eight weeks. That is why input-drift monitors (PSI, KS, F7.7) and proxy metrics run alongside: they warn early, with weaker evidence, and the labelled metrics confirm later.</p>
+      </div>
+
+      <h3 class="sub" id="m-tracking">Experiment tracking: counting what you tried</h3>
+      <div class="prose">
+        <p>Development is not one model. It is hundreds of runs: different features, algorithms, hyperparameters, splits and seeds. An <strong>experiment tracker</strong> (MLflow, Weights &amp; Biases, or a bank-built equivalent) records for every run:</p>
+        <ul>
+          <li><strong>Code version</strong>: the git commit, and whether the working tree was clean.</li>
+          <li><strong>Data version</strong>: a snapshot ID or content hash of the exact training table, plus the point-in-time cut-off (F3.1).</li>
+          <li><strong>Parameters</strong>: every hyperparameter, random seed and feature list.</li>
+          <li><strong>Environment</strong>: library versions, hardware, container image.</li>
+          <li><strong>Metrics and artefacts</strong>: validation scores, plots, the fitted model file, sometimes sample predictions.</li>
+        </ul>
+        <p>The first use is reproduction: rebuild any number you reported (F10.4). The less obvious use is <strong>honesty about selection</strong>. If you run <i>N</i> comparable configurations and report the best validation score, that score is biased upward, because the winner was selected partly for good luck. The tracker is the only record that tells you <i>N</i>. Without it, "we tried a few things" can mean 5 or 500.</p>
+        <p>The size of the effect has a clean form. If each configuration's validation score is its true quality plus noise with standard deviation σ, then the best of <i>N</i> is inflated by about</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>optimism</mtext><mo>≈</mo><mfrac><msup><mi>σ</mi><mn>2</mn></msup><msqrt><mrow><msup><mi>τ</mi><mn>2</mn></msup><mo>+</mo><msup><mi>σ</mi><mn>2</mn></msup></mrow></msqrt></mfrac><mo>·</mo><msub><mi>e</mi><mi>N</mi></msub></math>
+        <p class="where">τ is how much the configurations genuinely differ, σ the validation noise (which shrinks with the number of positive cases, as in F3.5), and <i>e<sub>N</sub></i> the expected maximum of <i>N</i> standard normal draws: about 0 for N = 1, 1.5 for N = 10, 2.5 for N = 100, 3.2 for N = 1,000. If all configurations are really equal (τ = 0), the optimism is σ·<i>e<sub>N</sub></i> and the winner has no real edge at all.</p>
+      </div>
+
+      <figure class="figure" id="fig-select">
+        <div class="fig-head"><span class="fig-title">The best of N looks better than it is</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start with 200 positive cases and no real difference between configurations (spread 0). Raise the number of experiments from 1 to 500 and watch the reported best climb while the truth stays flat. Then give the configurations a real spread, or add positives, and see the gap shrink.</p>
+        <div class="chart-wrap" id="select-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Best validation AUC you would report</span>
+          <span><i style="background:var(--ink)"></i>True AUC of that winner on new data</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Experiments run <output for="s-n"></output></label><input type="range" id="s-n" min="0" max="3" step="0.02" value="1.7"></div>
+          <div class="ctl"><label for="s-pos">Positive cases in validation set <output for="s-pos"></output></label><input type="range" id="s-pos" min="1.7" max="3.7" step="0.05" value="2.3"></div>
+          <div class="ctl"><label for="s-tau">Real spread between configurations (AUC) <output for="s-tau"></output></label><input type="range" id="s-tau" min="0" max="0.02" step="0.001" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Noise on one score (σ)</div><div class="v" id="st3-s"></div><div class="s">AUC points, rough rule</div></div>
+          <div class="stat" id="st3-rep-b"><div class="k">Reported best</div><div class="v" id="st3-rep"></div><div class="s">validation AUC</div></div>
+          <div class="stat"><div class="k">Truth for the winner</div><div class="v" id="st3-true"></div><div class="s">expected AUC on new data</div></div>
+          <div class="stat" id="st3-opt-b"><div class="k">Optimism</div><div class="v" id="st3-opt"></div><div class="s">AUC points of luck</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated and exact for the stated model: scores are true AUC (mean 0.800, spread as set) plus independent normal noise with σ ≈ 0.27 ÷ √(positives), a rough Hanley-McNeil-style rule for AUC near 0.8 with many negatives. The expected maximum of N normals is computed by numerical integration. Real runs share data, so their noises are correlated and the effect is somewhat smaller.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The remedy is not to run fewer experiments. It is to <strong>keep a test set that selection never touched</strong>, report <i>N</i> beside the best score, and, when it matters, use the corrections in F4.5 and F4.9 (nested validation, repeated splits). A tracker makes all three possible. It also catches the quieter failure of a lost winner: someone gets a great result in a notebook, never logs it, and nobody can reproduce it.</p>
+      </div>
+
+      <h3 class="sub" id="m-registry">The model registry: what is live, and why</h3>
+      <div class="prose">
+        <p>The tracker records <em>attempts</em>. The <strong>model registry</strong> records <em>decisions</em>. It is a catalogue of named models, each with numbered versions, and each version links back to the run that produced it. On top sit three kinds of state:</p>
+        <ul>
+          <li><strong>Stage or alias</strong>: a movable label such as <code>champion</code>, <code>challenger</code>, <code>staging</code>, <code>archived</code>. Serving code asks for "the champion of fraud-card" and never for a file path, so promotion and rollback are label moves, not redeployments of mystery files. Modern tools lean on aliases and tags rather than the older fixed stages, but the idea is the same.</li>
+          <li><strong>Metadata</strong>: owner, risk tier, intended use, validation status, approval record, links to documentation (a "model card"), the data snapshot and code commit.</li>
+          <li><strong>History</strong>: an append-only log of who changed which label, when, and under what ticket.</li>
+        </ul>
+        <p>The rule that makes it a control and not a convenience: <strong>the label can only move if the evidence is attached</strong>. A version that has not passed independent validation and approval cannot become champion. Many banks enforce this with access control (only the release process may write the champion alias) and automated checks in the deployment pipeline.</p>
+      </div>
+
+      <figure class="figure" id="fig-reg">
+        <div class="fig-head"><span class="fig-title">A small registry: promote, block, roll back</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> select <b>v4</b>, which has the best AUC, and press <b>Promote</b>. It is blocked. Validate, then approve, then promote. Then press <b>Roll back</b> and read the log. Finally check the question at the bottom: could you answer an auditor?</p>
+        <div class="table-wrap"><div id="reg-table"></div></div>
+        <div class="btns" role="group" aria-label="Registry actions">
+          <button class="btn" type="button" id="b-val">Record independent validation</button>
+          <button class="btn" type="button" id="b-app">Record approval</button>
+          <button class="btn" type="button" id="b-pro">Promote to champion</button>
+          <button class="btn" type="button" id="b-rol">Roll back champion</button>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st4-c-b"><div class="k">Live champion</div><div class="v" id="st4-c"></div><div class="s" id="st4-cs"></div></div>
+          <div class="stat"><div class="k">Built from</div><div class="v" id="st4-b" style="font-size:16px"></div><div class="s">data snapshot and code commit</div></div>
+          <div class="stat"><div class="k">Blocked attempts</div><div class="v" id="st4-x"></div><div class="s">control doing its job</div></div>
+        </div>
+        <ul class="log" id="reg-log" aria-live="polite"></ul>
+        <p class="sim-note">Simulated: four invented versions of a card-fraud model, with invented AUCs, dates and commits. The rules shown (validation then approval before promotion, previous champion kept for rollback, append-only log) are a typical policy, not any bank's or tool's exact behaviour.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Registries are where the lifecycle becomes enforceable. They also expose the traps. A model that is registered but whose training data has since been overwritten is a name without an identity. A rollback target that was deleted or whose library versions no longer install is not a rollback. And a registry full of 400 unlabelled versions, "final_v7_REAL", is a landfill. Good practice: <strong>immutable versions</strong> (never edit, only add), <strong>pinned environments</strong> (a container image digest, not "latest"), <strong>data snapshots by reference</strong> (see P1.5 on lineage), and a short retention policy that keeps everything a regulator might ask about.</p>
+        <p>For generative models, the "model" is more than weights. It includes the prompt, the retrieval index, the tools and the guardrails. P2.5 shows how the same tracking and registry ideas extend to prompt versions and traces.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>The lifecycle is where most of the curriculum gets exercised together. These are the strongest joins.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">G3.1 – G3.2 · What counts as a model</span><span class="t"><a href="g3-what-counts-as-a-model.html">The inventory comes first</a></span><p>A registry is only as good as the bank's definition of "model". Spreadsheets, rules and LLM prompts can all count, and what is not inventoried is not governed.</p></div>
+        <div class="link-card"><span class="code">G3.3 – G3.4 · Independent validation</span><span class="t"><a href="g3-independent-validation.html">The gate that needs evidence</a></span><p>Validators can only reproduce what trackers and registries recorded. The better the record, the faster and cheaper the validation.</p></div>
+        <div class="link-card"><span class="code">G3.5 – G3.6 · Monitoring and periodic review</span><span class="t"><a href="g3-ongoing-monitoring-and-periodic-review.html">The review cadence in Simulation 2</a></span><p>Policy sets the review interval by tier. This lesson shows the engineering behind that interval and what it costs when it is too long.</p></div>
+        <div class="link-card"><span class="code">F7.7 – F7.9 · Drift and stress</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">What the monitors actually watch</a></span><p>Drift tests give the early warning that labelled metrics confirm later. Both feed the "monitor and review" stage.</p></div>
+        <div class="link-card"><span class="code">F3.1 · Point-in-time correctness</span><span class="t"><a href="f3-leakage-point-in-time.html">Data version means a date</a></span><p>Logging a data snapshot is not enough unless the as-of date and feature cut-offs are logged too. Otherwise you cannot rebuild the same training table.</p></div>
+        <div class="link-card"><span class="code">F4.5 · F4.9 · Validation and tuning</span><span class="t"><a href="f4-hyperparameter-tuning-grid-random-and.html">Selection bias, formalised</a></span><p>Simulation 3 is the reason tuning needs a nested or untouched test set. The tracker supplies the count of what was tried.</p></div>
+        <div class="link-card"><span class="code">F10.3 · F10.4 · Testing and reproducibility</span><span class="t"><a href="f10-the-testing-mindset.html">Rebuild any number you reported</a></span><p>Tracking is that habit made systematic: the run record is the recipe.</p></div>
+        <div class="link-card"><span class="code">P1.5 – P1.7 · Lineage and metadata</span><span class="t"><a href="p1-lineage-and-metadata.html">Where did the data come from?</a></span><p>The registry points to a dataset; lineage tells you what fed that dataset and what else breaks if it changes.</p></div>
+        <div class="link-card"><span class="code">P2.3 – P2.4 · Deployment patterns</span><span class="t"><a href="p2-deployment-patterns-batch-real-time.html">How a version goes live</a></span><p>Shadow, champion-challenger and canary releases are the mechanisms that move a registry alias safely.</p></div>
+        <div class="link-card"><span class="code">P2.5 – P2.6 · Prompt versioning and tracing</span><span class="t"><a href="p2-prompt-versioning-and-llm-tracing.html">The same ideas for LLM systems</a></span><p>For an assistant, prompts, retrieval settings and tool definitions are versioned artefacts too.</p></div>
+        <div class="link-card"><span class="code">B1.2 · Delayed labels</span><span class="t"><a href="b1-delayed-labels-and-feedback-loops.html">Why quality is measured late</a></span><p>Label delay is the second term in the detection formula and a hard floor under any monitoring system.</p></div>
+        <div class="link-card"><span class="code">F3.5 · Imbalanced data</span><span class="t"><a href="f3-imbalanced-data.html">Few positives, noisy scores</a></span><p>The noise σ in Simulation 3 comes from the positive count. Rare events make selection bias worse.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>IFRS 9 and credit models.</strong> Provisions depend on PD, LGD and EAD models. Any change must be traceable to a version, a validation and an approval, because it moves reported numbers.</li>
+          <li><strong>Fraud and AML.</strong> High-frequency retraining, fast decay, delayed labels. Champion-challenger runs constantly, and rollback must be a minute, not a day.</li>
+          <li><strong>Marketing and churn.</strong> Lower tier, lighter gates, but the same need to know which model produced which campaign list.</li>
+          <li><strong>Staff copilots and document AI.</strong> The "model" includes prompt, index and tools. Version them together or you cannot explain an answer from last Tuesday.</li>
+          <li><strong>Vendor models.</strong> A model you bought is still your responsibility. The registry should hold the vendor's version, their documentation and your validation of it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The principles are stable. What moves is tooling, scope (from models to AI systems and agents) and regulators writing down expectations that used to be informal.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Searches were light; items below are ones I could confirm or flag. Dates for regulatory texts vary between secondary sources, so check the Rulebook.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2011</span><div><div class="t">SR 11-7: the template for model risk management</div><p>US supervisors defined a model, required development standards, independent validation, governance and ongoing monitoring. Most bank policies worldwide, including in the Gulf, descend from it.</p><div class="src">Federal Reserve and OCC, SR 11-7, 2011</div></div></li>
+        <li><span class="yr">2015</span><div><div class="t">Hidden technical debt</div><p>Engineers at Google argued that the model code is a small box inside a large system of data pipelines, configuration, serving and monitoring, and that neglecting the rest builds debt that is expensive to repay. The paper helped start MLOps as a discipline.</p><div class="src">Sculley et al., NeurIPS, 2015</div></div></li>
+        <li><span class="yr">2019</span><div><div class="t">Model cards</div><p>A short, structured record of intended use, data, performance across groups and limits, attached to each model. Now a common format for registry metadata.</p><div class="src">Mitchell et al., FAT*, 2019</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">CBUAE Model Management Standards and Guidance</div><p>The UAE central bank's rules cover the stages a model passes through, including development, validation before implementation, use and monitoring, independent validation and changes. They expect the model owner to remain accountable and records to be available to the regulator on request. Secondary sources disagree on exact issue date and some details such as committee frequency; read the Rulebook text.</p><div class="src">CBUAE Rulebook, Model Management Standards, 2022</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Reproducibility failures from leakage</div><p>A survey found data leakage affecting results in dozens of papers across many fields, and argued that reporting standards and logged pipelines are the practical defence.</p><div class="src">Kapoor &amp; Narayanan, Patterns, 2023</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">MLflow 3: the model becomes the central object</div><p>The open-source tracker added a "logged model" entity that persists across runs and environments and carries metrics, parameters and code links, with the registry hanging off it. The aim was to support generative AI as well as classical models. Check the current documentation for exact behaviour; versions move quickly.</p><div class="src">MLflow 3 release notes and documentation, mlflow.org</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">AI systems enter the model inventory</div><p>Practitioner write-ups in 2026 map management-system standards such as ISO 42001 onto central bank AI expectations, which signals that generative AI and agents are being pulled into the same inventory, versioning and monitoring regime. These are commentary rather than regulation; I did not find a Gulf rule that sets a specific registry design.</p><div class="src">Secondary sources; treat as direction of travel</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is in banking:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research or draft · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Model inventory with tiering and periodic review</b></td><td>Every model recorded with owner, tier, validation date and next review date.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Experiment tracking</b></td><td>MLflow or similar logging code, data, parameters and metrics for every run.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Registry with gated promotion</b></td><td>Aliases moved only by the release pipeline after validation and approval tickets.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Automated drift monitoring with alerts</b></td><td>Scheduled PSI, score distribution and proxy metrics with thresholds feeding review.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Continuous retraining with automatic promotion</b></td><td>Models retrain and promote themselves on a schedule or trigger, with guardrails.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Unified lifecycle for LLM systems</b></td><td>Prompts, indexes, tools and evaluation sets versioned and approved like models.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Bit-for-bit reproducible training</b></td><td>Same inputs give the same weights. Hard with GPUs and distributed training; usually "statistically equivalent" is the realistic standard.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Version everything that can change a prediction, gate every promotion on evidence, review on a cadence set by risk, and make rollback a routine, rehearsed action.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each failure has a quick check you can ask for in a review.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">The notebook that became production</div><p>The model runs from a copy of a notebook, with hand-set paths and no environment spec. Nobody can rebuild it.</p><div class="spot"><b>Spot it</b>Ask for the command that retrains the live model from scratch, and try running it on a clean machine.</div></li>
+        <li><div class="t">The unlogged winner and the unmentioned fifty</div><p>A headline score comes from the best of many runs, and the count is never reported. The score does not survive new data.</p><div class="spot"><b>Spot it</b>Ask how many configurations were tried and whether the test set was used to choose among them. Look at the tracker's run count.</div></li>
+        <li><div class="t">A data version that is a table name</div><p>The record says "training_table_v2", but the table is refreshed nightly. The same name now holds different rows.</p><div class="spot"><b>Spot it</b>Check that data references are immutable snapshots or content hashes with an as-of date.</div></li>
+        <li><div class="t">Promotion by hand, outside the registry</div><p>Someone copies a file to the serving host to fix an urgent issue. The registry now disagrees with reality.</p><div class="spot"><b>Spot it</b>Compare the hash of the artefact in production against the champion's registered hash. They should match.</div></li>
+        <li><div class="t">Rollback that has never been tried</div><p>The previous model exists on paper, but its dependencies no longer install or its feature table has changed shape.</p><div class="spot"><b>Spot it</b>Ask when the last rollback drill was run. If never, treat the rollback as unproven.</div></li>
+        <li><div class="t">Review cadence set by habit, not risk</div><p>Every model is reviewed annually, including a fast-decaying fraud model that is wrong within months.</p><div class="spot"><b>Spot it</b>Compare the review interval with the observed decay rate and the label delay. If the interval is much longer than the time to breach, the cadence is too slow.</div></li>
+        <li><div class="t">Metrics measured on immature labels</div><p>Monitoring reports last month's performance before outcomes have arrived, so every month looks worse than it is, or better.</p><div class="spot"><b>Spot it</b>Ask how old the labels are in each monitoring window and whether the numbers get restated later.</div></li>
+        <li><div class="t">Approval without a link to the version</div><p>The sign-off refers to "the fraud model", not to a version ID. Later versions inherit approval they never earned.</p><div class="spot"><b>Spot it</b>Check that every approval record names an immutable version and the validation report it relied on.</div></li>
+        <li><div class="t">Shadow models and zombies</div><p>Old models still scoring in a corner of a batch job, uninventoried and unmonitored. Or retired models whose outputs another process still reads.</p><div class="spot"><b>Spot it</b>Reconcile the inventory against what is actually running and what the downstream systems read.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“A model is like a licensed asset, not a one-off project. We give each one a version number, a record of exactly how it was built, a named approver and a review date set by how fast it goes stale. That lets us answer a regulator in minutes, switch back to the previous version if something goes wrong, and know that the model we approved is the one that is running. The cost is some discipline up front; the saving is that we never have an incident we cannot explain.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“Every run is tracked with code commit, immutable data snapshot and as-of date, parameters, seed and environment image, and I report the number of configurations tried. Only a version that has passed independent validation and approval can take the champion alias, and the release pipeline, not individuals, moves it. Review frequency is set from tier, observed decay and label delay, with drift monitors giving early warning. Rollback is rehearsed, and the registry points to everything needed to rebuild the model from scratch.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“We already have notebooks and a shared drive. Why do we need a tracker and a registry?”</summary><div class="ans"><p>Because the questions that matter come later and from outside: which model made this decision, can you rebuild it, who approved it. A shared drive cannot answer them reliably. A tracker and a registry make the answer a query, not an archaeology project. It also speeds up the team, since nobody redoes lost work.</p></div></details>
+        <details class="reveal"><summary>“How often should we review the model?”</summary><div class="ans"><p>Set it from risk, not habit. Tier sets the minimum under policy, but also look at how fast the model decays and how long labels take. A fraud model that loses accuracy within months and has eight-week label delays needs automated drift monitoring weekly and a labelled review quarterly. A stable low-tier model may be fine annually.</p></div></details>
+        <details class="reveal"><summary>“The new model scores higher in validation. Why not just ship it?”</summary><div class="ans"><p>Three reasons. How many models did we try to find that score, since the best of many is inflated? Has it passed independent validation and been approved? And has it been tested against the current champion on live data, in shadow or a controlled rollout? A higher offline number is a reason to test it, not to release it.</p></div></details>
+        <details class="reveal"><summary>“What do we need to log so a model is reproducible?”</summary><div class="ans"><p>The code commit, an immutable data snapshot plus the as-of date and feature definitions, all parameters and the random seed, the environment (library versions or container digest), and the metrics and artefacts. For LLM systems add the prompt, retrieval index version, tool definitions and model version. Exact bit-level reproduction is often unrealistic on GPUs; the standard is to rebuild an equivalent model and match its metrics within noise.</p></div></details>
+        <details class="reveal"><summary>“Can the model retrain and deploy itself automatically?”</summary><div class="ans"><p>For low-risk models, with guardrails: automatic retraining, then automatic checks against a fixed evaluation set and the current champion, then a canary rollout with an automatic rollback. For high-tier models, retraining can be automated but promotion should keep a human approval and, where the policy requires it, validation sign-off. Automation does not remove accountability; it changes where evidence is generated.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Name the four questions a lifecycle and registry should let you answer about any production model.</summary><div class="ans"><p>What is it exactly (version, artefact hash)? How was it made (code, data snapshot, parameters, environment)? Who allowed it (validation and approval records)? How do we undo it (rollback target that still works)?</p></div></details>
+        <details class="reveal"><summary>2. A model's AUC falls 0.008 a month from 0.82; the floor is 0.75. Reviews are every 6 months and labels take 3 months to mature. When is the breach detected, and how long was the model below the floor?</summary><div class="ans"><p>Breach at (0.82 − 0.75) ÷ 0.008 = 8.75 months. Detection needs a review at least 3 months after the breach: ⌈(8.75 + 3) ÷ 6⌉ × 6 = ⌈1.96⌉ × 6 = 12 months. It ran below the floor for 12 − 8.75 = 3.25 months.</p></div></details>
+        <details class="reveal"><summary>3. Why does adding weekly automated monitoring not remove the label-delay term?</summary><div class="ans"><p>Monitoring can only compute outcome-based metrics once outcomes exist. Weekly runs are useless for AUC if labels arrive after eight weeks. Input drift and proxy metrics warn earlier but are weaker evidence, so they trigger a review and do not replace it.</p></div></details>
+        <details class="reveal"><summary>4. You tried 200 configurations, all really equal, and the best has validation AUC 0.84 on a set with 200 positives. Is that evidence of a better model?</summary><div class="ans"><p>No. Noise is about 0.27 ÷ √200 ≈ 0.019, and the expected best of 200 draws is about 2.7 standard deviations above the mean, so luck alone predicts a best near 0.80 + 0.052 = 0.85. A reported 0.84 is exactly what chance gives. The winner's true AUC is the common value, about 0.80.</p></div></details>
+        <details class="reveal"><summary>5. What is the difference between an experiment tracker and a model registry?</summary><div class="ans"><p>The tracker records every attempt and what produced it. The registry records the decisions: which versions exist for a named model, what state each is in, who approved it, and which one is live. The registry entry links back to the tracker run.</p></div></details>
+        <details class="reveal"><summary>6. Why should a registry store a data snapshot ID, not a table name?</summary><div class="ans"><p>A table name points at whatever the table holds today, and tables are refreshed. A snapshot ID or content hash, with the as-of date, points at exactly the rows the model saw. Without it, the model cannot be rebuilt, and validators cannot test the data it learned from.</p></div></details>
+        <details class="reveal"><summary>7. A recalibration of a live credit model is proposed. Is it a new model version?</summary><div class="ans"><p>Yes. It changes predictions, so it gets a new version, and most policies treat it as a model change requiring validation and approval in proportion to its materiality. A minor recalibration might have a lighter review; skipping the record altogether is the failure.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>Federal Reserve and OCC. <a href="https://www.federalreserve.gov/supervisionreg/srletters/sr1107.htm">SR 11-7: Guidance on Model Risk Management</a>. 2011.</li>
+        <li>Central Bank of the UAE. <a href="https://rulebook.centralbank.ae/en/rulebook/model-management-standards">Model Management Standards</a>. CBUAE Rulebook (the authoritative text; check the date and obligations there).</li>
+        <li>D. Sculley et al. <a href="https://papers.nips.cc/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html">Hidden Technical Debt in Machine Learning Systems</a>. NeurIPS, 2015.</li>
+        <li>M. Mitchell et al. <a href="https://arxiv.org/abs/1810.03993">Model Cards for Model Reporting</a>. FAT*, 2019.</li>
+        <li>S. Kapoor, A. Narayanan. <a href="https://doi.org/10.1016/j.patter.2023.100804">Leakage and the reproducibility crisis in machine-learning-based science</a>. Patterns, 2023.</li>
+        <li>J. Hanley, B. McNeil. <a href="https://doi.org/10.1148/radiology.143.1.7063747">The meaning and use of the area under a receiver operating characteristic (ROC) curve</a>. Radiology, 1982. The basis of the AUC noise rule used in Simulation 3.</li>
+        <li><a href="https://mlflow.org/docs/latest/ml/">MLflow documentation</a>, including tracking, LoggedModel and the Model Registry.</li>
+        <li><a href="https://mlflow.org/releases/3">MLflow 3 release notes</a>.</li>
+        <li>C. Huyen. <em>Designing Machine Learning Systems</em>. O'Reilly, 2022. Practical chapters on model development, deployment and monitoring.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in P2: Deployment patterns (P2.3)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: lifecycle stages
+  // =====================================================================
+  const STAGES = [
+    ["Framing and approval to build", "Name the decision, the owner, the risk tier and the baseline to beat (C1.1, C1.2). Check that a model is the right tool.", "Business case, tier, named model owner, entry in the inventory.", "Business owner and model risk", "No tier means no proportionate review. Models appear in production that risk never heard of."],
+    ["Data and features", "Build the training table with point-in-time features (F3.1), document sources and known quality issues.", "Data snapshot ID, feature definitions, lineage record, data quality report.", "Data owner", "Leakage and unrepeatable tables. The model cannot be rebuilt and validators cannot test the data."],
+    ["Experiments", "Try algorithms, features and settings; track every run; keep a test set untouched by selection.", "Tracker runs with code, data, parameters and metrics; the count of configurations tried.", "Model developer", "Best-of-many optimism goes unnoticed, the winner cannot be reproduced, and effort is repeated."],
+    ["Development sign-off and documentation", "Freeze the candidate; write purpose, method, assumptions, limitations, performance and a monitoring plan.", "Model document or card, frozen registry version, sign-off by developer's line manager.", "Model owner", "Validators receive a moving target and an undocumented method. Validation drags or approves on trust."],
+    ["Independent validation", "A separate team challenges data, method, performance, stability and fit with intended use, and may rebuild or benchmark.", "Validation report with findings, ratings and conditions.", "Independent validation function", "Builders mark their own homework. Errors the builder cannot see reach customers."],
+    ["Approval and deployment", "Governance forum approves with conditions; release runs in shadow, champion-challenger or canary form (P2.3).", "Approval record naming the exact version, change ticket, deployed hash, rollback plan.", "Model committee, IT change control", "Unapproved or unreproducible artefacts go live; nobody can say what is running or how to go back."],
+    ["Monitoring and periodic review", "Track inputs, scores, outcomes and operations; review on a cadence set by tier; escalate breaches.", "Monitoring reports, breach log, review memo with next review date.", "Model owner, validation for periodic review", "Silent decay (Simulation 2). The bank learns of the problem from customers, losses or the regulator."],
+    ["Change: recalibration or redevelopment", "A material change in data, population, use or performance triggers an update that re-enters validation.", "New registry version, impact analysis, fresh validation and approval.", "Model owner and validation", "Edits go in unrecorded. The approved model and the running model drift apart."],
+    ["Retirement", "Switch off, archive, notify downstream users, keep records for the retention period.", "Retirement ticket, archived version and data references, updated inventory.", "Model owner and IT", "Zombie models keep scoring, and outputs are still read by processes nobody remembers."]
+  ];
+  const S1 = { i: 0, skip: false };
+  const bar = $("stagebar");
+  STAGES.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn"; b.textContent = (i + 1) + ". " + s[0].split(" ")[0] + (s[0].split(" ")[1] ? " " + s[0].split(" ")[1] : "");
+    b.title = s[0];
+    b.addEventListener("click", () => { S1.i = i; renderStage(); });
+    bar.appendChild(b);
+  });
+  function renderStage() {
+    const s = STAGES[S1.i];
+    [...bar.children].forEach((b, i) => b.setAttribute("aria-pressed", String(i === S1.i)));
+    $("stagepanel").innerHTML =
+      `<div><span class="k">What happens</span>${s[1]}</div>` +
+      `<div><span class="k">Evidence it leaves</span>${s[2]}</div>` +
+      `<div><span class="k">Who signs</span>${s[3]}</div>` +
+      `<div class="skipbox${S1.skip ? " on" : ""}"><span class="k">${S1.skip ? "If skipped" : "Why it matters"}</span>${S1.skip ? s[4] : "Each stage exists because someone once paid for its absence. Press the button to see how."}</div>`;
+    $("st1-n").textContent = (S1.i + 1) + " of " + STAGES.length;
+    $("st1-name").textContent = s[0];
+    $("st1-art").textContent = String(STAGES.slice(0, S1.i + 1).reduce((a, x) => a + x[2].split(",").length, 0));
+  }
+  $("b-skip").addEventListener("click", e => { S1.skip = !S1.skip; e.currentTarget.setAttribute("aria-pressed", String(S1.skip)); renderStage(); });
+  renderStage();
+
+  // =====================================================================
+  // Simulation 2: decay and review cadence
+  // =====================================================================
+  const CAD = [1, 3, 6, 12], A0 = 0.82, FLOOR = 0.75;
+  const S2 = { d: 0.01, c: 2, lab: 2, auto: false };
+  const dBox = $("decay-chart");
+  function renderDecay() {
+    const d = S2.d, c = CAD[S2.c], lab = S2.lab;
+    const mStar = (A0 - FLOOR) / d;
+    const det = S2.auto ? mStar + lab + 0.25 : Math.ceil((mStar + lab) / c - 1e-9) * c;
+    const D = det - mStar, harm = 100000 * (d / 0.01) * D * D / 2;
+    const W = Math.max(300, dBox.clientWidth), H = 280, m = { l: 44, r: 12, t: 16, b: 40 }, T = 30;
+    const svg = mk(dBox, W, H, "Model quality over months, floor and review dates");
+    const x = L.scale(0, T, m.l, W - m.r), y = L.scale(0.62, 0.84, H - m.b, m.t);
+    [0.64, 0.68, 0.72, 0.76, 0.80, 0.84].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v.toFixed(2), { "text-anchor": "end" }); });
+    for (let t = 0; t <= T; t += 6) tx(svg, x(t), H - m.b + 16, String(t), { "text-anchor": "middle" });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Months since deployment", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "AUC", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    if (!S2.auto) for (let t = c; t <= T; t += c) L.svg("line", { x1: x(t), x2: x(t), y1: m.t, y2: H - m.b, class: "cv-rev" }, svg);
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(FLOOR), y2: y(FLOOR), class: "cv-floor" }, svg);
+    const q = v => Math.max(0.62, v);
+    const tEnd = Math.min(T, (A0 - 0.62) / d);
+    L.svg("path", { d: L.path([[x(0), y(A0)], [x(mStar), y(FLOOR)]]), class: "cv-line" }, svg);
+    L.svg("path", { d: L.path([[x(mStar), y(FLOOR)], [x(tEnd), y(q(A0 - d * tEnd))]]), class: "cv-bad" }, svg);
+    L.svg("circle", { cx: x(mStar), cy: y(FLOOR), r: 5, class: "cv-now" }, svg);
+    const dt = Math.min(det, T);
+    L.svg("circle", { cx: x(dt), cy: y(q(A0 - d * dt)), r: 6, class: "cv-det" }, svg);
+    tx(svg, x(dt) + (x(dt) > W * 0.7 ? -9 : 9), y(q(A0 - d * dt)) - 8, "known", { class: "lbl-warn", "text-anchor": x(dt) > W * 0.7 ? "end" : "start" });
+    tx(svg, x(mStar) - 8, y(FLOOR) - 10, "breach", { class: "lbl-ink", "text-anchor": "end" });
+    $("st2-m").textContent = mStar.toFixed(1);
+    $("st2-d").textContent = det.toFixed(1); cls($("st2-d-b"), "");
+    $("st2-w").textContent = D.toFixed(1); cls($("st2-w-b"), D > 3 ? "bad" : D > 1 ? "warn" : "ok");
+    $("st2-c").textContent = L.fmtInt(harm); cls($("st2-c-b"), D > 3 ? "bad" : D > 1 ? "warn" : "ok");
+    $("s2-verdict").innerHTML = S2.auto
+      ? `With weekly automated checks the breach is known <b>${D.toFixed(1)} months</b> after it happens, and that is nearly all label delay (${lab} months). Raise the label delay and monitoring cannot go faster than the outcomes arrive. Drift monitors on inputs are the way to warn earlier.`
+      : `Reviewing every <b>${c} months</b> with <b>${lab} months</b> of label delay, the model is below its floor for <b>${D.toFixed(1)} months</b> before anyone can know. Average wait is about half an interval plus the delay, and the worst case a full interval plus the delay.`;
+  }
+  L.bind("s-dec", v => v.toFixed(3), v => { S2.d = v; renderDecay(); });
+  L.bind("s-cad", k => CAD[k] + (CAD[k] === 1 ? " month" : " months"), v => { S2.c = v; renderDecay(); });
+  L.bind("s-lab", v => v + (v === 1 ? " month" : " months"), v => { S2.lab = v; renderDecay(); });
+  $("b-auto").addEventListener("click", e => { S2.auto = !S2.auto; e.currentTarget.setAttribute("aria-pressed", String(S2.auto)); renderDecay(); });
+
+  // =====================================================================
+  // Simulation 3: best of N
+  // =====================================================================
+  const eCache = {};
+  function eMax(N) {
+    if (N <= 1) return 0;
+    const k = N.toFixed(3);
+    if (eCache[k] !== undefined) return eCache[k];
+    let s = 0; const h = 0.01;
+    for (let z = -8; z <= 8; z += h) { const F = L.normCdf(z); s += z * N * L.normPdf(z) * Math.pow(F, N - 1) * h; }
+    return (eCache[k] = s);
+  }
+  const S3 = { n: 1.7, p: 2.3, tau: 0 }, selBox = $("select-chart"), MU3 = 0.8;
+  function calc3(N, pos, tau) {
+    const sg = 0.27 / Math.sqrt(pos), tot = Math.sqrt(tau * tau + sg * sg), e = eMax(N);
+    return { sg, rep: MU3 + tot * e, tru: MU3 + (tau * tau / tot) * e };
+  }
+  function renderSel() {
+    const N = Math.max(1, Math.round(Math.pow(10, S3.n))), pos = Math.pow(10, S3.p), tau = S3.tau;
+    const W = Math.max(300, selBox.clientWidth), H = 270, m = { l: 48, r: 14, t: 16, b: 42 };
+    const svg = mk(selBox, W, H, "Reported best AUC and true AUC against number of experiments");
+    const x = L.scale(0, 3, m.l, W - m.r);
+    const mx = 0.8 + Math.max(0.03, calc3(1000, pos, tau).rep - 0.8) * 1.15;
+    const y = L.scale(0.78, Math.max(0.86, Math.ceil(mx * 100) / 100), H - m.b, m.t);
+    const hi = Math.max(0.86, Math.ceil(mx * 100) / 100);
+    for (let v = 0.78; v <= hi + 1e-9; v += 0.02) { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v.toFixed(2), { "text-anchor": "end" }); }
+    [[0, "1"], [1, "10"], [2, "100"], [3, "1,000"]].forEach(([v, s]) => tx(svg, x(v), H - m.b + 16, s, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Experiments run (log scale)", { "text-anchor": "middle" });
+    const rep = [], tru = [];
+    for (let k = 0; k <= 3.0001; k += 0.05) { const r = calc3(Math.max(1, Math.pow(10, k)), pos, tau); rep.push([x(k), y(r.rep)]); tru.push([x(k), y(r.tru)]); }
+    L.svg("path", { d: L.path(tru), class: "cv-true" }, svg);
+    L.svg("path", { d: L.path(rep), class: "cv-bad" }, svg);
+    const c = calc3(N, pos, tau), xn = x(Math.log10(N));
+    L.svg("line", { x1: xn, x2: xn, y1: y(c.tru), y2: y(c.rep), stroke: "var(--warn)", "stroke-width": 2 }, svg);
+    L.svg("circle", { cx: xn, cy: y(c.rep), r: 5.5, class: "cv-det" }, svg);
+    L.svg("circle", { cx: xn, cy: y(c.tru), r: 5.5, class: "cv-now" }, svg);
+    $("st3-s").textContent = (100 * c.sg).toFixed(2);
+    $("st3-rep").textContent = c.rep.toFixed(3);
+    $("st3-true").textContent = c.tru.toFixed(3);
+    const opt = c.rep - c.tru;
+    $("st3-opt").textContent = (100 * opt).toFixed(2);
+    cls($("st3-rep-b"), ""); cls($("st3-opt-b"), opt > 0.02 ? "bad" : opt > 0.008 ? "warn" : "ok");
+    $("s3-verdict").innerHTML = N === 1
+      ? "One experiment: no selection, so no optimism. Increase the count."
+      : `After <b>${L.fmtInt(N)}</b> experiments on <b>${L.fmtInt(pos)}</b> positives, the best validation AUC would read <b>${c.rep.toFixed(3)}</b>, while on new data it would be about <b>${c.tru.toFixed(3)}</b>. That is <b>${(100 * opt).toFixed(1)} AUC points</b> of luck.` + (tau === 0 ? " All configurations are truly equal, so the winner is no better than the rest." : "");
+  }
+  L.bind("s-n", v => L.fmtInt(Math.max(1, Math.round(Math.pow(10, v)))), v => { S3.n = v; renderSel(); });
+  L.bind("s-pos", v => L.fmtInt(Math.pow(10, v)), v => { S3.p = v; renderSel(); });
+  L.bind("s-tau", v => v.toFixed(3), v => { S3.tau = v; renderSel(); });
+
+  // =====================================================================
+  // Simulation 4: registry
+  // =====================================================================
+  const V = [
+    { id: "v1", auc: 0.78, data: "snap-2025-03", commit: "a1f3c9e", val: true, app: true, st: "retired" },
+    { id: "v2", auc: 0.81, data: "snap-2025-10", commit: "7bd20e4", val: true, app: true, st: "champion" },
+    { id: "v3", auc: 0.82, data: "snap-2026-04", commit: "c93a1b7", val: true, app: false, st: "candidate" },
+    { id: "v4", auc: 0.84, data: "snap-2026-09", commit: "e51f088", val: false, app: false, st: "candidate" }
+  ];
+  const S4 = { sel: 3, blocked: 0, t: 0, prev: ["v1"], log: [] };
+  function lg(msg, kind) { S4.t++; S4.log.unshift(`<li class="${kind || ""}">t+${S4.t} ${msg}</li>`); }
+  function champ() { return V.find(v => v.st === "champion"); }
+  function renderReg() {
+    let h = '<table class="data"><thead><tr><th></th><th>Version</th><th>Validation AUC</th><th>Data snapshot</th><th>Code</th><th>Validated</th><th>Approved</th><th>State</th></tr></thead><tbody>';
+    V.forEach((v, i) => {
+      h += `<tr class="${i === S4.sel ? "sel" : ""}${v.st === "champion" ? " champ" : ""}"><td><input type="radio" name="vsel" aria-label="Select ${v.id}" ${i === S4.sel ? "checked" : ""} data-i="${i}"></td><td>${v.id}</td><td>${v.auc.toFixed(2)}</td><td>${v.data}</td><td>${v.commit}</td><td>${v.val ? "yes" : "no"}</td><td>${v.app ? "yes" : "no"}</td><td>${v.st}</td></tr>`;
+    });
+    $("reg-table").innerHTML = h + "</tbody></table>";
+    $("reg-table").querySelectorAll("input").forEach(r => r.addEventListener("change", () => { S4.sel = +r.dataset.i; renderReg(); }));
+    const c = champ();
+    $("st4-c").textContent = c ? c.id : "none"; $("st4-cs").textContent = c ? "AUC " + c.auc.toFixed(2) + ", state " + c.st : "";
+    $("st4-b").textContent = c ? c.data + " · " + c.commit : "n/a";
+    $("st4-x").textContent = String(S4.blocked);
+    $("reg-log").innerHTML = S4.log.join("") || "<li>No actions yet.</li>";
+  }
+  $("b-val").addEventListener("click", () => { const v = V[S4.sel]; if (v.val) lg(`${v.id} already validated.`); else { v.val = true; lg(`${v.id}: independent validation recorded.`, "ok"); } renderReg(); });
+  $("b-app").addEventListener("click", () => {
+    const v = V[S4.sel];
+    if (!v.val) { S4.blocked++; lg(`BLOCKED: ${v.id} cannot be approved before validation.`, "blk"); }
+    else if (v.app) lg(`${v.id} already approved.`);
+    else { v.app = true; lg(`${v.id}: approval recorded.`, "ok"); }
+    renderReg();
+  });
+  $("b-pro").addEventListener("click", () => {
+    const v = V[S4.sel], c = champ();
+    if (v.st === "champion") lg(`${v.id} is already champion.`);
+    else if (v.st === "retired") { S4.blocked++; lg(`BLOCKED: ${v.id} is retired.`, "blk"); }
+    else if (!v.val || !v.app) { S4.blocked++; lg(`BLOCKED: ${v.id} lacks ${!v.val ? "validation" : "approval"}.`, "blk"); }
+    else {
+      if (c) { c.st = "previous"; const p = V.find(x => x.st === "previous" && x !== c); if (p) p.st = "retired"; }
+      v.st = "champion"; lg(`${v.id} promoted to champion; ${c ? c.id : "none"} kept as rollback target.`, "ok");
+    }
+    renderReg();
+  });
+  $("b-rol").addEventListener("click", () => {
+    const c = champ(), p = V.find(v => v.st === "previous");
+    if (!p) { S4.blocked++; lg("BLOCKED: no rollback target. The previous version was retired.", "blk"); }
+    else { c.st = "rolled back"; p.st = "champion"; lg(`Rolled back: ${c.id} withdrawn, ${p.id} is champion again.`, "ok"); }
+    renderReg();
+  });
+  renderReg();
+
+  renderDecay(); renderSel();
+  window.addEventListener("resize", () => { renderDecay(); renderSel(); });
+})();
+</script>
+</body>
+</html>
