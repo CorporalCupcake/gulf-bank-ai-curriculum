@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Grading Generated Text: Overlap Metrics and LLM-as-Judge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 13px !important; font-weight: 600; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  .bar-ok { fill: var(--accent); }
+  .bar-bad { fill: var(--warn); fill-opacity: .85; }
+  .cut-line { stroke: var(--ink); stroke-width: 1.4; stroke-dasharray: 4 3; }
+  .ci-bar { stroke: var(--accent); stroke-width: 6; stroke-linecap: round; }
+  .ci-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .refbox { background: var(--sunk); border-radius: 8px; padding: 10px 14px; font-size: 14px; max-width: var(--measure); }
+  .refbox b { font-weight: 600; }
+  .cand-table td:first-child { white-space: nowrap; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track M · Modern AI systems</span>
+    <span>Module M5 · Evaluating generative systems</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>M5.1 · M5.2</span>
+        <span class="pill d">Day one</span>
+        <span>★ Priority</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Grading Generated Text: Overlap Metrics and LLM-as-Judge</h1>
+      <p class="dek">What BLEU, ROUGE and BERTScore actually count, why a wrong answer can outscore a right one, how a model can grade a model, and the biases and sample sizes that decide whether you can trust its grades.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Word-overlap metrics measure how similar two strings are, not whether an answer is right, so they only work where there is one acceptable wording; an LLM judge can read for meaning but carries biases of its own, so you validate it against human labels, with an interval, before trusting any number it produces.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A bank builds an assistant that answers customer questions about blocked cards. How do you know it is any good? With a classifier, you compare predictions with labels and count. With generated text, there is no single label. "Your card was frozen after three wrong PIN entries" and "We suspended your card because the PIN was entered incorrectly three times" are both correct, and they share almost no words.</p>
+        <p>There are two families of answer. The older one writes down a <strong>reference answer</strong> and scores how close the output is to it: BLEU, ROUGE, BERTScore. They are cheap, fast and reproducible. The newer one asks a strong language model to read the output and grade it against a rubric: <strong>LLM-as-judge</strong>. It handles paraphrase and can assess things no reference captures, such as tone or faithfulness to a source document. It is slower, costs money, and is biased in ways you can measure.</p>
+        <p>The mistake to avoid in both cases is the same. A score is a <em>proxy</em> for "would a careful human call this good?". Everything in this lesson is about how far the proxy can be trusted, and how to find out.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Every metric is a claim: "this number tracks human judgement for this task." The claim is testable. You collect human labels on a few hundred outputs, compare, and report how well the metric agrees, with an interval. A metric nobody has checked against humans is a guess with a decimal point.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-overlap">M5.1 Reference-based metrics: BLEU, ROUGE, BERTScore</h3>
+      <div class="prose">
+        <p>All three need a reference text written by a human, and all three reduce "similar" to a number. They differ in what they count.</p>
+        <ul>
+          <li><strong>ROUGE</strong> (Lin, 2004) was built for summarisation. ROUGE-<i>n</i> counts how many of the reference's <i>n</i>-grams (word sequences of length <i>n</i>) appear in the output. That is a <em>recall</em>. Most libraries also report precision and an F-score. ROUGE-L uses the longest common subsequence instead of fixed-length chunks.</li>
+          <li><strong>BLEU</strong> (Papineni et al., 2002) was built for machine translation. It is a <em>precision</em>: what share of the output's <i>n</i>-grams (usually 1 to 4) appear in the reference, with counts clipped so repeating "the the the" earns nothing, and a brevity penalty so a three-word output cannot win by being safe.</li>
+          <li><strong>BERTScore</strong> (Zhang et al., 2020) replaces exact matching with meaning. Each token gets a contextual embedding from a pretrained encoder; each output token is matched to its most similar reference token by cosine similarity (F1.1), and the matches are averaged. "Frozen" and "blocked" can now score as close even though the strings differ.</li>
+        </ul>
+        <p>Here is the core of ROUGE-1, in words. Count the words the output and reference share, with repeats capped at the smaller count. Divide by the number of reference words to get recall, by the number of output words to get precision, and combine them:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>F</mi><mo>=</mo><mfrac><mrow><mn>2</mn><mo>·</mo><mi>P</mi><mo>·</mo><mi>R</mi></mrow><mrow><mi>P</mi><mo>+</mo><mi>R</mi></mrow></mfrac><mo>,</mo><mspace width="1em"></mspace><mi>P</mi><mo>=</mo><mfrac><mtext>shared words</mtext><mtext>words in output</mtext></mfrac><mo>,</mo><mspace width="1em"></mspace><mi>R</mi><mo>=</mo><mfrac><mtext>shared words</mtext><mtext>words in reference</mtext></mfrac></math>
+        <p class="where">Nothing here knows what the words mean. Swap "50,000" for "5,000" and you lose one shared word out of twenty. Replace "blocked" with "not blocked" and you gain a word nobody penalises.</p>
+      </div>
+
+      <div class="prose" style="margin-top:1.2em">
+        <p>That is the whole weakness, and the first simulation makes it concrete. One reference answer, eight candidate answers, scored four ways. Four of the candidates are right and four are wrong, and you have to judge whether the numbers sort them correctly.</p>
+      </div>
+
+      <figure class="figure" id="fig-overlap">
+        <div class="fig-head"><span class="fig-title">One reference, eight answers, four metrics</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <div class="refbox"><b>Reference:</b> Your card was blocked because three incorrect PIN attempts were made. You can unblock it at any branch or through the app.</div>
+        <p class="try" style="margin-top:12px"><b>Try:</b> start with ROUGE-1 and look at the colours. Orange bars are answers a human would reject. Which wrong answers outscore which right ones? Then move the pass mark to see the trade-off. Switch to the toy soft match to see what meaning-aware scoring fixes, and what it still misses.</p>
+        <div class="btns" role="group" aria-label="Metric">
+          <button class="btn" type="button" data-m="r1" aria-pressed="true">ROUGE-1 F</button>
+          <button class="btn" type="button" data-m="r2" aria-pressed="false">ROUGE-2 F</button>
+          <button class="btn" type="button" data-m="bleu" aria-pressed="false">BLEU (1-4 grams)</button>
+          <button class="btn" type="button" data-m="soft" aria-pressed="false">Toy soft match</button>
+        </div>
+        <div class="chart-wrap" id="ov-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Human: acceptable answer</span>
+          <span><i style="background:var(--warn);opacity:.85"></i>Human: wrong or unsupported</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-pass">Pass mark: accept if score is at least <output for="s-pass"></output></label><input type="range" id="s-pass" min="0" max="1" step="0.01" value="0.5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="so-wrong-b"><div class="k">Wrong answers let through</div><div class="v" id="so-wrong"></div><div class="s">of 4 wrong</div></div>
+          <div class="stat" id="so-right-b"><div class="k">Good answers rejected</div><div class="v" id="so-right"></div><div class="s">of 4 good</div></div>
+          <div class="stat"><div class="k">Best-scoring wrong answer</div><div class="v" id="so-topwrong"></div><div class="s" id="so-topwrong-s"></div></div>
+          <div class="stat"><div class="k">Worst-scoring good answer</div><div class="v" id="so-lowright"></div><div class="s" id="so-lowright-s"></div></div>
+        </div>
+        <div class="verdict" id="so-verdict"></div>
+        <div class="table-wrap" style="margin-top:14px"><div id="ov-table"></div></div>
+        <p class="sim-note">Simulated: ROUGE-1, ROUGE-2 and BLEU are computed exactly as defined, on lower-cased words with punctuation removed (BLEU uses add-one smoothing on the 2 to 4-gram precisions so short texts do not score zero). "Toy soft match" is NOT real BERTScore: it uses a tiny hand-written synonym table (blocked/frozen/suspended, wrong/incorrect, and so on) to give partial credit, the way embeddings would, and takes the F1 of precision and recall over best matches. Real BERTScore uses a neural encoder and would score differently. The human verdicts are my own labels.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What the simulation shows is the general pattern.</p>
+        <ul>
+          <li><strong>High overlap, wrong meaning.</strong> The copy that says "not blocked" and the copy with the invented AED 50,000 limit sit near the top. A metric that counts shared words cannot see a negation or a fabricated addition.</li>
+          <li><strong>Low overlap, right meaning.</strong> The honest paraphrases lose points for using different words. The terse correct answer is punished by recall, because it leaves out reference words.</li>
+          <li><strong>Soft matching helps with synonyms and not with facts.</strong> It lifts the paraphrases. But "unblock only at a branch after 30 days" still looks near the reference, because embeddings of near-identical sentences are near-identical. This is the real behaviour of BERTScore too: it is much better on paraphrase, and still weak on negation, numbers and entities.</li>
+        </ul>
+        <p>Arabic raises the stakes. Words carry attached prefixes and suffixes, so "البطاقة" (the card) and "بطاقتك" (your card) share a root and no whole word. Exact-match metrics treat them as different. The BALSAM benchmark team found BLEU and ROUGE correlated poorly and unevenly with human ratings on Arabic tasks, and BERTScore somewhat better (see Part 4). Whatever the language, the metric also depends on the tokeniser (M1.1) and on text normalisation, which is why a BLEU score without its settings is not reproducible; Post (2018) is the standard reference on reporting it properly with SacreBLEU.</p>
+      </div>
+
+      <h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">When reference-based metrics are still the right tool</h4>
+      <div class="prose">
+        <p>They are not useless. They work when the space of correct outputs is small, and the reference is therefore a good stand-in for "correct".</p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Task</th><th>Better metric than overlap?</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td><b>Extracting a field</b> (IBAN, amount, date, counterparty name)</td><td>Exact match, or normalised match</td><td>One right answer. Do not use fuzzy scores for a number.</td></tr>
+            <tr><td><b>Classification by LLM</b> (complaint category, intent)</td><td>Accuracy, precision, recall (F7.1)</td><td>The output is a label. Use the classifier toolkit.</td></tr>
+            <tr><td><b>Translation, e.g. Arabic to English</b></td><td>chrF, COMET or BLEURT, with human spot checks</td><td>Character n-grams cope with Arabic morphology; learned metrics track humans better than BLEU.</td></tr>
+            <tr><td><b>Extractive summary or templated output</b></td><td>ROUGE is a fair regression test</td><td>Output wording is constrained, so overlap tracks content.</td></tr>
+            <tr><td><b>Open answers, advice, abstractive summaries</b></td><td>LLM judge plus human sampling</td><td>Many valid wordings; faithfulness and tone matter more than overlap.</td></tr>
+            <tr><td><b>Code, SQL</b></td><td>Execute it and compare results</td><td>Behaviour, not text, is what counts (see text-to-SQL in R13.2).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>A good use of ROUGE is as a cheap regression alarm: if a prompt change drops ROUGE-L on 500 stable summaries by ten points, something moved and a human should look. A bad use is to report "ROUGE-1 of 0.46" to an executive as a quality score.</p>
+      </div>
+
+      <h3 class="sub" id="m-judge">M5.2 LLM-as-judge</h3>
+      <div class="prose">
+        <p>The idea is simple. Give a strong model the question, the answer, perhaps a reference or the source document, and a rubric. Ask for a grade, and a short reasoning first. It reads for meaning, so it will spot "not blocked" and the invented limit. Zheng et al. (2023) showed that a strong judge agreed with human preferences more than 80% of the time on open-ended chat, about as often as two humans agree with each other. That result made the method standard.</p>
+        <p>There are four common set-ups.</p>
+        <ul>
+          <li><strong>Pointwise scoring.</strong> "Rate this answer 1 to 5 for faithfulness to the document." Cheap and scalable, but scores are not anchored: one judge's 4 is another's 3, and scores bunch near the top.</li>
+          <li><strong>Pairwise comparison.</strong> "Which of A and B is better?" More stable than absolute scores, and the basis for arenas and win-rates. Needs care about order.</li>
+          <li><strong>Reference-guided.</strong> The judge also sees a gold answer. It is much more reliable on factual questions, because the judge no longer relies on its own knowledge.</li>
+          <li><strong>Checklist or binary rubrics.</strong> Break "good" into yes/no questions: does it state the 60-day limit? does it avoid promising a refund? Binary questions are easier for models and humans to agree on than a 1-to-5 scale.</li>
+        </ul>
+        <p>A well-built judge prompt names the criteria, defines each score level with an example, asks for the reasoning before the verdict, and fixes the output format. It is a piece of prompt engineering (M2.1) and gets versioned and tested like code.</p>
+      </div>
+
+      <h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">Judges have biases, and some can be measured and removed</h4>
+      <div class="prose">
+        <p>Several biases are documented repeatedly across papers.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Bias</th><th>What happens</th><th>Mitigation</th></tr></thead>
+          <tbody>
+            <tr><td><b>Position</b></td><td>In pairwise judging, the judge favours the first (or second) answer regardless of content.</td><td>Run both orders. Count a win only if it holds in both, or average.</td></tr>
+            <tr><td><b>Verbosity</b></td><td>Longer answers win, even when the extra length is padding.</td><td>Rubric that penalises padding; length-controlled win rates; compare at matched length.</td></tr>
+            <tr><td><b>Self-preference</b></td><td>A model tends to rate text from its own family more highly.</td><td>Use a judge from a different family than the system under test, or several judges.</td></tr>
+            <tr><td><b>Style over substance</b></td><td>Confident, well-formatted answers beat correct but plain ones.</td><td>Reference-guided grading; binary factual checklist.</td></tr>
+            <tr><td><b>Weak at verifying</b></td><td>On hard maths, code or domain facts, the judge may not know the answer either.</td><td>Give it the gold answer or source passage; use tools or execution where possible.</td></tr>
+            <tr><td><b>Instability</b></td><td>Same input, different grade on a second call, or after a trivial rewording of the rubric.</td><td>Temperature 0, repeated runs, report test-retest agreement.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Position and verbosity bias are the easiest to see in numbers, and the second simulation lets you set them. It models a judge whose preference for answer A over answer B has three ingredients: a real quality gap, a bonus for going first, and a bonus for being longer. Order-swapping removes the second; nothing in the order trick touches the third.</p>
+      </div>
+
+      <figure class="figure" id="fig-judge">
+        <div class="fig-head"><span class="fig-title">A biased judge, and what swapping the order does</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> set position bias to 1.0, verbosity bias to 0, and compare the three modes. Swapping removes the damage completely. Now set verbosity bias to 1.0 and compare again: swapping does nothing, and a longer-but-worse answer keeps winning. Set both to zero for the ceiling, which is below 100% because some pairs are genuinely close.</p>
+        <div class="btns" role="group" aria-label="Judging mode">
+          <button class="btn" type="button" data-j="single" aria-pressed="true">One order only</button>
+          <button class="btn" type="button" data-j="agree" aria-pressed="false">Both orders, must agree</button>
+          <button class="btn" type="button" data-j="avg" aria-pressed="false">Both orders, averaged</button>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-pos">Position bias (bonus for answer shown first) <output for="s-pos"></output></label><input type="range" id="s-pos" min="0" max="1.5" step="0.05" value="0.8"></div>
+          <div class="ctl"><label for="s-verb">Verbosity bias (bonus for the longer answer) <output for="s-verb"></output></label><input type="range" id="s-verb" min="0" max="1.5" step="0.05" value="0.6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="sj-acc-b"><div class="k">Picks the truly better answer</div><div class="v" id="sj-acc"></div><div class="s" id="sj-acc-s"></div></div>
+          <div class="stat"><div class="k">Unbiased judge, same noise</div><div class="v" id="sj-ceil"></div><div class="s">the ceiling for this judge</div></div>
+          <div class="stat" id="sj-lw-b"><div class="k">Longer but worse answer wins</div><div class="v" id="sj-lw"></div><div class="s">when length and quality disagree</div></div>
+          <div class="stat"><div class="k">Judge declines to choose</div><div class="v" id="sj-tie"></div><div class="s">orders disagree (agree mode only)</div></div>
+        </div>
+        <div class="verdict" id="sj-verdict"></div>
+        <p class="sim-note">Simulated: pairs differ in true quality d (standard normal) and in relative length (standard normal, independent of quality, so any preference for length is pure bias). The probability the judge says "A is better" is the logistic of 2.0 × d + position bonus + verbosity bonus × length difference, with the position bonus switching sign when the order is swapped. Each call is an independent noisy draw. The numbers are exact integrals over a grid, not a random sample. Real judges are not this tidy: biases vary by task and model, and the 2.0 sharpness is my choice.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two practical points follow. First, a high agreement rate between a judge and humans does <em>not</em> tell you which biases the judge has; you only see them by designing tests (swap the order, pad one answer, hide the model name). Second, the 2026 preprint "Reliability without Validity" (Part 4) found that a judge can be extremely consistent from run to run and still carry strong position bias. Consistency is not correctness.</p>
+      </div>
+
+      <h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">Validating the judge: how many human labels do you need?</h4>
+      <div class="prose">
+        <p>You treat the judge as a measuring instrument and calibrate it. The procedure is short. Take 100 to 300 outputs. Have two or more careful humans grade them blind (M5.3). Have the judge grade them. Report the agreement, and report it as an interval, because agreement is a proportion estimated from a finite sample, exactly as recall was in F3.5.</p>
+        <p>Also report a <strong>chance-corrected</strong> figure. If 85% of answers are acceptable, a lazy judge who says "pass" every time agrees with humans 85% of the time. Cohen's kappa subtracts that chance level:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>κ</mi><mo>=</mo><mfrac><mrow><msub><mi>p</mi><mi>o</mi></msub><mo>−</mo><msub><mi>p</mi><mi>e</mi></msub></mrow><mrow><mn>1</mn><mo>−</mo><msub><mi>p</mi><mi>e</mi></msub></mrow></mfrac></math>
+        <p class="where"><i>p<sub>o</sub></i> is the observed agreement and <i>p<sub>e</sub></i> the agreement you would expect if judge and human labelled independently with the same pass rates. With 85% passes on both sides, <i>p<sub>e</sub></i> = 0.85² + 0.15² = 0.745. An observed 90% agreement then gives κ = (0.90 − 0.745) ÷ 0.255 ≈ <strong>0.61</strong>: moderate agreement, not the near-perfect that "90%" suggests.</p>
+      </div>
+
+      <figure class="figure" id="fig-valid">
+        <div class="fig-head"><span class="fig-title">How much does a validation set tell you?</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> leave agreement at 90% and move the sample from 30 to 300 labelled outputs and watch the interval narrow. Then raise the share of acceptable answers to 95% and see kappa fall: a high base rate makes high agreement cheap. The sample size you need depends on how tight a statement you want to make, not on how big your production volume is.</p>
+        <div class="chart-wrap" id="val-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Human-labelled outputs <output for="s-n"></output></label><input type="range" id="s-n" min="1.3" max="3.3" step="0.02" value="2"></div>
+          <div class="ctl"><label for="s-po">Observed judge-human agreement <output for="s-po"></output></label><input type="range" id="s-po" min="0.6" max="0.99" step="0.01" value="0.9"></div>
+          <div class="ctl"><label for="s-base">Share of answers humans pass <output for="s-base"></output></label><input type="range" id="s-base" min="0.5" max="0.98" step="0.01" value="0.85"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">95% interval on agreement</div><div class="v" id="sv-ci"></div><div class="s" id="sv-ci-s"></div></div>
+          <div class="stat"><div class="k">Lazy "always pass" judge agrees</div><div class="v" id="sv-lazy"></div><div class="s">the floor to beat</div></div>
+          <div class="stat" id="sv-k-b"><div class="k">Cohen's kappa</div><div class="v" id="sv-k"></div><div class="s" id="sv-k-s"></div></div>
+          <div class="stat"><div class="k">Plausible kappa range</div><div class="v" id="sv-kr"></div><div class="s">from the interval ends</div></div>
+        </div>
+        <div class="verdict" id="sv-verdict"></div>
+        <p class="sim-note">Simulated: nothing is sampled. The interval is the Wilson 95% interval for a proportion, computed exactly from the inputs. Kappa assumes the judge and humans pass the same share of answers, so chance agreement is p<sub>e</sub> = b² + (1 − b)² for pass rate b. Real judges often have a different pass rate from humans, which changes p<sub>e</sub>. The sample-size slider is logarithmic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>A few rules of thumb come out of this. Use at least 100 labelled items for a first look and 300 or more for a result you will defend; sample them to include the hard and rare cases, not just typical ones. Re-validate whenever you change the judge model, the rubric or the system under test. And keep a standing human sample (say 5% of production traffic) so you notice when the judge drifts. When labelled data is scarce, statistical methods such as prediction-powered inference (R7.4) combine a few human labels with many judge labels and still give an honest interval.</p>
+        <p>One more caution. If you use a judge's scores to <em>optimise</em> the system, by picking prompts, tuning, or training against it, the system learns to please the judge, not the customer. That is reward hacking (R3.6) in miniature. Hold out a human-graded set the optimisation never touches.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson is the base of generative evaluation. The rest of M5 builds on it, and several earlier ideas come back in new form.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M5.3 · M5.4 · Human evaluation and agreement</span><span class="t"><a href="m5-human-evaluation-and-annotator-agreement.html">The ground truth the judge is checked against</a></span><p>Kappa, annotator guidelines and disagreement are how you build the human labels used in Simulation 3.</p></div>
+        <div class="link-card"><span class="code">M5.5 · M5.6 · Evaluating agents</span><span class="t"><a href="m5-evaluating-agents-trajectories-tool-use.html">Judging trajectories, not just answers</a></span><p>Agent evaluations mix programmatic checks with judges that grade whole trajectories. The same biases and validation apply.</p></div>
+        <div class="link-card"><span class="code">F7.1 · F7.2 · Precision, recall, calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">A judge is a classifier</a></span><p>A binary judge verdict has a confusion matrix against humans. Report its false-pass rate (judge passes, human fails), the number that hurts in a bank.</p></div>
+        <div class="link-card"><span class="code">F2.1 · Intervals</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">Agreement is a proportion with an interval</a></span><p>Simulation 3 is the same arithmetic as recall on few positives, in <a href="f3-imbalanced-data.html">the imbalanced-data lesson</a>.</p></div>
+        <div class="link-card"><span class="code">M2.1 · Prompting and context engineering</span><span class="t"><a href="m2-prompting-and-context-engineering.html">The judge prompt is a prompt</a></span><p>Rubric wording, examples and output format change the grades. Version it and test it.</p></div>
+        <div class="link-card"><span class="code">M3 · Retrieval and RAG</span><span class="t"><a href="m3-hybrid-search-and-reciprocal-rank.html">Faithfulness and context checks</a></span><p>RAG evaluation splits into retrieval quality (ranking metrics) and answer faithfulness to the retrieved passages, which is usually judged by a model.</p></div>
+        <div class="link-card"><span class="code">R3.6 · Reward hacking</span><span class="t"><a href="r3-constitutional-ai-and-rl-from.html">Optimising against a judge</a></span><p>AI feedback and judge models double as training signals. The same failure applies: whatever you optimise, the system exploits.</p></div>
+        <div class="link-card"><span class="code">R7.3 · R7.4 · Benchmarks and prediction-powered inference</span><span class="t"><a href="r7-item-response-theory-for-benchmarks.html">Honest numbers from cheap labels</a></span><p>How to combine a small human sample with a large judge-labelled sample without fooling yourself.</p></div>
+        <div class="link-card"><span class="code">G3.3 · Independent validation</span><span class="t"><a href="g3-independent-validation.html">What a model-risk team will ask</a></span><p>A validator will want the judge treated as a model: documented, validated, monitored, with its limits stated.</p></div>
+        <div class="link-card"><span class="code">M1.1 · Tokenisation</span><span class="t"><a href="m1-tokenisation.html">Why Arabic scores differently</a></span><p>Overlap metrics depend on how text is split into pieces. Arabic morphology and diacritics make exact matching harsher than in English.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Customer-service assistants (Arabic and English).</strong> Judge for correctness against the policy document, tone, and refusal to give advice the bank must not give. Human review of a weekly sample.</li>
+          <li><strong>Document and regulatory summarisation.</strong> Faithfulness to the source matters far more than similarity to a reference summary. Judge each claim against the document; a ROUGE score cannot see an invented clause.</li>
+          <li><strong>KYC and adverse-media summaries.</strong> A false "no concern" is costly. Measure the judge's false-pass rate on seeded examples.</li>
+          <li><strong>Translation of customer letters or complaints.</strong> chrF/COMET as a regression check, with bilingual reviewers on a sample.</li>
+          <li><strong>Prompt and model selection.</strong> Pairwise judge comparisons across candidate models, order-swapped, on a bank-specific test set, before any procurement discussion.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The direction of travel is clear: overlap metrics are demoted to cheap regression checks, and LLM judges are the working default for open-ended output. The live debate is whether judges are valid enough, and how to audit them.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two web searches. Items marked "from memory" are well-known results I did not re-verify; check them before quoting.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2002</span><div><div class="t">BLEU</div><p>A modified n-gram precision with a brevity penalty, designed to track human judgement of translation quality at corpus level. It was never meant to grade single sentences.</p><div class="src">Papineni et al., ACL 2002 (from memory)</div></div></li>
+        <li><span class="yr">2004</span><div><div class="t">ROUGE</div><p>Recall-oriented overlap for summaries.</p><div class="src">Lin, 2004 (from memory)</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">BERTScore, and learned metrics</div><p>Embedding-based matching, followed by metrics trained on human ratings, such as BLEURT and COMET. These track humans better than n-gram counts for translation and paraphrase.</p><div class="src">Zhang et al., ICLR 2020; Sellam et al., ACL 2020; Rei et al., EMNLP 2020 (from memory)</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">LLM-as-judge becomes standard</div><p>MT-Bench and Chatbot Arena showed a strong LLM judge reaching over 80% agreement with human preferences, and catalogued position, verbosity and self-enhancement biases. G-Eval used a judge with form-filling steps and probability-weighted scores.</p><div class="src">Zheng et al., NeurIPS 2023; Liu et al., EMNLP 2023 (from memory)</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Length-controlled win rates and judge benchmarks</div><p>Length-controlled AlpacaEval adjusted win rates statistically for answer length, a direct response to verbosity bias. RewardBench and JudgeBench gave judges and reward models their own test sets, including hard cases where the judge must check correctness.</p><div class="src">Dubois et al., 2024; Lambert et al., 2024; Tan et al., 2024 (from memory)</div></div></li>
+        <li><span class="yr">2024–25</span><div><div class="t">Survey of the field</div><p>A comprehensive survey organises LLM-as-judge around how to build reliable judges, covers sources of bias and mitigation methods, and proposes a benchmark for judging the judges. Revised through late 2025.</p><div class="src">Gu et al., arXiv 2411.15594</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Arabic: overlap metrics are weak, judges agree better</div><p>On the BALSAM Arabic LLM benchmark, BERTScore correlated better with humans than ROUGE and BLEU, but all three varied widely by task and averaged low. LLM-as-judge was highly correlated with human judgement across categories, and using an LLM to extract the answer before scoring improved all three overlap metrics. Another Arabic benchmark cautions that BERTScore is less reliable for Arabic cross-lingually, so the encoder you use matters.</p><div class="src">BALSAM, arXiv 2507.22603; ARB, arXiv 2505.17021</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Reliability is not validity</div><p>A June 2026 preprint evaluating 21 judges from nine providers found that exact-match agreement overstates chance-corrected agreement by 33 to 41 points on MT-Bench, that judge rankings shift by up to 14 places between benchmarks, and that two production-deployed judges had test-retest reliability above 0.95 together with severe position bias. It is a preprint and not yet peer-reviewed.</p><div class="src">arXiv 2606.19544, 2026 (preprint)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is in banking, as far as public information goes:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Exact and normalised match for extraction</b></td><td>Fields, amounts, classes scored deterministically.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>LLM judge with a rubric for assistant quality</b></td><td>Pointwise or pairwise grading of conversation samples, with a human-labelled calibration set.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Order-swapped pairwise comparison</b></td><td>Both orders run; ties when they disagree.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>BLEU/ROUGE as headline quality</b></td><td>Common in older reports and papers; validators increasingly question it.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Claim-level faithfulness checks</b></td><td>Split an answer into claims and verify each against the source with a model.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Judge panels from different model families</b></td><td>Several judges vote, to reduce self-preference.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Statistical correction of judge error with few human labels</b></td><td>Prediction-powered inference and related methods.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Use deterministic checks wherever the answer is checkable, an LLM judge with a binary rubric where it is not, humans to calibrate and to audit, and report every judged number with its agreement and an interval.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These turn up in vendor demos, internal reports and AI-written analyses. Each has a quick check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">An overlap score presented as quality</div><p>"The new model has ROUGE-L 0.52, up from 0.47." Nobody has shown that those points mean better answers.</p><div class="spot"><b>Spot it</b>Ask for ten pairs of outputs whose scores differ by five points, and read them. Ask whether the metric was ever correlated with human ratings on this task.</div></li>
+        <li><div class="t">Single reference for an open task</div><p>One gold answer, so correct paraphrases are penalised and the model learns to imitate the reference's phrasing.</p><div class="spot"><b>Spot it</b>Count the references per question. For open tasks, one reference is a red flag.</div></li>
+        <li><div class="t">Unreported metric settings</div><p>BLEU with different tokenisation or smoothing is not comparable.</p><div class="spot"><b>Spot it</b>Look for the exact library and signature (for example a SacreBLEU signature string).</div></li>
+        <li><div class="t">Judge never validated against humans</div><p>"GPT-graded accuracy: 92%." Graded by what, checked how?</p><div class="spot"><b>Spot it</b>Ask for the number of human-labelled items, the agreement with an interval, and the kappa.</div></li>
+        <li><div class="t">Agreement quoted without the base rate</div><p>"The judge agrees with humans 90% of the time" when 90% of answers pass anyway.</p><div class="spot"><b>Spot it</b>Ask what an always-pass judge would score. Ask for the false-pass rate specifically.</div></li>
+        <li><div class="t">Pairwise judging in a single order</div><p>Position bias silently shifts win rates by points, enough to flip a ranking of two close models.</p><div class="spot"><b>Spot it</b>Ask whether both orders were run. If the win rate moves when you swap, the judge is not measuring quality alone.</div></li>
+        <li><div class="t">Judge from the same family as the system</div><p>The system's own relatives grade it generously.</p><div class="spot"><b>Spot it</b>Check the judge model against the generating model. Re-score with a judge from another provider and compare.</div></li>
+        <li><div class="t">Longer is rated better</div><p>A new prompt makes answers 40% longer and scores rise. Customers just read more.</p><div class="spot"><b>Spot it</b>Plot judge score against answer length. If they track, control for length or add a conciseness criterion.</div></li>
+        <li><div class="t">Optimising against the judge you test with</div><p>Prompts are tuned until the judge score peaks. The score is then meaningless as evidence.</p><div class="spot"><b>Spot it</b>Ask whether a human-graded set exists that no tuning ever saw.</div></li>
+        <li><div class="t">Judge sees the answer it cannot verify</div><p>The judge approves a confident, wrong figure because it does not know the policy.</p><div class="spot"><b>Spot it</b>Check whether the judge was given the source document or gold answer. Seed a few known-wrong answers and see if they pass.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“There is no single right wording for a good answer, so we can't score the assistant by matching it against a model answer. Word-matching scores are quick but they reward copying and miss factual errors. We use a second AI to grade against a checklist, and we check that grader against about 300 answers rated by our own staff. I'd report the grader's agreement with people and its margin of error next to every score, and keep a small weekly sample reviewed by hand.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“For checkable outputs I'd use deterministic scoring. For open-ended ones, a reference-guided judge with binary rubric items, run in both orders, from a different family than the system under test. I validate it on a stratified human-labelled set, report agreement and kappa with Wilson intervals and, importantly, the false-pass rate. I'd test known biases explicitly: order swap, length padding, seeded wrong answers. And I'd hold out a human-graded set that no prompt tuning touches, to avoid optimising against the judge.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just use BLEU or ROUGE? They're free and standard.”</summary><div class="ans"><p>They measure string overlap with one reference. For open answers that penalises correct paraphrases and rewards wrong answers that copy the reference's wording, such as one with a negation or a wrong number. They are fine as a regression alarm, or where output wording is tightly constrained. For quality claims I'd want a metric that has been checked against human ratings on our task.</p></div></details>
+        <details class="reveal"><summary>“BERTScore understands meaning, so is that enough?”</summary><div class="ans"><p>It is better on paraphrase, but it is still a similarity score. Sentences that differ in one number or one negation have near-identical embeddings, so it is weak on exactly the errors a bank cares about. Its quality also depends on the encoder, which is a concern for Arabic. It is a useful signal and not a verdict.</p></div></details>
+        <details class="reveal"><summary>“Can we trust a model to grade a model?”</summary><div class="ans"><p>To a measured degree. Strong judges agree with human preferences at roughly the rate two humans agree with each other, on the tasks studied. But they have position, length and self-preference biases, and can be consistent and still wrong. So I treat the judge as an instrument: calibrate on human labels, quote agreement with an interval, test the known biases, and re-check when anything changes.</p></div></details>
+        <details class="reveal"><summary>“The judge agrees with our reviewers 90% of the time. Is that good?”</summary><div class="ans"><p>It depends on the base rate. If 85% of answers pass anyway, a judge that always says pass gets 85%, and 90% is a kappa of about 0.6. I'd ask how many items, what the interval is, and the false-pass rate, meaning how often the judge passes what a human fails. For a customer-facing bank assistant that is the number that matters.</p></div></details>
+        <details class="reveal"><summary>“How many human labels do we need?”</summary><div class="ans"><p>For a first read, 100; to defend a decision, 300 or more, sampled to include hard and rare cases. At 300 items and 90% agreement the interval is about ±3.4 points; at 30 items it is about ±10. Rare failure types need their own sample, because a failure that occurs in 1% of traffic will barely appear in a random 300.</p></div></details>
+        <details class="reveal"><summary>“Can the judge be the same model as the assistant?”</summary><div class="ans"><p>I'd avoid it. Models tend to rate their own family's output higher. Use a judge from another provider, or a panel, and compare. If two judges from different families rank systems the same way, that is reassuring; if they split, that tells you the ranking is not robust.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. The reference is "the card was blocked" (4 words). The output is "the card was not blocked" (5 words). Compute ROUGE-1 precision, recall and F. What does it tell you?</summary><div class="ans"><p>All 4 reference words appear in the output. Precision = 4/5 = 0.80, recall = 4/4 = 1.00, F = 2 × 0.8 × 1.0 ÷ 1.8 ≈ 0.89. A score near 0.9 for an answer that says the opposite: overlap cannot see negation.</p></div></details>
+        <details class="reveal"><summary>2. BLEU is precision-based and ROUGE recall-based. Why did BLEU need a brevity penalty?</summary><div class="ans"><p>Precision alone rewards short outputs: one word that is in the reference has precision 100%. The penalty reduces the score when the output is shorter than the reference, which supplies the missing recall-like pressure.</p></div></details>
+        <details class="reveal"><summary>3. Name two tasks where an exact or deterministic metric beats both overlap and an LLM judge.</summary><div class="ans"><p>Extracting an amount, date or IBAN (exact or normalised match), and text-to-SQL or code (execute and compare results). Where there is one verifiable right answer, checking it directly is cheaper and more reliable than a fuzzy score.</p></div></details>
+        <details class="reveal"><summary>4. In pairwise judging, answer A beats B when shown first, and B beats A when shown second. What does this tell you, and what do you report?</summary><div class="ans"><p>The judge is dominated by position bias on that pair, so the comparison is a tie in effect. Run both orders, count a win only if it holds in both, and report ties. Across many pairs, report the share of order-dependent verdicts as a measure of the judge's bias.</p></div></details>
+        <details class="reveal"><summary>5. Swapping order did not improve your judge's accuracy at all. What other bias could be responsible?</summary><div class="ans"><p>Verbosity (or style) bias, which is attached to the answer and not to its position, so swapping cannot cancel it. Test by padding one answer, or by checking whether judge score correlates with length at fixed quality. Mitigate with the rubric, length control, or a different judge.</p></div></details>
+        <details class="reveal"><summary>6. A judge agrees with humans on 92 of 100 items. Humans passed 90 of the 100 answers. How impressive is this?</summary><div class="ans"><p>Agreement is 92%, but an always-pass judge would agree on 90%. Chance agreement with the same pass rate is 0.9² + 0.1² = 0.82, so κ = (0.92 − 0.82) ÷ 0.18 ≈ 0.56. The Wilson interval on 92/100 is roughly 85% to 96%. So the evidence is: moderately better than a lazy judge, with wide uncertainty. Check the false-pass rate before relying on it.</p></div></details>
+        <details class="reveal"><summary>7. Your team tunes the prompt to maximise the judge score and reports a rise from 3.9 to 4.5. What is missing?</summary><div class="ans"><p>Evidence that the rise is real. Tuning against the judge exploits its biases (length, style). Re-score a held-out human-graded set that the tuning never saw, with a second judge from a different family, and check whether answers simply got longer.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>K. Papineni, S. Roukos, T. Ward, W.-J. Zhu. <a href="https://aclanthology.org/P02-1040/">BLEU: a Method for Automatic Evaluation of Machine Translation</a>. ACL, 2002.</li>
+        <li>C.-Y. Lin. <a href="https://aclanthology.org/W04-1013/">ROUGE: A Package for Automatic Evaluation of Summaries</a>. 2004.</li>
+        <li>M. Post. <a href="https://aclanthology.org/W18-6319/">A Call for Clarity in Reporting BLEU Scores</a>. WMT, 2018.</li>
+        <li>T. Zhang, V. Kishore, F. Wu, K. Weinberger, Y. Artzi. <a href="https://arxiv.org/abs/1904.09675">BERTScore: Evaluating Text Generation with BERT</a>. ICLR, 2020.</li>
+        <li>T. Sellam, D. Das, A. Parikh. <a href="https://arxiv.org/abs/2004.04696">BLEURT: Learning Robust Metrics for Text Generation</a>. ACL, 2020.</li>
+        <li>R. Rei et al. <a href="https://arxiv.org/abs/2009.09025">COMET: A Neural Framework for MT Evaluation</a>. EMNLP, 2020.</li>
+        <li>L. Zheng et al. <a href="https://arxiv.org/abs/2306.05685">Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena</a>. NeurIPS, 2023.</li>
+        <li>Y. Liu et al. <a href="https://arxiv.org/abs/2303.16634">G-Eval: NLG Evaluation using GPT-4 with Better Human Alignment</a>. EMNLP, 2023.</li>
+        <li>Y. Dubois et al. <a href="https://arxiv.org/abs/2404.04475">Length-Controlled AlpacaEval: A Simple Way to Debias Automatic Evaluators</a>. 2024.</li>
+        <li>J. Gu et al. <a href="https://arxiv.org/abs/2411.15594">A Survey on LLM-as-a-Judge</a>. arXiv 2411.15594.</li>
+        <li>BALSAM: <a href="https://arxiv.org/abs/2507.22603">A Platform for Benchmarking Arabic Large Language Models</a>. arXiv 2507.22603, 2025.</li>
+        <li><a href="https://arxiv.org/abs/2606.19544">Reliability without Validity</a> (LLM judges). arXiv 2606.19544, 2026 (preprint).</li>
+        <li>A. Angelopoulos et al. <a href="https://arxiv.org/abs/2301.09633">Prediction-Powered Inference</a>. Science, 2023.</li>
+        <li>E. Reiter. <a href="https://aclanthology.org/J18-3002/">A Structured Review of the Validity of BLEU</a>. Computational Linguistics, 2018.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in M5: Human evaluation and annotator agreement (M5.3)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: overlap metrics
+  // =====================================================================
+  const REF = "Your card was blocked because three incorrect PIN attempts were made. You can unblock it at any branch or through the app.";
+  const CANDS = [
+    { n: "Close paraphrase", t: "We froze your card after the PIN was entered wrongly three times. Use the mobile app or visit a branch to reactivate it.", ok: true },
+    { n: "Copy, wrong condition", t: "Your card was blocked because three incorrect PIN attempts were made. You can unblock it only at a branch after 30 days.", ok: false },
+    { n: "Copy with a negation", t: "Your card was not blocked because three incorrect PIN attempts were made. You can unblock it at any branch or through the app.", ok: false },
+    { n: "Fluent, off topic", t: "Your account has been closed due to suspicious activity. Please call us.", ok: false },
+    { n: "Correct but terse", t: "Blocked after three wrong PINs. Unblock via app or branch.", ok: true },
+    { n: "Copy plus invented fact", t: "Your card was blocked because three incorrect PIN attempts were made. You can unblock it at any branch or through the app. Your daily limit is now AED 50,000.", ok: false },
+    { n: "Second paraphrase", t: "Because of three failed PIN entries your card has been suspended. You may reactivate it through the app or at a branch.", ok: true }
+  ];
+  CANDS.push({ n: "Faithful reword", t: "Your card is blocked as a PIN was entered incorrectly three times. You can unblock it through the app or at any branch.", ok: true });
+  const tok = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  function ngrams(a, n) { const m = new Map(); for (let i = 0; i + n <= a.length; i++) { const k = a.slice(i, i + n).join(" "); m.set(k, (m.get(k) || 0) + 1); } return m; }
+  function overlap(c, r) { let s = 0; c.forEach((v, k) => { if (r.has(k)) s += Math.min(v, r.get(k)); }); return s; }
+  const f1 = (p, r) => (p + r > 0 ? 2 * p * r / (p + r) : 0);
+  function rouge(c, r, n) {
+    const cg = ngrams(c, n), rg = ngrams(r, n);
+    const sh = overlap(cg, rg), nc = Math.max(0, c.length - n + 1), nr = Math.max(0, r.length - n + 1);
+    return f1(nc ? sh / nc : 0, nr ? sh / nr : 0);
+  }
+  function bleu(c, r) {
+    let lg = 0;
+    for (let n = 1; n <= 4; n++) {
+      const cg = ngrams(c, n), rg = ngrams(r, n), sh = overlap(cg, rg), tot = Math.max(1, c.length - n + 1);
+      lg += Math.log(n === 1 ? Math.max(sh, 1e-9) / tot : (sh + 1) / (tot + 1)) / 4;
+    }
+    const bp = c.length >= r.length ? 1 : Math.exp(1 - r.length / c.length);
+    return bp * Math.exp(lg);
+  }
+  const GROUPS = [["blocked", "frozen", "froze", "suspended", "locked"], ["incorrect", "wrong", "wrongly", "failed"], ["unblock", "reactivate", "unfreeze"], ["app", "mobile"], ["attempts", "entries", "times"], ["made", "entered"], ["pin", "pins"]];
+  const gid = w => GROUPS.findIndex(g => g.includes(w));
+  const sim = (a, b) => a === b ? 1 : (gid(a) >= 0 && gid(a) === gid(b) ? 0.8 : 0);
+  function soft(c, r) {
+    const best = (x, ys) => Math.max(...ys.map(y => sim(x, y)));
+    const p = c.reduce((s, w) => s + best(w, r), 0) / c.length, rc = r.reduce((s, w) => s + best(w, c), 0) / r.length;
+    return f1(p, rc);
+  }
+  const rt = tok(REF);
+  const SC = CANDS.map(c => { const t = tok(c.t); return Object.assign({}, c, { r1: rouge(t, rt, 1), r2: rouge(t, rt, 2), bleu: bleu(t, rt), soft: soft(t, rt) }); });
+  const S1 = { m: "r1", cut: 0.5 };
+  const MN = { r1: "ROUGE-1 F", r2: "ROUGE-2 F", bleu: "BLEU", soft: "Toy soft match" };
+  const ovBox = $("ov-chart");
+  function renderOv() {
+    const m = S1.m, rows = SC.slice().sort((a, b) => b[m] - a[m]);
+    const W = Math.max(300, ovBox.clientWidth), bh = 24, gap = 8, mg = { l: W < 480 ? 126 : 164, r: 46, t: 8, b: 26 };
+    const H = mg.t + mg.b + rows.length * (bh + gap);
+    const svg = mk(ovBox, W, H, "Scores of eight answers under " + MN[m]);
+    const X = L.scale(0, 1, mg.l, W - mg.r);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: mg.t, y2: H - mg.b, class: "grid" }, svg);
+      tx(svg, X(v), H - mg.b + 16, v.toFixed(2), { "text-anchor": "middle" });
+    });
+    rows.forEach((r, i) => {
+      const y = mg.t + i * (bh + gap);
+      L.svg("rect", { x: X(0), y, width: Math.max(1, X(r[m]) - X(0)), height: bh, rx: 3, class: r.ok ? "bar-ok" : "bar-bad" }, svg);
+      tx(svg, mg.l - 8, y + bh / 2 + 4, r.n, { "text-anchor": "end", class: "lbl-ink" });
+      tx(svg, X(r[m]) + 6, y + bh / 2 + 4, r[m].toFixed(2), { class: "lbl-strong" });
+    });
+    L.svg("line", { x1: X(S1.cut), x2: X(S1.cut), y1: mg.t - 2, y2: H - mg.b, class: "cut-line" }, svg);
+    const wrong = SC.filter(c => !c.ok), good = SC.filter(c => c.ok);
+    const let_ = wrong.filter(c => c[m] >= S1.cut).length, rej = good.filter(c => c[m] < S1.cut).length;
+    $("so-wrong").textContent = let_ + " of " + wrong.length; cls($("so-wrong-b"), let_ > 0 ? "bad" : "ok");
+    $("so-right").textContent = rej + " of " + good.length; cls($("so-right-b"), rej > 0 ? "bad" : "ok");
+    const tw = wrong.reduce((a, b) => b[m] > a[m] ? b : a), lr = good.reduce((a, b) => b[m] < a[m] ? b : a);
+    $("so-topwrong").textContent = tw[m].toFixed(2); $("so-topwrong-s").textContent = tw.n;
+    $("so-lowright").textContent = lr[m].toFixed(2); $("so-lowright-s").textContent = lr.n;
+    const overl = tw[m] > lr[m];
+    $("so-verdict").innerHTML = overl
+      ? "Under <b>" + MN[m] + "</b> the best wrong answer (" + tw.n.toLowerCase() + ", " + tw[m].toFixed(2) + ") outscores the worst good one (" + lr.n.toLowerCase() + ", " + lr[m].toFixed(2) + "). <b>No pass mark can separate them</b>: any cut that rejects every wrong answer also rejects a good one."
+      : "Under <b>" + MN[m] + "</b> there is a pass mark between " + tw[m].toFixed(2) + " and " + lr[m].toFixed(2) + " that separates these eight. That is a property of this small, hand-picked set; with real traffic wrong answers that copy the reference would reappear.";
+    let h = '<table class="data cand-table"><thead><tr><th>Answer</th><th>Human</th><th>ROUGE-1</th><th>ROUGE-2</th><th>BLEU</th><th>Soft</th></tr></thead><tbody>';
+    SC.forEach(c => { h += `<tr><td><b>${c.n}</b><br><span style="color:var(--muted);font-size:13px">${c.t}</span></td><td>${c.ok ? "acceptable" : "wrong"}</td><td>${c.r1.toFixed(2)}</td><td>${c.r2.toFixed(2)}</td><td>${c.bleu.toFixed(2)}</td><td>${c.soft.toFixed(2)}</td></tr>`; });
+    $("ov-table").innerHTML = h + "</tbody></table>";
+  }
+  document.querySelectorAll("[data-m]").forEach(b => b.addEventListener("click", () => {
+    S1.m = b.dataset.m;
+    document.querySelectorAll("[data-m]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    renderOv();
+  }));
+  L.bind("s-pass", v => v.toFixed(2), v => { S1.cut = v; renderOv(); });
+
+  // =====================================================================
+  // Simulation 2: biased judge
+  // =====================================================================
+  const S2 = { mode: "single", b: 0.8, c: 0.6 };
+  const A_SHARP = 2.0, sg = L.sigmoid;
+  // grid integration over quality gap d and length gap l, both standard normal
+  const GRID = (() => { const g = [], h = 0.2; let tot = 0; for (let d = -3.6; d <= 3.601; d += h) for (let l = -3.6; l <= 3.601; l += h) { const w = L.normPdf(d) * L.normPdf(l); g.push([d, l, w]); tot += w; } return g.map(([d, l, w]) => [d, l, w / tot]); })();
+  function judgeEval(mode, b, c) {
+    let acc = 0, tie = 0, lwNum = 0, lwDen = 0, pairsDen = 0;
+    GRID.forEach(([d, l, w]) => {
+      if (Math.abs(d) < 1e-9) return;
+      const p1 = sg(A_SHARP * d + b + c * l), p2 = sg(A_SHARP * d - b + c * l);
+      let pA, t = 0;
+      if (mode === "single") pA = p1;
+      else if (mode === "avg") pA = (p1 + p2) / 2;
+      else { const both = p1 * p2, none = (1 - p1) * (1 - p2); t = 1 - both - none; pA = both + 0.5 * t; }
+      const pCorrect = d > 0 ? pA : 1 - pA;
+      acc += w * pCorrect; tie += w * t; pairsDen += w;
+      if (d * l < 0 && Math.abs(l) > 0) { const pLong = l > 0 ? pA : 1 - pA; lwNum += w * pLong; lwDen += w; }
+    });
+    return { acc: acc / pairsDen, tie: tie / pairsDen, lw: lwNum / lwDen };
+  }
+  const MODE_NAME = { single: "one order", agree: "both orders, must agree", avg: "both orders, averaged" };
+  function renderJudge() {
+    const r = judgeEval(S2.mode, S2.b, S2.c), base = judgeEval(S2.mode, 0, 0);
+    $("sj-acc").textContent = pct(r.acc, 1); $("sj-acc-s").textContent = "ties count as half";
+    cls($("sj-acc-b"), r.acc < base.acc - 0.03 ? "bad" : "ok");
+    $("sj-ceil").textContent = pct(base.acc, 1);
+    $("sj-lw").textContent = pct(r.lw, 1); cls($("sj-lw-b"), r.lw > base.lw + 0.04 ? "bad" : "ok");
+    $("sj-tie").textContent = S2.mode === "agree" ? pct(r.tie, 1) : "-";
+    const lost = base.acc - r.acc;
+    $("sj-verdict").innerHTML = "In mode <b>" + MODE_NAME[S2.mode] + "</b> this judge is right <b>" + pct(r.acc, 1) + "</b> of the time against a ceiling of " + pct(base.acc, 1) + ", losing " + (100 * lost).toFixed(1) + " points to bias. When the longer answer is the worse one, it still wins <b>" + pct(r.lw, 0) + "</b> of the time (an unbiased judge: " + pct(base.lw, 0) + ")." +
+      (S2.c > 0.2 && S2.mode !== "single" && S2.b < 0.05 ? " Swapping order has nothing to cancel here; verbosity bias is untouched." : "");
+  }
+  document.querySelectorAll("[data-j]").forEach(b => b.addEventListener("click", () => {
+    S2.mode = b.dataset.j;
+    document.querySelectorAll("[data-j]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    renderJudge();
+  }));
+  L.bind("s-pos", v => v.toFixed(2), v => { S2.b = v; renderJudge(); });
+  L.bind("s-verb", v => v.toFixed(2), v => { S2.c = v; renderJudge(); });
+
+  // =====================================================================
+  // Simulation 3: validating a judge
+  // =====================================================================
+  const S3 = { k: 2, po: 0.9, b: 0.85 };
+  const valBox = $("val-chart");
+  function wilson(p, n) { const z = 1.96, d = 1 + z * z / n, c = p + z * z / (2 * n), s = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)); return [(c - s) / d, (c + s) / d]; }
+  const kap = (po, b) => { const pe = b * b + (1 - b) * (1 - b); return (po - pe) / (1 - pe); };
+  function renderVal() {
+    const n = Math.round(Math.pow(10, S3.k)), po = S3.po, b = S3.b;
+    const [lo, hi] = wilson(po, n), pe = b * b + (1 - b) * (1 - b);
+    const W = Math.max(300, valBox.clientWidth), H = 110, m = { l: 14, r: 14, t: 18, b: 30 };
+    const svg = mk(valBox, W, H, "Interval on judge-human agreement");
+    const X = L.scale(0.5, 1, m.l, W - m.r);
+    [0.5, 0.6, 0.7, 0.8, 0.9, 1].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(v), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" });
+    });
+    L.svg("line", { x1: X(b), x2: X(b), y1: m.t - 6, y2: H - m.b, class: "cut-line" }, svg);
+    tx(svg, X(b) + (b > 0.8 ? -5 : 5), m.t - 6, "always-pass judge", { class: "lbl-warn", "text-anchor": b > 0.8 ? "end" : "start" });
+    const yy = (m.t + H - m.b) / 2 + 4;
+    L.svg("line", { x1: X(Math.max(0.5, lo)), x2: X(Math.min(1, hi)), y1: yy, y2: yy, class: "ci-bar" }, svg);
+    L.svg("circle", { cx: X(po), cy: yy, r: 7, class: "ci-dot" }, svg);
+    $("sv-ci").textContent = pct(lo, 0) + " to " + pct(hi, 0); $("sv-ci-s").textContent = "n = " + L.fmtInt(n) + ", width " + (100 * (hi - lo)).toFixed(0) + " points";
+    $("sv-lazy").textContent = pct(b, 0);
+    const k = kap(po, b), k1 = kap(lo, b), k2 = kap(hi, b);
+    $("sv-k").textContent = k.toFixed(2);
+    $("sv-k-s").textContent = k >= 0.8 ? "strong" : k >= 0.6 ? "substantial" : k >= 0.4 ? "moderate" : "weak";
+    cls($("sv-k-b"), k >= 0.7 ? "ok" : k >= 0.5 ? "warn" : "bad");
+    $("sv-kr").textContent = k1.toFixed(2) + " to " + k2.toFixed(2);
+    $("sv-verdict").innerHTML = "Raw agreement of <b>" + pct(po, 0) + "</b> sounds strong, but chance alone would give " + pct(pe, 0) + ", so kappa is <b>" + k.toFixed(2) + "</b>. With " + L.fmtInt(n) + " labelled items the true agreement could plausibly be anywhere from " + pct(lo, 0) + " to " + pct(hi, 0) + ", which means kappa from " + k1.toFixed(2) + " to " + k2.toFixed(2) + "." +
+      (lo <= b ? " The low end is no better than a judge that always says pass." : "");
+  }
+  L.bind("s-n", k => L.fmtInt(Math.round(Math.pow(10, k))), k => { S3.k = k; renderVal(); });
+  L.bind("s-po", v => Math.round(v * 100) + "%", v => { S3.po = v; renderVal(); });
+  L.bind("s-base", v => Math.round(v * 100) + "%", v => { S3.b = v; renderVal(); });
+
+  function renderAll() { renderOv(); renderJudge(); renderVal(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

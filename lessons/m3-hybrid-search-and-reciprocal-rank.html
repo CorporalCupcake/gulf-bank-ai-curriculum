@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hybrid Search, Rank Fusion and Reranking: Two Searches, Then a Careful Reader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 13px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .bar-kw { fill: var(--neutral); }
+  .bar-dn { fill: var(--accent); }
+  .cv-ceil { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 4 4; fill: none; }
+  .cv-first { stroke: var(--neutral); stroke-width: 2; stroke-dasharray: 2 3; fill: none; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-now { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  td.rel, .relmark { color: var(--ok); font-weight: 600; }
+  .twocol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 560px) { .twocol { grid-template-columns: minmax(0, 1fr); } }
+  pre { max-width: 100%; overflow-x: auto; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track M · Modern AI systems</span>
+    <span>Module M3 · Retrieval and RAG</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>M3.3 · M3.4</span>
+        <span class="pill n">First 90 days</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Hybrid Search, Rank Fusion and Reranking: Two Searches, Then a Careful Reader</h1>
+      <p class="dek">Why keyword search and meaning search fail on different questions, how reciprocal rank fusion merges their lists without comparing incomparable scores, and why a slower cross-encoder pass over the top candidates is usually the biggest single upgrade to a RAG system.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Run a keyword search and an embedding search because each finds what the other misses, merge their rankings by position rather than by score, then let a slower model that reads the question and each candidate together reorder a short list, and measure every stage on your own labelled questions.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>An analyst at a Gulf bank types into the policy assistant: <em>"What is the daily ATM cash limit on a Platinum card?"</em> The answer sits in three places. One is a clear page titled "Platinum: daily cash limit". One is a paragraph that says "the maximum you can take out of a cash machine per day is AED 20,000" and never uses the words ATM or limit. The third is a tariff table, "FS-2207", where the only match is the exact product name and a number.</p>
+        <p>A <strong>keyword search</strong> (BM25, M3.1) finds the first and the third, because the words are there. It misses the paragraph with different words. An <strong>embedding search</strong> (M1 and F1.1) finds the first and the paraphrase, because it matches meaning. It can miss the table, which is a grid of numbers with little meaning to embed, and it can also drift to generic "card limits" pages. Neither list is complete. Together they are.</p>
+        <p>That gives two problems, and this lesson is the answer to both.</p>
+        <ul>
+          <li><strong>How do you merge two lists?</strong> BM25 gives scores like 14.2. An embedding search gives cosine similarities like 0.72. The numbers are on different scales and mean different things. <em>Reciprocal rank fusion</em> (RRF) sidesteps the problem by ignoring scores and using only each document's position in each list.</li>
+          <li><strong>How do you get the best five to the top?</strong> Both first-stage searches are fast because they never read the question and the document together. They compare a query to precomputed summaries of documents. A <em>cross-encoder reranker</em> reads the query and one candidate together, which is far more accurate and far too slow to run over everything. So you use it only on the 20–100 candidates that fusion produced.</li>
+        </ul>
+        <p>The shape is a funnel: cheap and broad first, expensive and sharp last. Search engineers have used it for decades. Recommender systems use it too (F9.5). In a RAG system it decides which five passages the language model gets to read, which is the largest influence on whether the answer is right.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Retrieval has two jobs that pull in opposite directions. <b>Recall</b>: make sure the right passage is somewhere in the candidate list. <b>Precision at the top</b>: make sure it is in the first few. Hybrid search and fusion buy recall. Reranking buys precision. Confusing the two is the most common reason teams tune the wrong stage.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-why">Why one retriever is not enough</h3>
+      <div class="prose">
+        <p>The two first-stage retrievers fail on different kinds of question. That difference is the entire case for combining them.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Kind of query</th><th>Keyword (BM25)</th><th>Embeddings (dense)</th></tr></thead>
+          <tbody>
+            <tr><td>Exact identifiers: "FS-2207", an IBAN prefix, a circular number, a person's name</td><td><b>Strong.</b> The token is rare, so it carries a lot of weight.</td><td>Weak. The embedding model may have never seen the string and maps it to something vaguely similar.</td></tr>
+            <tr><td>Paraphrase: "cash machine" for "ATM", "take out" for "withdraw"</td><td>Weak. No shared word, no score.</td><td><b>Strong.</b> Similar meaning, nearby vectors.</td></tr>
+            <tr><td>Arabic question over English policy, or the reverse</td><td>Very weak. No shared tokens at all.</td><td><b>Strong</b> with a multilingual model. Weaker on dialect and on transliterated names.</td></tr>
+            <tr><td>Rare domain terms and acronyms (a regulator's term, an internal system name)</td><td>Strong if spelled the same way.</td><td>Varies. Depends on whether the term appeared in the model's training data.</td></tr>
+            <tr><td>Long, vague, conceptual questions</td><td>Matches common words and returns noise.</td><td><b>Strong</b> at topic, weaker at precise conditions.</td></tr>
+            <tr><td>Negation and conditions: "who is <em>not</em> eligible", "after 60 days"</td><td>Ignores the negation. "Eligible" matches.</td><td>Also weak. "Eligible" and "not eligible" have close embeddings.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The last row matters for what follows: <strong>neither first-stage retriever handles negation and conditions well</strong>, because both compare a query with a document that was summarised without knowing the query. That is the gap the reranker closes. BEIR, a benchmark of 18 datasets across many domains, found that plain BM25 is a hard baseline to beat zero-shot and that dense models can fall below it on out-of-domain text (Thakur et al., 2021). That is why serious systems keep both.</p>
+      </div>
+
+      <h3 class="sub" id="m-rrf">Reciprocal rank fusion</h3>
+      <div class="prose">
+        <p>You now have two ranked lists. The obvious move is to add the scores. The trouble: a BM25 score is unbounded and depends on the query length and the corpus; a cosine similarity sits in a narrow band; neither is comparable between queries. You would need to normalise, and the normalisation is fragile (Simulation 2). RRF avoids it by keeping only the <em>rank</em>:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>score</mtext><mo stretchy="false">(</mo><mi>d</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mrow><mi>r</mi><mo>∈</mo><mtext>lists</mtext></mrow></munder><mfrac><msub><mi>w</mi><mi>r</mi></msub><mrow><mi>k</mi><mo>+</mo><msub><mtext>rank</mtext><mi>r</mi></msub><mo stretchy="false">(</mo><mi>d</mi><mo stretchy="false">)</mo></mrow></mfrac></math>
+        <p class="where">Each list gives a document a vote worth <i>w</i> ÷ (<i>k</i> + rank). A document absent from a list gets no vote from it. The usual <i>w</i> is 1 and the usual <i>k</i> is 60, from Cormack et al. (2009). Example: rank 1 in one list and rank 5 in the other: 1/61 + 1/65 = 0.0164 + 0.0154 = <strong>0.0318</strong>.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>What the constant <i>k</i> does is the part most people miss. With <i>k</i> = 0, rank 1 is worth 1, rank 2 is worth 0.5, rank 3 is worth 0.33: the top spot dominates. With <i>k</i> = 60, rank 1 is worth 0.0164 and rank 10 is worth 0.0143: nearly flat. A large <i>k</i> turns RRF into a <strong>consensus vote</strong>: a document in both lists at any decent rank beats a document that is first in only one. A small <i>k</i> lets one retriever's confident top pick through. Neither is "right". The point of the simulation is to feel the trade.</p>
+        <pre><code>def rrf(rankings, k=60, weights=None):
+    """rankings: list of ordered lists of doc ids, best first."""
+    scores = {}
+    for w, ranking in zip(weights or [1] * len(rankings), rankings):
+        for rank, doc in enumerate(ranking, start=1):
+            scores[doc] = scores.get(doc, 0) + w / (k + rank)
+    return sorted(scores, key=scores.get, reverse=True)</code></pre>
+      </div>
+
+      <figure class="figure" id="fig-rrf">
+        <div class="fig-head"><span class="fig-title">Two lists in, one list out</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> three documents answer the question (marked ✓). Keyword search finds two of them in its top 8, semantic search finds two, but not the same two. At <i>k</i> = 60 the fused top 8 holds all three, but the top three holds only one, because documents in both lists crowd it. Lower <i>k</i> to 1 and the confident single-list answers jump up. Then drag the balance to give one side more weight.</p>
+        <div class="chart-wrap" id="rrf-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral)"></i>Vote from the keyword list</span>
+          <span><i class="sq" style="background:var(--accent)"></i>Vote from the semantic list</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s1-k">Rank constant k <output for="s1-k"></output></label><input type="range" id="s1-k" min="0" max="100" step="1" value="60"></div>
+          <div class="ctl"><label for="s1-a">Weight keyword / semantic <output for="s1-a"></output></label><input type="range" id="s1-a" min="0" max="2" step="0.1" value="1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Keyword alone</div><div class="v" id="s1-kw"></div><div class="s">answers in top 3 · in top 8</div></div>
+          <div class="stat"><div class="k">Semantic alone</div><div class="v" id="s1-dn"></div><div class="s">answers in top 3 · in top 8</div></div>
+          <div class="stat" id="s1-fb"><div class="k">Fused</div><div class="v" id="s1-fu"></div><div class="s">answers in top 3 · in top 8</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: ten policy documents and two hand-built ranked lists (keyword finds six, semantic finds eight; two documents appear in only one list as their only answer). Three documents are marked as true answers. Scores are the exact RRF formula with the weights and k you choose. A real corpus has thousands of documents and lists of 50–100; the mechanism is the same.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to take from it.</p>
+        <ul>
+          <li><strong>Fusion is mostly a recall tool.</strong> Its best property is that the union of two lists contains answers neither found alone. Do not expect the fused top three to be perfect. Expect the fused top 30 to be good, and plan a reranker to sort it out.</li>
+          <li><strong>RRF is a sensible default, not an optimum.</strong> It needs no training data and no tuning, which is why search engines ship it. If you have a few hundred labelled queries, a tuned weighted combination of normalised scores can beat it (Bruch et al., 2023). Using the ranks throws away how <em>confident</em> each retriever was. A rank-1 with a huge margin and a rank-1 by a hair get the same vote.</li>
+          <li><strong>You can add more than two lists.</strong> A title search, a dense search on a summary and a dense search on the body are three votes. Multi-query RAG (M3.7) fuses the lists from several rewrites of the same question the same way.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-score">
+        <div class="fig-head"><span class="fig-title">Why not just add the scores?</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> start at the left. Both methods agree: document D1 first. Now drag the slider right. One document (D3, a page that repeats a rare term many times) gets a huge BM25 score. Min-max normalising squashes every other keyword score towards zero, so the keyword side stops contributing, and D3 and the semantic side decide everything. RRF only sees that D3 moved from third to first in one list.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s2-b">BM25 raw score of D3 <output for="s2-b"></output></label><input type="range" id="s2-b" min="12.4" max="120" step="0.2" value="12.4"></div>
+        </div>
+        <div class="twocol" id="s2-cols"></div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: the same ten documents, now with invented raw scores (BM25 between 6.9 and 14.2, cosine between 0.49 and 0.74). Score fusion is min-max scaling inside each list, absent documents scoring 0, then the average. RRF uses k = 60 on ranks derived from the same scores. A tuned score blend with a better normaliser would resist this outlier more; the point is that rank fusion needs no such care.</p>
+      </figure>
+
+      <div class="prose">
+        <p>In practice you rarely write this yourself. Elasticsearch, Azure AI Search, Qdrant and several other engines run both searches and fuse with RRF as a built-in option. What you control is <i>k</i>, the weights, how many results each side contributes (50–100 is typical), and any filters (language, entity, date, access rights) applied <em>before</em> the search so that restricted documents never enter either list.</p>
+      </div>
+
+      <h3 class="sub" id="m-cross">Bi-encoders, cross-encoders and why the second is better but slower</h3>
+      <div class="prose">
+        <p>Both kinds of model read text and output a relevance judgement. They differ in <em>when the query and the document meet</em>.</p>
+        <p>A <strong>bi-encoder</strong> is the embedding model of M3's dense search. It encodes the query into a vector and encodes each document into a vector separately, ahead of time. Relevance is a dot product of two vectors. Because documents never see the query, their vectors can be computed once, stored and searched in milliseconds across millions of passages. The price: a single vector must summarise everything in a passage that any future question might ask about, and it cannot know which part matters for <em>this</em> question.</p>
+        <p>A <strong>cross-encoder</strong> takes the query and one passage concatenated into a single input, <code>[CLS] query [SEP] passage [SEP]</code>, and runs the whole transformer over the pair. Attention (F5.5) lets every query word look at every passage word. It can see that "not" attaches to "eligible", that "60 days" in the question matches "within 60 days" but contradicts "after 120 days" in the passage. It outputs one relevance number. Nogueira and Cho (2019) showed that this simple setup fine-tuned on a passage-ranking dataset sharply improved ranking quality over the strongest first stage of the time.</p>
+        <p>The cost is the whole point. Nothing can be precomputed, so one query means one forward pass <em>per candidate</em>. Scoring 50 candidates of 300 tokens each pushes 15,000 tokens through the model for a single question, against a few dozen for the bi-encoder query. Scoring a corpus of a million passages this way per query is out of the question. Hence the funnel.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Model type</th><th>Query meets document</th><th>Precompute documents?</th><th>Typical role</th></tr></thead>
+          <tbody>
+            <tr><td><b>BM25</b></td><td>Never; compares word statistics</td><td>Yes (inverted index)</td><td>First stage. Exact terms.</td></tr>
+            <tr><td><b>Bi-encoder</b></td><td>At the end, as one dot product</td><td>Yes (vector per passage)</td><td>First stage. Meaning.</td></tr>
+            <tr><td><b>Late interaction</b> (ColBERT)</td><td>At the end, but over many token vectors per passage (MaxSim)</td><td>Yes, but 50–200 vectors per passage</td><td>First stage or second; much more storage (Khattab &amp; Zaharia, 2020).</td></tr>
+            <tr><td><b>Cross-encoder</b></td><td>From the first layer; full attention across both</td><td>No</td><td>Reranker for 20–100 candidates.</td></tr>
+            <tr><td><b>LLM as reranker</b></td><td>Same, with a general-purpose model, often seeing the whole candidate list at once</td><td>No</td><td>Highest quality and cost; slower and harder to keep stable (Sun et al., 2023).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <pre><code>from sentence_transformers import CrossEncoder
+
+reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")   # multilingual, includes Arabic
+pairs  = [(query, chunk.text) for chunk in candidates]   # e.g. 50 from the fused list
+scores = reranker.predict(pairs)                     # one number per pair
+top5   = [c for _, c in sorted(zip(scores, candidates), key=lambda t: -t[0])][:5]</code></pre>
+        <p>A cross-encoder is trained on triples of (query, relevant passage, non-relevant passage), usually with a ranking loss so that relevant scores above non-relevant. The hard part is the non-relevant examples: ones that are retrieved by a first stage and look plausible. Those "hard negatives" are exactly what the reranker will face in production, which is also why fine-tuning on your own bank's documents and queries can help far more than swapping to a bigger generic model.</p>
+      </div>
+
+      <h3 class="sub" id="m-funnel">The funnel: how deep to rerank, and what it costs</h3>
+      <div class="prose">
+        <p>Every RAG team faces one design choice: how many candidates <em>N</em> to send to the reranker. The trade-off is simple to state and easy to get wrong.</p>
+        <ul>
+          <li><strong>Too small an <i>N</i>:</strong> the right passage was not in the list. The reranker cannot promote what it never sees. The first stage's recall at <i>N</i> is a hard ceiling.</li>
+          <li><strong>Too large an <i>N</i>:</strong> latency grows linearly, cost grows, and you give the reranker more plausible-looking wrong passages to be fooled by. Past a point the final quality is flat or slightly worse.</li>
+        </ul>
+        <p>So you find the knee. Plot recall of the candidate list against <i>N</i>, plot final top-5 quality against <i>N</i>, and pick the smallest <i>N</i> where both have flattened. The simulation builds that picture.</p>
+      </div>
+
+      <figure class="figure" id="fig-funnel">
+        <div class="fig-head"><span class="fig-title">The reranking funnel</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> at 50 candidates the reranked top 5 (green) sits far above the first-stage-only line (grey dotted). Push the candidates down to 5 and the reranker has nothing to reorder; push them to 1,000 and quality creeps up only a few points while latency passes half a second. Then weaken the first stage and watch the ceiling (dashed) fall: a reranker cannot fix a candidate list that missed the answer. Finally weaken the reranker.</p>
+        <div class="chart-wrap" id="fun-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>Answer is somewhere in the candidates (ceiling)</span>
+          <span><i style="background:var(--accent)"></i>Answer in final top 5 after reranking</span>
+          <span><i style="background:var(--neutral)"></i>Answer in top 5 with no reranking</span>
+          <span><i style="background:var(--warn)"></i>Your candidate count</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s3-n">Candidates sent to the reranker <output for="s3-n"></output></label><input type="range" id="s3-n" min="0.7" max="3" step="0.02" value="1.7"></div>
+          <div class="ctl"><label for="s3-m1">First-stage quality <output for="s3-m1"></output></label><input type="range" id="s3-m1" min="1.8" max="4" step="0.1" value="2.8"></div>
+          <div class="ctl"><label for="s3-m2">Reranker quality <output for="s3-m2"></output></label><input type="range" id="s3-m2" min="1" max="6" step="0.1" value="4"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">No reranking</div><div class="v" id="s3-first"></div><div class="s">questions with the answer in the top 5</div></div>
+          <div class="stat" id="s3-cb"><div class="k">Candidates contain the answer</div><div class="v" id="s3-cand"></div><div class="s">the ceiling at this depth</div></div>
+          <div class="stat" id="s3-fb"><div class="k">After reranking</div><div class="v" id="s3-fin"></div><div class="s" id="s3-fin-s"></div></div>
+          <div class="stat" id="s3-lb"><div class="k">Added latency</div><div class="v" id="s3-lat"></div><div class="s">assumed 30 ms + 0.5 ms per candidate</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated (seeded, so the picture is stable): 300 questions, each with one relevant passage among 2,000 others. Each passage gets a first-stage score and a reranker score that are partly correlated for wrong passages (correlation 0.4, so the ones the first stage likes are harder for the reranker too). The relevant passage's scores are shifted up by the "quality" you set. The latency model is an assumption, not a measurement; real latency depends on hardware, batching and passage length. Results are Monte Carlo over 300 questions, so read differences below about 3 points as noise.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Details that decide whether the funnel works in production.</p>
+        <ul>
+          <li><strong>Truncation.</strong> Rerankers have a maximum input length (often 512 tokens, some models far more). A long chunk is cut, and if the cut falls before the relevant sentence, the score is wrong. Chunk size (M3.5) and reranker window must be designed together.</li>
+          <li><strong>Scores are not comparable across queries.</strong> A cross-encoder's raw output is a ranking signal. A score of 3.1 on one question and 3.1 on another does not mean the same confidence. Use it to sort, and be careful if you try to use it as a cut-off for "no good answer found". Calibrate it on labelled queries first (F7.4).</li>
+          <li><strong>What the language model sees.</strong> After reranking you keep the top 3–8, not all 50. More passages cost tokens and dilute the prompt; models also use information in the middle of a long context less reliably than at the ends (Liu et al., 2023; M1.5). A good reranker lets you send fewer, better passages.</li>
+          <li><strong>Where to fuse the reranker with other signals.</strong> RRF discards score magnitudes, so fusing a reranker's score into it throws away the thing the reranker is good at. The common pattern is: fuse the first-stage lists with RRF to build candidates, then sort <em>only</em> by the reranker score, optionally blended with recency or authority features.</li>
+          <li><strong>Measure the stages separately.</strong> For each labelled question record the rank of the correct passage after each stage. Candidate recall at <i>N</i> tells you whether the first stage is the bottleneck. MRR and nDCG at 5 (F9.5) tell you about the reranker. Without labels, you are tuning by anecdote.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson is the middle of the RAG pipeline. What comes before decides what the two searches can find; what comes after decides what the model does with the survivors.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M3.1 · M3.2 · Keyword search and BM25</span><span class="t"><a href="m3-keyword-search-and-bm25.html">The first half of "hybrid"</a></span><p>BM25's strengths and blind spots are what make fusion worthwhile. Knowing how IDF rewards rare terms explains the outlier in Simulation 2.</p></div>
+        <div class="link-card"><span class="code">F1.1 · F5.5 · F5.7 · Vectors, attention, contrastive learning</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Where bi-encoders and cross-encoders come from</a></span><p>A bi-encoder is a vector space trained <a href="f5-self-supervised-and-contrastive-learning.html">contrastively</a>. A cross-encoder is the <a href="f5-attention.html">attention</a> mechanism applied across a query and a passage.</p></div>
+        <div class="link-card"><span class="code">M3.5 · M3.6 · Chunking</span><span class="t"><a href="m3-chunking-strategies.html">What the lists contain</a></span><p>Both searches rank chunks, not documents. Chunk size changes BM25 scores, embedding quality and whether the answer fits the reranker's window.</p></div>
+        <div class="link-card"><span class="code">M3.7 · M3.8 · Query rewriting</span><span class="t"><a href="m3-query-rewriting-hyde-and-multi.html">More lists to fuse</a></span><p>Multi-query retrieval produces several ranked lists for one question. RRF is how they are merged, which is why it appears in almost every such system.</p></div>
+        <div class="link-card"><span class="code">M3.9 · M3.10 · Parsing PDFs</span><span class="t"><a href="m3-parsing-messy-pdfs-and-scans.html">Garbage in, garbage ranked</a></span><p>A table flattened into jumbled text defeats both searches and the reranker. Retrieval quality is capped by parsing quality.</p></div>
+        <div class="link-card"><span class="code">F9.5 · Recommenders and ranking</span><span class="t"><a href="f9-recommender-systems-and-ranking.html">The same two-stage design</a></span><p>Candidate generation then a heavier ranking model is the standard pattern for feeds and recommendations too. The ranking metrics (nDCG, MRR) are shared.</p></div>
+        <div class="link-card"><span class="code">M1.5 · M2.5 · Context and cost</span><span class="t"><a href="m1-context-windows-and-the-kv.html">Fewer, better passages</a></span><p>Reranking lets you cut the prompt from twenty passages to five. That saves tokens and latency (<a href="m2-model-choice-cost-and-latency.html">M2.5</a>), and often improves the answer.</p></div>
+        <div class="link-card"><span class="code">A6.1 · A6.3 · Visual and agentic retrieval</span><span class="t"><a href="a6-agentic-rag.html">Where it goes next</a></span><p><a href="a6-search-over-document-images-colpali.html">ColPali</a> brings late interaction to page images; <a href="a6-agentic-rag.html">agentic RAG</a> lets a model decide to search again when the first results are poor.</p></div>
+        <div class="link-card"><span class="code">A4.3 · Groundedness</span><span class="t"><a href="a4-hallucination-detection-and-groundedness.html">Why retrieval errors become hallucinations</a></span><p>If the right passage is not retrieved, the model answers from memory or from a near-miss. Many "hallucinations" are retrieval failures in disguise.</p></div>
+        <div class="link-card"><span class="code">B2.3 · B2.4 · Sanctions and name matching</span><span class="t"><a href="b2-sanctions-screening-and-name-matching.html">Exact plus fuzzy plus verify</a></span><p>Name screening has the same shape: a cheap, wide candidate generation (phonetic, n-gram, embedding), then a more careful scoring pass on the survivors.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Internal policy and procedures assistant</strong> (<a href="b7-internal-copilots-for-staff.html">B7.3</a>). Staff ask in English or Arabic; documents are in both. Exact circular numbers, product codes and clause references favour keyword search. Paraphrase and cross-language favour embeddings. This is the textbook case for hybrid.</li>
+          <li><strong>Credit memos and trade documents.</strong> Clause lookups ("cross-default", a letter of credit number) need exact matches; conceptual questions ("what covenants apply to this borrower") need meaning.</li>
+          <li><strong>Regulatory and compliance search.</strong> Finding which CBUAE or SAMA requirement applies. Precision at the top matters because a wrong clause is worse than none; reranking is where precision comes from. Treat any regulatory text you index as versioned and dated, and show the source and date to the user.</li>
+          <li><strong>Contact-centre agent assist.</strong> A customer's description is conversational, in mixed dialect Arabic and English. Retrieval must be both robust and fast, so the reranker depth is a latency decision measured in milliseconds.</li>
+          <li><strong>Complaint and case similarity.</strong> "Find past cases like this" is dense retrieval; "find cases mentioning this merchant or account number" is keyword. Analysts want both.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The architecture is settled: hybrid first stage, rank fusion, a reranker on a short list. Live questions are how much a general reranker adds against a fine-tuned one, whether an LLM should be the reranker, how to rerank across Arabic and English, and how much of this an "agentic" loop makes unnecessary.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with one search; entries from before 2025 are from my own knowledge of the literature and are flagged in the sources. Verify before quoting numbers.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2009</span><div><div class="t">Reciprocal rank fusion</div><p>Cormack, Clarke and Buettcher showed that this one-line method, with k = 60, beat more elaborate rank-combination and learning-to-rank approaches on TREC data. It has been the default ever since.</p><div class="src">Cormack et al., SIGIR 2009</div></div></li>
+        <li><span class="yr">2019</span><div><div class="t">BERT as a reranker</div><p>Feeding the query and passage together into BERT and fine-tuning on MS MARCO gave a large jump in passage-ranking quality. This is the cross-encoder reranker. Sentence-BERT the same year gave the practical bi-encoder.</p><div class="src">Nogueira &amp; Cho, arXiv 1901.04085; Reimers &amp; Gurevych, EMNLP 2019</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">ColBERT and sequence-to-sequence rerankers</div><p>Late interaction kept per-token vectors to get near-cross-encoder accuracy with precomputed documents. monoT5 used a text-to-text model to emit "true" or "false" for relevance.</p><div class="src">Khattab &amp; Zaharia, SIGIR 2020; Nogueira et al., arXiv 2003.06713</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">BEIR: BM25 is hard to beat out of domain</div><p>Eighteen heterogeneous datasets showed that dense retrievers trained on one domain often fall below BM25 on another, while rerankers and late-interaction models were the most robust on average.</p><div class="src">Thakur et al., NeurIPS Datasets and Benchmarks 2021</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Tuned fusion, and LLMs as listwise rerankers</div><p>Bruch and colleagues analysed fusion functions and found that a convex combination of normalised scores can beat RRF when a little in-domain tuning data exists, while RRF is more robust without it. RankGPT showed that a large general model, asked to reorder a window of passages, can match or beat supervised rerankers.</p><div class="src">Bruch et al., ACM TOIS 2023; Sun et al., EMNLP 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Multilingual and multi-granularity embedding plus reranker families</div><p>BGE-M3 produced dense, sparse and multi-vector scores from one multilingual model; companion rerankers (bge-reranker-v2-m3) and commercial rerank APIs cover Arabic and English. Anthropic's Contextual Retrieval write-up reported that adding BM25 to contextual embeddings, then a reranker, cut the top-20 retrieval failure rate from 5.7% to 1.9% on its test sets.</p><div class="src">Chen et al., arXiv 2402.03216; Anthropic, September 2024 (vendor-reported, internal datasets)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Financial-QA benchmarking of ten retrieval strategies</div><p>A benchmark of 23,088 queries over 7,318 documents compared pipelines from BM25 up to corrective RAG. Adding a Cohere reranker to hybrid RRF retrieval lifted Recall@5 from 0.695 to 0.816 and MRR@3 from 0.433 to 0.605, and the authors identified reranking as the most impactful single component. One dataset and one domain, so treat the size of the gain as an example, not a constant.</p><div class="src">arXiv 2604.01733, 2026 (preprint)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is for a bank building search:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>BM25 plus dense retrieval with RRF</b></td><td>Both searches run on every query, 50–100 results each, fused with k around 60. Built into most search engines and vector databases.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Cross-encoder reranking of the top 20–100</b></td><td>Open models (BGE, similar) or a hosted rerank API; the largest typical quality gain per unit of effort.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Metadata filtering before search</b></td><td>Language, entity, document type, validity date and access rights narrow the corpus first.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Tuned score fusion with a labelled set</b></td><td>Learn weights or a normaliser on a few hundred queries instead of default RRF.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Fine-tuned in-house reranker</b></td><td>Trained on the bank's own question-passage pairs and hard negatives, often from synthetic questions plus analyst feedback.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>LLM listwise reranking</b></td><td>A general model reorders a window of passages. Strong quality; latency, cost and run-to-run variation are the limits.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Late interaction (ColBERT-style) at scale</b></td><td>Per-token vectors. Strong accuracy; storage and index complexity hold it back in enterprise stacks.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Learned sparse retrieval (SPLADE-style) replacing BM25</b></td><td>A model expands the query and document with weighted related terms inside an inverted index.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Hybrid retrieval with rank fusion to get recall, a reranker on a short list to get precision at the top, and your own labelled questions to decide every setting. Anything fancier must beat that baseline on your documents.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in real RAG projects and in AI-generated designs. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Tuning the generator when retrieval is the problem</div><p>The answers are wrong, so someone rewrites the prompt or swaps the model. The right passage was never in the context.</p><div class="spot"><b>Spot it</b>For 50 failed answers, check by hand whether the correct passage was in the retrieved set. If it was missing in most, fix retrieval first.</div></li>
+        <li><div class="t">Reranking a candidate list that misses the answer</div><p>The team adds an expensive reranker and sees little gain. The first stage returned the wrong 20.</p><div class="spot"><b>Spot it</b>Measure recall at <i>N</i> before the reranker. If it is below about 90% at your depth, widen the first stage, add the hybrid, fix chunking or filters.</div></li>
+        <li><div class="t">Adding scores from different scales</div><p>BM25 plus cosine, un-normalised, so one signal silently dominates. Or min-max normalising with an outlier in the list.</p><div class="spot"><b>Spot it</b>Print the fused top results with each side's contribution. If one side is nearly always the winner, the scales are off. Switch to RRF or normalise robustly.</div></li>
+        <li><div class="t">Believing the default k = 60 is correct</div><p>A constant from 2009 lists, tuned on different data. It favours consensus and buries confident single-list hits.</p><div class="spot"><b>Spot it</b>Look at queries where the right answer is found by only one retriever. Sweep <i>k</i> and the weights on a labelled set before hard-coding.</div></li>
+        <li><div class="t">Truncated passages hiding the answer</div><p>The reranker reads only the first 512 tokens of a long chunk. The relevant sentence is at token 700 and the passage scores low.</p><div class="spot"><b>Spot it</b>Check the reranker's maximum length against your chunk length. Test with the answer sentence moved to the end of the chunk.</div></li>
+        <li><div class="t">Using the reranker score as a confidence or a cut-off</div><p>"Answer only if the score is above 0.5" with an uncalibrated model. It works for some questions and refuses others at random.</p><div class="spot"><b>Spot it</b>Plot the score distribution for questions with known answers and known no-answer questions. Pick the threshold from that plot, and re-check after any model change.</div></li>
+        <li><div class="t">Judging by a few impressive demos</div><p>Five hand-picked questions work, the project goes live, and the long tail of real questions does not.</p><div class="spot"><b>Spot it</b>Ask for the number of labelled questions, how they were chosen, and results by question type (identifier, paraphrase, Arabic, negation). A few hundred is a sensible start.</div></li>
+        <li><div class="t">Permissions applied after retrieval</div><p>The search ranks documents the user may not see, then the application hides them. Best passage gone, or worse, leaked into a prompt.</p><div class="spot"><b>Spot it</b>Check that access filters run inside the search query, before ranking, and that a hosted reranker or embedding service never receives restricted text it should not.</div></li>
+        <li><div class="t">Stale or duplicated versions outranking the current one</div><p>Three versions of the same policy; the old one has more keyword overlap and wins.</p><div class="spot"><b>Spot it</b>Search for a policy known to have changed. Check that effective-date filters or metadata prefer the current version and that duplicates are removed before fusion.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Staff questions come in two kinds. Some quote an exact circular or product code; some describe what they want in their own words, in Arabic or English. One search method is good at each, so we run both and merge the results. Then a second, slower model reads the best fifty candidates properly and picks the five that go to the assistant. That second step is usually where the answer quality improves most. We'll check it on a set of a few hundred real questions, and I'd show you the results by question type rather than three good demos.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“BM25 and a multilingual dense retriever each return their top 50 after access and date filters, fused with reciprocal rank fusion, then a cross-encoder reranks the top 50 to a final five. I'd tune <i>k</i> and the weights, the candidate depth and the chunk size on a labelled query set, reporting recall at <i>N</i> for the first stage and MRR and nDCG at 5 for the reranker, split by query type including Arabic and identifiers. I'd compare against BM25 alone and dense alone, and consider tuned score fusion or a fine-tuned reranker only if they beat that with intervals.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just use a vector database? Isn't that the modern way?”</summary><div class="ans"><p>Embeddings handle paraphrase and cross-language, but they are unreliable on exact identifiers, rare terms and numbers, and on out-of-domain text can lose to BM25 (BEIR). Policy and compliance text is full of exact references. Hybrid costs one extra index and a small fusion step. I'd start with both and let our evaluation set show whether either side is dead weight.</p></div></details>
+        <details class="reveal"><summary>“Why not add the BM25 and similarity scores together?”</summary><div class="ans"><p>They are on different, unbounded scales that vary by query, so one side tends to swamp the other, and normalising is sensitive to outliers. RRF uses only ranks, needs no tuning data and is stable. The downside is it ignores confidence. If we have labelled queries, a tuned weighted score blend can do better, so I'd test it as an upgrade.</p></div></details>
+        <details class="reveal"><summary>“What does the reranker actually do that the embedding search doesn't?”</summary><div class="ans"><p>The embedding search compares a query vector to precomputed passage vectors, so a passage is summarised without knowing the question. A cross-encoder reads the question and the passage together, so it can handle conditions, negation and specifics. It is too slow for the whole corpus, so it only reorders the best few dozen candidates.</p></div></details>
+        <details class="reveal"><summary>“Can't we just give the language model 30 passages and let it sort it out?”</summary><div class="ans"><p>Sometimes, and for low-stakes cases it may be enough. But it costs tokens on every call, adds latency, and long contexts dilute attention: facts in the middle are used less reliably. A reranker is cheaper per query than a larger prompt and gives us a measurable retrieval stage we can test and audit separately.</p></div></details>
+        <details class="reveal"><summary>“How many candidates should we rerank?”</summary><div class="ans"><p>The smallest number at which first-stage recall has flattened, typically 20–100. I'd measure recall at several depths on our labelled questions, plot final quality against depth, and pick the knee, subject to the latency budget. Past that point cost rises and quality does not.</p></div></details>
+        <details class="reveal"><summary>“Can we send documents to a hosted rerank API?”</summary><div class="ans"><p>That is a data-governance question before a technical one. It depends on the classification of the text, where the service processes it, contractual terms and the bank's own policy and regulator expectations, which I'd confirm with security, legal and compliance rather than assume. If it is not allowed, open rerankers can run in our own environment, and the quality gap is often smaller than people expect.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. With k = 60, a document is ranked 2nd by BM25 and 7th by the dense search. What is its RRF score?</summary><div class="ans"><p>1/62 + 1/67 = 0.01613 + 0.01493 = <strong>0.0311</strong>. Both retrievers contribute. A single first place in only one list would score 1/61 = 0.0164, about half as much.</p></div></details>
+        <details class="reveal"><summary>2. Document A is first in the keyword list only. Document B is 10th in both lists. Which wins at k = 60? At k = 1?</summary><div class="ans"><p>At k = 60: A = 1/61 = 0.0164; B = 2/70 = 0.0286. B wins, consensus beats a lone first place. At k = 1: A = 1/2 = 0.5; B = 2/11 = 0.18. A wins. Small k rewards top positions, large k rewards agreement.</p></div></details>
+        <details class="reveal"><summary>3. Why does RRF need no normalisation of BM25 and cosine scores?</summary><div class="ans"><p>It uses positions, not values. The best document gets rank 1 whether its score is 14.2 or 0.74. The cost is that it ignores how far ahead the leader was.</p></div></details>
+        <details class="reveal"><summary>4. A cross-encoder scores 100 chunks of 400 tokens each, per question. Roughly how many tokens go through the model, and what does that say about reranking a corpus?</summary><div class="ans"><p>About 100 × 400 = 40,000 tokens plus the repeated question, per query. A corpus of a million chunks would need 400 million tokens per query, so cross-encoders cannot be the first stage. That is why they only reorder a short list.</p></div></details>
+        <details class="reveal"><summary>5. Your reranker upgrade made almost no difference. Candidate recall at 50 is 62%. What is wrong and what do you do?</summary><div class="ans"><p>The ceiling. If the answer is in the candidate list only 62% of the time, the best the reranker can do is 62%. Improve the first stage: add the missing retriever, fix chunking or parsing, apply query rewriting, widen the lists. Then re-test the reranker.</p></div></details>
+        <details class="reveal"><summary>6. A user asks "which customers are not eligible for the fee waiver?" Why might both first-stage searches rank the "eligible customers" page first, and what fixes it?</summary><div class="ans"><p>BM25 matches "eligible" and ignores the "not"; the embedding of "not eligible" is close to "eligible". Neither reads the question against the page together. A cross-encoder (or a good LLM reranker) can, so the page about exclusions rises. Also check that the exclusions are in a chunk that is retrieved at all.</p></div></details>
+        <details class="reveal"><summary>7. You fuse a cross-encoder score into the RRF with the other lists. Why is that usually a poor design?</summary><div class="ans"><p>RRF only sees the reranker's rank, so you throw away its scores and combine its sharp judgement with the weaker first-stage votes. The cleaner pattern is: RRF to build the candidate list, then sort by the reranker (optionally blended with a few business features).</p></div></details>
+        <details class="reveal"><summary>8. Name three measurements you need to tune this pipeline properly.</summary><div class="ans"><p>First-stage recall at several candidate depths; reranked quality (MRR or nDCG at 5, or the share of questions with the answer in the final five); and end-to-end answer correctness, all on a labelled question set split by query type, plus latency at each depth. Compare against BM25-only and dense-only baselines.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>G. Cormack, C. Clarke, S. Buettcher. <a href="https://doi.org/10.1145/1571941.1572114">Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods</a>. SIGIR, 2009.</li>
+        <li>R. Nogueira, K. Cho. <a href="https://arxiv.org/abs/1901.04085">Passage Re-ranking with BERT</a>. arXiv, 2019.</li>
+        <li>N. Reimers, I. Gurevych. <a href="https://arxiv.org/abs/1908.10084">Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks</a>. EMNLP, 2019.</li>
+        <li>O. Khattab, M. Zaharia. <a href="https://arxiv.org/abs/2004.12832">ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT</a>. SIGIR, 2020.</li>
+        <li>R. Nogueira, Z. Jiang, J. Lin. <a href="https://arxiv.org/abs/2003.06713">Document Ranking with a Pretrained Sequence-to-Sequence Model</a>. Findings of EMNLP, 2020.</li>
+        <li>N. Thakur et al. <a href="https://arxiv.org/abs/2104.08663">BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models</a>. NeurIPS Datasets and Benchmarks, 2021.</li>
+        <li>S. Bruch, S. Gai, A. Ingber. <a href="https://arxiv.org/abs/2210.11934">An Analysis of Fusion Functions for Hybrid Retrieval</a>. ACM TOIS, 2023.</li>
+        <li>W. Sun et al. <a href="https://arxiv.org/abs/2304.09542">Is ChatGPT Good at Search? Investigating Large Language Models as Re-Ranking Agents</a>. EMNLP, 2023.</li>
+        <li>N. Liu et al. <a href="https://arxiv.org/abs/2307.03172">Lost in the Middle: How Language Models Use Long Contexts</a>. TACL, 2024.</li>
+        <li>J. Chen et al. <a href="https://arxiv.org/abs/2402.03216">BGE M3-Embedding: Multi-Lingual, Multi-Functionality, Multi-Granularity Text Embeddings</a>. arXiv, 2024.</li>
+        <li>Anthropic. <a href="https://www.anthropic.com/news/contextual-retrieval">Introducing Contextual Retrieval</a>. September 2024. Vendor-reported results on internal datasets.</li>
+        <li><a href="https://arxiv.org/abs/2604.01733">From BM25 to Corrective RAG: Benchmarking Retrieval Strategies</a>. arXiv 2604.01733, 2026 (preprint). Financial QA benchmark.</li>
+        <li><a href="https://www.sbert.net/docs/cross_encoder/usage/usage.html">Sentence Transformers documentation: cross-encoders</a>. Practical reference for the reranker code pattern.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in M3: Chunking strategies (M3.5, M3.6)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // Shared toy corpus
+  const NAME = {
+    D1: "Platinum: daily cash limit", D2: "Card limits, all tiers", D3: "Platinum benefits, lounges",
+    D4: "Max cash per day (paraphrase)", D5: "ATM fees abroad", D6: "Platinum Plus credit limit",
+    D7: "Tariff FS-2207 (table)", D8: "Online daily transfer limit", D9: "ATM PIN reset", D10: "Platinum annual fee waiver"
+  };
+  const REL = new Set(["D1", "D4", "D7"]);
+  const KW = ["D1", "D7", "D3", "D6", "D10", "D5"];
+  const DN = ["D4", "D1", "D2", "D5", "D8", "D9", "D3", "D6"];
+  const nrel = (list, n) => list.slice(0, n).filter(d => REL.has(d)).length;
+
+  // =====================================================================
+  // Simulation 1: RRF
+  // =====================================================================
+  const S1 = { k: 60, a: 1 };
+  const rrfBox = $("rrf-chart");
+  function fuse(k, wk, wd) {
+    const out = {};
+    KW.forEach((d, i) => { out[d] = out[d] || { kw: 0, dn: 0 }; out[d].kw = wk / (k + i + 1); });
+    DN.forEach((d, i) => { out[d] = out[d] || { kw: 0, dn: 0 }; out[d].dn = wd / (k + i + 1); });
+    const arr = Object.keys(out).map(d => ({ d, kw: out[d].kw, dn: out[d].dn, t: out[d].kw + out[d].dn }));
+    arr.sort((x, y) => y.t - x.t || (parseInt(x.d.slice(1)) - parseInt(y.d.slice(1))));
+    return arr;
+  }
+  function renderRrf() {
+    const wk = S1.a, wd = 2 - S1.a;
+    const arr = fuse(S1.k, wk, wd);
+    const W = Math.max(300, rrfBox.clientWidth), rowH = 25, H = 14 + arr.length * rowH + 8, m = { l: 168, r: 56, t: 6 };
+    const svg = mk(rrfBox, W, H, "Fused ranking with each list's vote");
+    const mx = Math.max(...arr.map(r => r.t), 1e-9);
+    const X = L.scale(0, mx, 0, W - m.l - m.r);
+    arr.forEach((r, i) => {
+      const y = m.t + i * rowH;
+      const isRel = REL.has(r.d);
+      tx(svg, m.l - 8, y + 16, (i + 1) + ". " + (isRel ? "✓ " : "") + NAME[r.d], { "text-anchor": "end", class: isRel ? "lbl-strong" : "lbl-ink" });
+      L.svg("rect", { x: m.l, y: y + 4, width: Math.max(0, X(r.kw)), height: 16, class: "bar-kw" }, svg);
+      L.svg("rect", { x: m.l + X(r.kw), y: y + 4, width: Math.max(0, X(r.dn)), height: 16, class: "bar-dn" }, svg);
+      tx(svg, m.l + X(r.t) + 5, y + 16, r.t.toFixed(4), { class: "lbl-ink" });
+    });
+    const fused = arr.map(r => r.d);
+    const fmt = (l) => nrel(l, 3) + " · " + nrel(l, 8);
+    $("s1-kw").textContent = fmt(KW);
+    $("s1-dn").textContent = fmt(DN);
+    $("s1-fu").textContent = fmt(fused);
+    const f8 = nrel(fused, 8), f3 = nrel(fused, 3);
+    cls($("s1-fb"), f8 === 3 && f3 >= 2 ? "ok" : f8 === 3 ? "warn" : "bad");
+    const lines = [];
+    lines.push("Fused top 8 holds <b>" + f8 + " of 3</b> answers; keyword alone " + nrel(KW, 8) + ", semantic alone " + nrel(DN, 8) + ". That union is why hybrid helps recall.");
+    if (f3 < 3) lines.push("The fused top 3 holds only <b>" + f3 + "</b>. " + (S1.k > 20 ? "At this k, documents in both lists crowd out single-list answers. Lower k to let confident single hits rise." : "Even at low k, mid-ranked agreement still competes. This is the gap a reranker is for."));
+    else lines.push("The fused top 3 holds all three answers here.");
+    if (wk === 0 || wd === 0) lines.push("One weight is zero, so this is just one retriever and fusion adds nothing.");
+    $("s1-verdict").innerHTML = "<ul><li>" + lines.join("</li><li>") + "</li></ul>";
+  }
+  L.bind("s1-k", v => String(v), v => { S1.k = v; renderRrf(); });
+  L.bind("s1-a", v => v.toFixed(1) + " / " + (2 - v).toFixed(1), v => { S1.a = v; renderRrf(); });
+
+  // =====================================================================
+  // Simulation 2: score fusion vs RRF
+  // =====================================================================
+  const BM0 = { D1: 14.2, D7: 13.1, D3: 12.4, D6: 9.0, D10: 7.7, D5: 6.9 };
+  const CS = { D4: 0.74, D1: 0.72, D2: 0.66, D5: 0.63, D8: 0.60, D9: 0.55, D3: 0.52, D6: 0.49 };
+  const S2 = { b: 12.4 };
+  function minmax(obj) {
+    const v = Object.values(obj), lo = Math.min(...v), hi = Math.max(...v), o = {};
+    for (const d in obj) o[d] = (obj[d] - lo) / (hi - lo);
+    return o;
+  }
+  function renderScore() {
+    const bm = Object.assign({}, BM0, { D3: S2.b });
+    const nb = minmax(bm), nc = minmax(CS);
+    const docs = [...new Set([...Object.keys(bm), ...Object.keys(CS)])];
+    const sf = docs.map(d => ({ d, s: ((nb[d] || 0) + (nc[d] || 0)) / 2 })).sort((x, y) => y.s - x.s);
+    const kwRank = Object.keys(bm).sort((x, y) => bm[y] - bm[x]);
+    const dnRank = Object.keys(CS).sort((x, y) => CS[y] - CS[x]);
+    const rr = {};
+    kwRank.forEach((d, i) => rr[d] = (rr[d] || 0) + 1 / (60 + i + 1));
+    dnRank.forEach((d, i) => rr[d] = (rr[d] || 0) + 1 / (60 + i + 1));
+    const rf = docs.map(d => ({ d, s: rr[d] })).sort((x, y) => y.s - x.s);
+    const col = (title, arr, dec) => {
+      let h = '<div class="table-wrap"><table class="data"><thead><tr><th colspan="3">' + title + '</th></tr></thead><tbody>';
+      arr.slice(0, 6).forEach((r, i) => {
+        const isRel = REL.has(r.d);
+        h += "<tr><td>" + (i + 1) + "</td><td" + (isRel ? ' class="rel"' : "") + ">" + (isRel ? "✓ " : "") + NAME[r.d] + "</td><td>" + r.s.toFixed(dec) + "</td></tr>";
+      });
+      return h + "</tbody></table></div>";
+    };
+    $("s2-cols").innerHTML = col("Add normalised scores", sf, 3) + col("Reciprocal rank fusion, k = 60", rf, 4);
+    const pos = (arr, d) => arr.findIndex(r => r.d === d) + 1;
+    const d1s = pos(sf, "D1"), d1r = pos(rf, "D1"), d7s = pos(sf, "D7"), d7r = pos(rf, "D7");
+    const d3s = pos(sf, "D3"), d3r = pos(rf, "D3");
+    const same = S2.b <= 12.5;
+    $("s2-verdict").innerHTML = same
+      ? "With ordinary scores the two methods broadly agree. The danger is not the typical query, it is the odd one. Drag the slider."
+      : "BM25 rank of D3: <b>" + (kwRank.indexOf("D3") + 1) + "</b> in its list. Best answer D1 lands at <b>" + d1s + "</b> under score addition and <b>" + d1r + "</b> under RRF. Tariff table D7 (a true answer) lands at <b>" + d7s + "</b> versus <b>" + d7r + "</b>. D3 itself sits at " + d3s + " versus " + d3r + ". One outlier distorted every other keyword score, and only the method that uses scores noticed.";
+  }
+  L.bind("s2-b", v => v.toFixed(1), v => { S2.b = v; renderScore(); });
+
+  // =====================================================================
+  // Simulation 3: reranking funnel (seeded Monte Carlo)
+  // =====================================================================
+  const Q = 300, D = 2000, RHO = 0.4, C = Math.sqrt(1 - RHO * RHO);
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const rnd = rng(20261106);
+  const gauss = () => { let u = 0; while (u === 0) u = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); };
+  const data = [];
+  for (let q = 0; q < Q; q++) {
+    const z1 = new Float64Array(D), s2 = new Float64Array(D);
+    for (let j = 0; j < D; j++) { z1[j] = gauss(); s2[j] = RHO * z1[j] + C * gauss(); }
+    const idx = Array.from({ length: D }, (_, j) => j).sort((a, b) => z1[b] - z1[a]);
+    const s1o = new Float64Array(D), s2o = new Float64Array(D);
+    idx.forEach((j, i) => { s1o[i] = z1[j]; s2o[i] = s2[j]; });
+    data.push({ s1o, s2o, zr1: gauss(), zr2: gauss() });
+  }
+  function rankOf(s1o, v) { let lo = 0, hi = D; while (lo < hi) { const mid = (lo + hi) >> 1; if (s1o[mid] > v) lo = mid + 1; else hi = mid; } return lo; }
+  function evalN(N, m1, m2) {
+    let first = 0, cand = 0, fin = 0;
+    for (let q = 0; q < Q; q++) {
+      const d = data[q], r = rankOf(d.s1o, m1 + d.zr1);
+      if (r < 5) first++;
+      if (r < N) {
+        cand++;
+        const s2r = m2 + RHO * d.zr1 + C * d.zr2;
+        let cnt = 0;
+        for (let j = 0; j < N - 1 && cnt < 5; j++) if (d.s2o[j] > s2r) cnt++;
+        if (cnt < 5) fin++;
+      }
+    }
+    return { first: first / Q, cand: cand / Q, fin: fin / Q };
+  }
+  const GRID = [5, 8, 10, 15, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000];
+  const S3 = { n: 1.7, m1: 2.8, m2: 4 };
+  const funBox = $("fun-chart");
+  const nFmt = lg => { const n = Math.round(Math.pow(10, lg)); return L.fmtInt(n); };
+  function renderFun() {
+    const N = Math.max(5, Math.round(Math.pow(10, S3.n)));
+    const curve = GRID.map(g => Object.assign({ g }, evalN(g, S3.m1, S3.m2)));
+    const W = Math.max(300, funBox.clientWidth), H = 270, m = { l: 44, r: 14, t: 14, b: 44 };
+    const svg = mk(funBox, W, H, "Recall against number of candidates reranked");
+    const x = L.scale(Math.log10(5), 3, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+    });
+    [5, 10, 30, 100, 300, 1000].forEach(g => tx(svg, x(Math.log10(g)), H - m.b + 16, String(g), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Candidates sent to the reranker (log scale)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Questions answered", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const first = curve[0].first;
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(first), y2: y(first), class: "cv-first" }, svg);
+    L.svg("path", { d: L.path(curve.map(c => [x(Math.log10(c.g)), y(c.cand)])), class: "cv-ceil" }, svg);
+    L.svg("path", { d: L.path(curve.map(c => [x(Math.log10(c.g)), y(c.fin)])), class: "cv-curve" }, svg);
+    L.svg("line", { x1: x(Math.log10(N)), x2: x(Math.log10(N)), y1: m.t, y2: H - m.b, class: "cv-now" }, svg);
+    const cur = evalN(N, S3.m1, S3.m2);
+    L.svg("circle", { cx: x(Math.log10(N)), cy: y(cur.fin), r: 5.5, class: "cv-dot" }, svg);
+
+    $("s3-first").textContent = pct(cur.first);
+    $("s3-cand").textContent = pct(cur.cand);
+    $("s3-fin").textContent = pct(cur.fin);
+    $("s3-fin-s").textContent = (cur.fin - cur.first >= 0 ? "+" : "") + Math.round(100 * (cur.fin - cur.first)) + " points vs no reranking";
+    const lat = 30 + 0.5 * N;
+    $("s3-lat").textContent = Math.round(lat) + " ms";
+    cls($("s3-cb"), cur.cand < 0.85 ? "bad" : cur.cand < 0.95 ? "warn" : "ok");
+    cls($("s3-fb"), cur.fin - cur.first > 0.15 ? "ok" : cur.fin - cur.first > 0.03 ? "warn" : "bad");
+    cls($("s3-lb"), lat > 300 ? "bad" : lat > 120 ? "warn" : "ok");
+    const best = Math.max(...curve.map(c => c.fin));
+    const lines = [];
+    if (cur.cand < 0.85) lines.push("Only <b>" + pct(cur.cand) + "</b> of questions have the answer among the candidates. That is the ceiling, whatever the reranker does. Widen the first stage, or fix retrieval.");
+    if (cur.fin >= best - 0.02 && N > 120) lines.push("You are well past the knee: quality is within 2 points of the best at any depth, but latency is about " + Math.round(lat) + " ms.");
+    else if (cur.fin < best - 0.05) lines.push("More candidates would still help here: the best depth on this chart reaches " + pct(best) + ".");
+    if (S3.m2 < 2.2) lines.push("A weak reranker can be no better than the first stage, or worse. Always check it against the no-reranking line.");
+    if (!lines.length) lines.push("Near the knee: most of the gain is in, and each extra candidate buys little.");
+    $("s3-verdict").innerHTML = "<ul><li>" + lines.join("</li><li>") + "</li></ul>";
+  }
+  L.bind("s3-n", nFmt, v => { S3.n = v; renderFun(); });
+  L.bind("s3-m1", v => v.toFixed(1), v => { S3.m1 = v; renderFun(); });
+  L.bind("s3-m2", v => v.toFixed(1), v => { S3.m2 = v; renderFun(); });
+
+  let rs; window.addEventListener("resize", () => { clearTimeout(rs); rs = setTimeout(() => { renderRrf(); renderFun(); }, 120); });
+  renderRrf(); renderScore(); renderFun();
+})();
+</script>
+</body>
+</html>

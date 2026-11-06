@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Finding the Right Passage: Keyword Search (BM25), Dense Retrieval and Choosing an Embedding Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .qin { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 15px; }
+  .sbar { display: inline-block; height: 8px; border-radius: 4px; background: var(--accent); vertical-align: middle; margin-right: 6px; min-width: 1px; }
+  .sbar.dn { background: var(--warn); }
+  td.dim, .dim { color: var(--muted); font-size: 13px; }
+  tr.hit td { background: var(--ok-soft); }
+  .cols2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .cols2 > div { min-width: 0; }
+  .cols2 h4 { font-family: var(--font-display); font-size: 16px; margin: 0 0 6px; }
+  .rk { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+  .rk li { padding: 8px 10px; border-radius: 8px; background: var(--sunk); font-size: 14px; }
+  .rk li.hit { background: var(--ok-soft); }
+  .rk li .sc { font-family: var(--font-mono); font-size: 12px; color: var(--muted); display: block; }
+  .cv-a { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .cv-b { stroke: var(--warn); stroke-width: 2.4; fill: none; }
+  .cv-c { stroke: var(--ink); stroke-width: 2.4; fill: none; }
+  .cv-cap { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track M · Modern AI systems</span>
+    <span>Module M3 · Retrieval and RAG</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>M3.1 · M3.2</span>
+        <span class="pill d">Day one</span>
+        <span>About 42 minutes</span>
+      </div>
+      <h1>Finding the Right Passage: Keyword Search (BM25), Dense Retrieval and Choosing an Embedding Model</h1>
+      <p class="dek">How a search engine scores words, why that old formula still beats fancy models on codes and names, how embeddings search by meaning, and how to pick an embedding model for English and Arabic bank text without trusting a leaderboard.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>BM25 finds documents that share the query's rare words, dense retrieval finds documents that mean the same thing in different words, each fails exactly where the other works, and the only honest way to choose between them, or between embedding models, is to measure recall on your own questions.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>An internal copilot for relationship managers has 40,000 policy pages, product sheets and circulars behind it. A user asks a question. Before the language model can answer anything, something has to <strong>pick the handful of passages worth showing it</strong>. That step is retrieval, and in a retrieval-augmented system (<a href="m2-prompting-versus-rag-versus-fine.html">M2.3</a>) the answer can be no better than what retrieval finds. If the right passage is not in the top five, no prompt will rescue it.</p>
+        <p>There are two basic ways to find passages.</p>
+        <ul>
+          <li><strong>Lexical (keyword) search.</strong> Look for the query's words in the documents. Rare words count for more than common ones. This is how search engines worked for decades, and the standard scoring recipe is <strong>BM25</strong>.</li>
+          <li><strong>Dense (semantic) search.</strong> Turn the query and every passage into a vector with an embedding model, so that texts with similar meaning land close together (<a href="f1-vectors-matrices-geometry.html">F1.1</a>). Return the nearest passages. "I can't get into my app" lands near "reset your online banking password" although they share no word.</li>
+        </ul>
+        <p>Each has a blind spot, and they are opposite blind spots. Lexical search cannot see meaning: "my money was taken by a thief" shares no word with "report an unauthorised transaction". Dense search cannot see exact strings: the SWIFT reference <code>TXN4471</code> and <code>TXN9920</code> look almost the same to an embedding model, but to a settlements clerk they are different payments.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Retrieval has two jobs: <em>match the words</em> (names, codes, product terms, amounts) and <em>match the meaning</em> (paraphrase, complaint language, cross-language). BM25 does the first cheaply and predictably. Embeddings do the second. Production systems usually need both, which is the next lesson (<a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a>).</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-bm25">M3.1 Keyword search and BM25</h3>
+      <div class="prose">
+        <p><strong>The index.</strong> A lexical engine (Lucene, Elasticsearch, OpenSearch, Solr, or the full-text feature of PostgreSQL) builds an <em>inverted index</em> ahead of time: for every term, a list of the documents that contain it and how many times. At query time it only touches the lists for the query's terms, so it is fast on millions of documents without any GPU. Before indexing, text goes through an <em>analyser</em>: lower-casing, splitting into tokens, perhaps removing stop words and stemming ("transfers" and "transfer" become one term). The analyser is where most real-world lexical failures hide (see Arabic below).</p>
+        <p><strong>The score.</strong> BM25 sums, over the query's terms, three ideas multiplied together.</p>
+        <ol>
+          <li><strong>Rarity (IDF).</strong> A term found in almost every document tells you nothing. "Account" in a bank corpus is worth little; "murabaha" or "MT103" is worth a lot. IDF is roughly the log of how many documents there are per document containing the term.</li>
+          <li><strong>Term frequency with saturation.</strong> More occurrences of a term suggest relevance, but with diminishing returns. The tenth "card" adds far less than the second. Raw counts would let a document stuffed with a word win; saturation caps the benefit.</li>
+          <li><strong>Length normalisation.</strong> A long document contains more words by chance, so a match inside a 3,000-word manual is weaker evidence than the same match in a 20-word FAQ entry. Scores are reduced for documents longer than average.</li>
+        </ol>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>score</mtext><mo stretchy="false">(</mo><mi>q</mi><mo>,</mo><mi>d</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mrow><mi>t</mi><mo>∈</mo><mi>q</mi></mrow></munder><mtext>IDF</mtext><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo><mo>·</mo><mfrac><mrow><mi>f</mi><mo>·</mo><mo stretchy="false">(</mo><msub><mi>k</mi><mn>1</mn></msub><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo></mrow><mrow><mi>f</mi><mo>+</mo><msub><mi>k</mi><mn>1</mn></msub><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>b</mi><mo>+</mo><mi>b</mi><mo>·</mo><mfrac><mrow><mo stretchy="false">|</mo><mi>d</mi><mo stretchy="false">|</mo></mrow><mtext>avgdl</mtext></mfrac><mo stretchy="false">)</mo></mrow></mfrac></math>
+        <p class="where"><i>f</i> is how many times the term appears in the document, |<i>d</i>| the document's length in tokens, avgdl the average length over the collection. IDF(<i>t</i>) = ln(1 + (<i>N</i> − <i>n</i> + 0.5) ÷ (<i>n</i> + 0.5)), with <i>N</i> documents in total and <i>n</i> containing the term (the form used by Lucene). The two knobs: <b>k<sub>1</sub></b> (typically 1.2) sets how fast term frequency saturates, and <b>b</b> (typically 0.75) sets how strongly length is penalised. Whatever <i>f</i> is, the frequency part can never exceed k<sub>1</sub> + 1.</p>
+      </div>
+
+      <figure class="figure" id="fig-bm25">
+        <div class="fig-head"><span class="fig-title">Score a query by hand, term by term</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start with "lost card". Document 9 is a long guide that says "card" eight times; document 1 is short and says it three times. See which wins, then set <b>b</b> to 0 (no length penalty) and watch the long guide climb. Then type <b>MT103</b> or <b>TXN4471</b>: a rare code gets a huge IDF and dominates. Last, try a query made only of common words, like "card account".</p>
+        <div class="btns" role="group" aria-label="Example queries">
+          <button class="btn" type="button" data-q="lost card">lost card</button>
+          <button class="btn" type="button" data-q="MT103 TXN4471">MT103 TXN4471</button>
+          <button class="btn" type="button" data-q="card limit">card limit</button>
+          <button class="btn" type="button" data-q="profit margin financing">profit margin financing</button>
+        </div>
+        <div class="ctl"><label for="q1-in">Your query</label><input class="qin" id="q1-in" type="text" value="lost card" autocomplete="off" spellcheck="false"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-k1">k<sub>1</sub> (term-frequency saturation) <output for="s-k1"></output></label><input type="range" id="s-k1" min="0" max="3" step="0.1" value="1.2"></div>
+          <div class="ctl"><label for="s-b">b (length normalisation) <output for="s-b"></output></label><input type="range" id="s-b" min="0" max="1" step="0.05" value="0.75"></div>
+        </div>
+        <div class="table-wrap"><div id="q1-table"></div></div>
+        <div class="verdict" id="s1-verdict"></div>
+        <p class="sim-note">Simulated: ten invented bank help-desk snippets (shown in the rows). Lower-cased, split on non-letters/digits, a short stop-word list removed, no stemming. Scores are exact BM25 with the Lucene IDF given above.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two details to notice. First, stop words and the IDF interact: even without removing "the" and "of", their near-zero IDF would make them irrelevant. Second, with no stemming, "stolen" does not match "stole". Real engines add stemmers or lemmatisers, which fix some misses and create others ("organisation" and "organ").</p>
+      </div>
+
+      <figure class="figure" id="fig-sat">
+        <div class="fig-head"><span class="fig-title">Saturation and length: the two knobs, drawn</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> with k<sub>1</sub> = 1.2 the curve for an average-length document flattens by about ten occurrences. Set k<sub>1</sub> = 0 and the curve is a step: the term is either present or not. Raise k<sub>1</sub> to 3 and it behaves nearly like raw counting. Then slide <b>b</b> up and see the long (2x average) document's curve drop below the short one's.</p>
+        <div class="chart-wrap" id="sat-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Short document (half the average length)</span>
+          <span><i style="background:var(--ink)"></i>Average length</span>
+          <span><i style="background:var(--warn)"></i>Long document (twice the average)</span>
+          <span><i style="background:var(--muted)"></i>Ceiling k<sub>1</sub> + 1</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s2-k1">k<sub>1</sub> <output for="s2-k1"></output></label><input type="range" id="s2-k1" min="0" max="3" step="0.1" value="1.2"></div>
+          <div class="ctl"><label for="s2-b">b <output for="s2-b"></output></label><input type="range" id="s2-b" min="0" max="1" step="0.05" value="0.75"></div>
+        </div>
+        <div class="verdict" id="s2-verdict"></div>
+        <p class="sim-note">Simulated: plots the frequency part of the BM25 formula only, f(k<sub>1</sub>+1) ÷ (f + k<sub>1</sub>(1 − b + b·length ratio)), for f from 0 to 20. Exact formula, no data. To get a full score, multiply by IDF.</p>
+      </figure>
+
+      <div class="prose">
+        <p><strong>Where lexical search is strong.</strong> Exact strings: account and reference numbers, SWIFT message types, product codes, customer and company names, regulation article numbers ("Article 12"), error codes. Rare terms get high IDF automatically. It needs no training, no GPU, is explainable (you can say which words matched), and a failure is easy to debug. In the BEIR benchmark of 18 retrieval datasets (Thakur et al., 2021), BM25 was a surprisingly hard baseline to beat when models were tested on data they were not trained on.</p>
+        <p><strong>Where it is weak.</strong> Vocabulary mismatch ("thief" versus "unauthorised transaction"), different languages, spelling variants, and questions phrased as sentences rather than keywords. Also boilerplate: if every product sheet contains the same disclaimer, queries about it match everything equally.</p>
+        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:18px">Arabic and mixed-language bank text</h4>
+        <p>Lexical search depends on the analyser, and Arabic is hard for it. One word can carry a prefix ("ال" the, "و" and, "ب" with) and suffixes, so "والتحويلات" (and the transfers) contains the stem of "تحويل" (transfer) but is a different token. Letter variants (أ إ آ ا), the final ى versus ي, ة versus ه, and optional diacritics mean that two spellings of the same word fail to match. Good practice: normalise letters and strip diacritics and tatweel (the elongation character), apply a light Arabic stemmer or a morphological analyser, and test on real queries. Customer text also mixes Arabic, English and Arabizi (Arabic written in Latin letters, "tahweel"), and bank names and product names appear in both scripts. Check what your engine's Arabic analyser really does; treat any claim of "supports Arabic" as a hypothesis to test.</p>
+        <pre><code># The core of BM25 in a few lines (illustrative; use a library in practice)
+import math
+from collections import Counter
+
+def bm25(query_terms, doc_terms, df, N, avgdl, k1=1.2, b=0.75):
+    tf = Counter(doc_terms)
+    score = 0.0
+    for t in query_terms:
+        if t not in tf: continue
+        idf = math.log(1 + (N - df[t] + 0.5) / (df[t] + 0.5))
+        norm = tf[t] * (k1 + 1) / (tf[t] + k1 * (1 - b + b * len(doc_terms) / avgdl))
+        score += idf * norm
+    return score</code></pre>
+        <p>One more variant you will meet: <strong>BM25F</strong> scores several fields (title, headings, body) with different weights, so a match in a product's title counts for more than one buried in a footnote. Cheap and effective for policy libraries.</p>
+      </div>
+
+      <h3 class="sub" id="m-dense">M3.2 Dense retrieval: searching by meaning</h3>
+      <div class="prose">
+        <p>A <strong>bi-encoder</strong> is a neural network (a transformer, <a href="f5-attention.html">F5.5</a>) that reads a text and outputs one vector, typically 384 to 3,072 numbers. The same network, or a twin, encodes the query. The score is the cosine similarity between the two vectors (<a href="f1-vectors-matrices-geometry.html">F1.1</a>): the angle between them, ignoring length. Because documents are encoded once, offline, only the query needs the model at search time.</p>
+        <p><strong>How the model learns "close means similar".</strong> Not from word counts. It is trained <em>contrastively</em> (<a href="f5-self-supervised-and-contrastive-learning.html">F5.7</a>) on huge numbers of pairs (a question and a passage that answers it, a title and its article, a sentence and its translation). The loss pulls each matching pair together and pushes it away from the other passages in the same batch. After training, "I can't log in" and "reset your password" are neighbours because they often appeared as a pair in training, not because they share words. This also means the model knows only the notions of similarity it was shown. Embeddings trained mostly on web text may not know that "CDD", "KYC refresh" and "periodic review" are the same task in your bank.</p>
+        <p><strong>Searching fast.</strong> With a million vectors you cannot compare the query to every one in latency-sensitive systems, so vector databases use <em>approximate nearest neighbour</em> indexes, most often HNSW, a layered graph you walk towards the query. They return almost, not exactly, the true nearest neighbours; the setting that trades speed for recall is worth knowing exists. Many ordinary databases (PostgreSQL with pgvector, OpenSearch, Elasticsearch) now include vector search, which often removes the need for a separate product.</p>
+        <p><strong>Practicalities that bite.</strong></p>
+        <ul>
+          <li><strong>Query and document are not symmetric.</strong> Many models expect a prefix such as "query: " or an instruction; skipping it silently lowers quality. Read the model card.</li>
+          <li><strong>Context length.</strong> Each model has a maximum input (512 tokens for older models, 8,192 or more for newer ones). Anything beyond is cut off. This is one reason chunking matters (<a href="m3-chunking-strategies.html">M3.3</a>).</li>
+          <li><strong>One vector per passage averages the meaning.</strong> A paragraph about two different topics gets a vector in between, which matches neither well. Late-interaction models such as ColBERT keep one vector per token and are more precise at higher storage cost; learned sparse models (SPLADE) give weighted keywords that include related terms.</li>
+          <li><strong>Similar is not the same as relevant.</strong> The nearest passage to "what is the daily ATM limit for a Platinum card" may be the one about Gold cards. Embeddings are weak at negation, numbers and fine distinctions ("Do not" versus "Do").</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-vs">
+        <div class="fig-head"><span class="fig-title">Same ten snippets, same question: keywords against meaning</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> run each question in turn. "My money was taken by a thief" gives BM25 nothing to match. "I can't get into my app" fools BM25 with the word "app" in a lost-card snippet, while dense search goes to the login help. Then the code query: BM25 separates two near-identical wire confirmations by their reference, and the dense scores barely differ. The green rows are the passages a person would call correct.</p>
+        <div class="btns" role="group" aria-label="Questions" id="vs-btns"></div>
+        <div class="cols2">
+          <div><h4>BM25 (keywords)</h4><ol class="rk" id="vs-bm"></ol></div>
+          <div><h4>Dense (meaning)</h4><ol class="rk" id="vs-dn"></ol></div>
+        </div>
+        <div class="verdict" id="s3-verdict"></div>
+        <p class="sim-note">Simulated: the ten snippets from Simulation 1. BM25 uses k<sub>1</sub> = 1.2, b = 0.75. The "embeddings" are not from a real model: each snippet and each question is a hand-assigned six-number vector (card loss, transfers, fraud and disputes, login, financing, fees and limits), and the dense score is the exact cosine. The codes MT103/MT202 and TXN4471/TXN9920 are deliberately not represented in the vectors, which is the point: real models also blur them. Real results vary by model.</p>
+      </figure>
+
+      <h3 class="sub" id="m-choose">Choosing an embedding model</h3>
+      <div class="prose">
+        <p>There are hundreds of models and a public leaderboard (MTEB, Muennighoff et al., 2022) that ranks them across dozens of tasks. Use the leaderboard to build a shortlist, never to make the decision. The reasons: the average mixes tasks you do not care about; the test sets are public and models can be tuned toward them; your language, vocabulary and document types are different; and vendor-reported numbers are not independently verified.</p>
+        <p><strong>The decision is made on your own evaluation set.</strong> Build 100 to 300 realistic questions, each with the passage(s) that answer it, written or checked by someone who knows the business (ten good questions from the compliance desk beat a thousand synthetic ones). Mix English, Arabic and mixed queries, exact-code lookups, and paraphrased complaint-style questions. Then measure, for each candidate and each setting:</p>
+        <ul>
+          <li><strong>Recall@k</strong>: in what share of questions does a correct passage appear in the top <em>k</em> (say 5 or 20)? This is the number that matters for RAG, because the generator only sees the top few.</li>
+          <li><strong>MRR or nDCG@10</strong> (<a href="f7-forecast-and-regression-metrics-mae.html">F7.6</a>): how high up is the first correct passage, and is the ranking good overall?</li>
+          <li>Report intervals. With 150 questions, a 4-point difference in recall@5 is within noise (<a href="f2-uncertainty-intervals-bootstrap.html">F2.1</a>).</li>
+        </ul>
+        <pre><code># Minimal retrieval evaluation: recall@k and MRR
+def evaluate(retrieve, questions, k=5):
+    hits, rr = 0, 0.0
+    for q in questions:                       # q = {"text": ..., "gold": {doc_id, ...}}
+        ranked = retrieve(q["text"], top=20)  # list of doc ids, best first
+        if q["gold"] &amp; set(ranked[:k]): hits += 1
+        for i, d in enumerate(ranked, 1):
+            if d in q["gold"]: rr += 1 / i; break
+    n = len(questions)
+    return {"recall@%d" % k: hits / n, "mrr": rr / n}</code></pre>
+        <p>The practical criteria, in the order that usually ends the argument:</p>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Criterion</th><th>What to check</th><th>Why it matters at a bank</th></tr></thead>
+          <tbody>
+            <tr><td><b>Languages</b></td><td>Arabic (Modern Standard and Gulf dialect), English, mixed; cross-lingual (Arabic question, English document).</td><td>Many models are English-first. Arabic benchmarks exist (ArabicMTEB, with the Swan models), but check on your own text.</td></tr>
+            <tr><td><b>Where it runs</b></td><td>API from a vendor, or open weights you host.</td><td>Sending customer or confidential text to an external API raises data-residency and outsourcing questions (<a href="p4-hybrid-and-on-premises-deployment.html">P4.2</a>). Open weights can run on-premises.</td></tr>
+            <tr><td><b>Maximum input length</b></td><td>512, 8,192, or more tokens.</td><td>Decides how big your chunks can be.</td></tr>
+            <tr><td><b>Dimension and storage</b></td><td>384 to 3,072 numbers per vector; some models allow truncation (<a href="r10-matryoshka-embeddings.html">R10 Matryoshka</a>).</td><td>Drives index size and memory (Simulation 4).</td></tr>
+            <tr><td><b>Speed and cost</b></td><td>Encoding throughput per GPU; price per million tokens for APIs.</td><td>The whole corpus is re-embedded whenever you change model or chunking.</td></tr>
+            <tr><td><b>Licence and support</b></td><td>Commercial use allowed? Versioned and maintained?</td><td>Model risk teams want a stable, documented dependency (<a href="g3-what-counts-as-a-model.html">G3.1</a>).</td></tr>
+            <tr><td><b>Fine-tunability</b></td><td>Can you train it on your own query-passage pairs?</td><td>A few thousand in-domain pairs often lift recall more than switching to a bigger general model.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Lock-in to remember.</strong> Vectors from different models are not comparable. Changing the model means re-embedding everything and rebuilding the index. Store the model name and version with each vector, and keep the source text so you can redo it.</p>
+      </div>
+
+      <figure class="figure" id="fig-size">
+        <div class="fig-head"><span class="fig-title">What your embedding choice does to the index</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> 40,000 policy pages at about 12 chunks each is roughly half a million chunks, which any setting handles. Now slide to 200 million chunks (every email and chat) and see why dimension and precision become real decisions. Switch between 3,072 float numbers and 512 numbers stored as 8-bit.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Number of chunks <output for="s-n"></output></label><input type="range" id="s-n" min="4" max="9" step="0.05" value="5.7"></div>
+          <div class="ctl"><label for="s-dim">Dimensions per vector <output for="s-dim"></output></label><input type="range" id="s-dim" min="0" max="5" step="1" value="2"></div>
+          <div class="ctl"><label for="s-prec">Storage per number <output for="s-prec"></output></label><input type="range" id="s-prec" min="0" max="3" step="1" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Vectors alone</div><div class="v" id="st4-raw"></div><div class="s" id="st4-raw-s"></div></div>
+          <div class="stat" id="st4-tot-b"><div class="k">With graph index overhead</div><div class="v" id="st4-tot"></div><div class="s">the memory you may need to hold</div></div>
+          <div class="stat"><div class="k">Against the biggest setting</div><div class="v" id="st4-rel"></div><div class="s">3,072 numbers at 4 bytes</div></div>
+        </div>
+        <div class="verdict" id="s4-verdict"></div>
+        <p class="sim-note">Simulated: pure arithmetic, number of vectors × dimensions × bytes per number (4, 2, 1, or 1/8 byte for binary), plus an assumed 128 bytes per vector of graph overhead (HNSW with 16 links per node; real indexes vary). Quality is not modelled: shrinking vectors costs some recall, by an amount you must measure on your own set.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The cheapest accuracy gains usually do not come from the biggest model. In order of effort: fix chunking and metadata, add the lexical leg (hybrid), add a reranker over the top 50, <em>then</em> consider fine-tuning or a bigger embedding model. Each is measured on the same evaluation set.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M3 · Next lesson</span><span class="t"><a href="m3-hybrid-search-and-reciprocal-rank.html">Hybrid search and reciprocal rank fusion</a></span><p>Runs BM25 and dense search side by side and merges the lists. The standard answer to the two blind spots in Simulation 3.</p></div>
+        <div class="link-card"><span class="code">M3 · Chunking</span><span class="t"><a href="m3-chunking-strategies.html">What gets embedded</a></span><p>Both methods retrieve chunks, not documents. Chunk size interacts with the embedding model's input limit and with BM25's length normalisation.</p></div>
+        <div class="link-card"><span class="code">M3 · Query rewriting</span><span class="t"><a href="m3-query-rewriting-hyde-and-multi.html">Fixing the query instead</a></span><p>Rewrites and hypothetical-answer tricks reduce vocabulary mismatch without changing the index.</p></div>
+        <div class="link-card"><span class="code">M3 · Parsing</span><span class="t"><a href="m3-parsing-messy-pdfs-and-scans.html">Garbage in, garbage retrieved</a></span><p>If a table or scanned page was parsed badly, neither BM25 nor embeddings can find it.</p></div>
+        <div class="link-card"><span class="code">F1.1 · Vectors and geometry</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Cosine similarity</a></span><p>Dense retrieval is the geometry of F1.1 put to work.</p></div>
+        <div class="link-card"><span class="code">F5.5 · F5.7 · Attention and contrastive learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">How embeddings are trained</a></span><p>The bi-encoder is a transformer trained with a contrastive loss on matching pairs.</p></div>
+        <div class="link-card"><span class="code">M1.1 · Tokenisation</span><span class="t"><a href="m1-tokenisation.html">Tokens are not words</a></span><p>An embedding model's tokeniser splits codes and Arabic words into pieces, which is part of why exact strings blur. BM25's tokeniser is a separate, simpler one.</p></div>
+        <div class="link-card"><span class="code">F7.6 · Ranking metrics</span><span class="t"><a href="f7-forecast-and-regression-metrics-mae.html">nDCG, MRR, recall@k</a></span><p>The metrics you choose models by.</p></div>
+        <div class="link-card"><span class="code">R10 · Matryoshka embeddings</span><span class="t"><a href="r10-matryoshka-embeddings.html">Truncatable vectors</a></span><p>Shrink the index without retraining; the storage trade-off in Simulation 4.</p></div>
+        <div class="link-card"><span class="code">A6 · Visual and agentic retrieval</span><span class="t"><a href="a6-search-over-document-images-colpali.html">ColPali</a> · <a href="a6-agentic-rag.html">Agentic RAG</a></span><p>Late interaction over page images, and agents that decide what to search for and when.</p></div>
+        <div class="link-card"><span class="code">A4 · Groundedness</span><span class="t"><a href="a4-hallucination-detection-and-groundedness.html">Retrieval quality caps answer quality</a></span><p>Many "hallucinations" in RAG are retrieval misses: the right passage never reached the model.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Internal copilot for policies and procedures</strong> (<a href="b7-internal-copilots-for-staff.html">B7.2</a>). Staff ask in sentences (dense) but also by policy number, circular reference or product code (BM25).</li>
+          <li><strong>Trade finance and document search</strong> (<a href="b7-document-ai-for-trade-finance.html">B7.1</a>). Letter-of-credit numbers, HS codes, party names: lexical territory.</li>
+          <li><strong>Complaint triage and call-centre knowledge.</strong> Customers describe problems in their own words, in Arabic, English or both: dense territory.</li>
+          <li><strong>Name search in screening</strong> (<a href="b2-sanctions-screening-and-name-matching.html">B2.2</a>). Closer to fuzzy string matching than to either method here; general-purpose embeddings are poor at transliterated names.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The settled view: dense retrieval is better than BM25 at meaning, BM25 is better at exact terms and out-of-domain robustness, and the best systems combine them and rerank. The live arguments are about multilingual quality, long inputs, and how much a domain-tuned small model beats a giant general one.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with one web search. Most dated items below are from my own knowledge of the literature and the search could not confirm any current leaderboard ranking, so verify live before quoting.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1994 / 2009</span><div><div class="t">BM25</div><p>Developed in the Okapi system at TREC in the 1990s, and written up in full by Robertson and Zaragoza. Still the default scoring in Lucene-based engines.</p><div class="src">Robertson et al., TREC-3, 1994; Robertson &amp; Zaragoza, Foundations and Trends in IR, 2009</div></div></li>
+        <li><span class="yr">2019</span><div><div class="t">Sentence-BERT</div><p>Made transformer sentence embeddings practical for comparing texts by cosine, the template for modern bi-encoders.</p><div class="src">Reimers &amp; Gurevych, EMNLP 2019</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">Dense Passage Retrieval, and ColBERT</div><p>DPR trained a two-tower model on question-passage pairs and beat BM25 on open-domain question answering by a clear margin on its in-domain data. ColBERT introduced late interaction: one vector per token, scored by best matches.</p><div class="src">Karpukhin et al., EMNLP 2020; Khattab &amp; Zaharia, SIGIR 2020</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">BEIR: BM25 is hard to beat out of domain</div><p>Eighteen datasets, zero-shot. Dense models trained on one dataset often generalised worse than BM25; reranking and late-interaction models did best but cost more.</p><div class="src">Thakur et al., NeurIPS Datasets and Benchmarks, 2021</div></div></li>
+        <li><span class="yr">2021–22</span><div><div class="t">Learned sparse and general-purpose embedding models; MTEB</div><p>SPLADE learns weighted keyword expansions that fit an inverted index. E5 and similar models trained on very large weakly supervised pair sets. MTEB put embedding models on one public leaderboard.</p><div class="src">Formal et al., SIGIR 2021; Wang et al., arXiv 2212.03533; Muennighoff et al., EACL 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">One model for dense, sparse and multi-vector; Arabic-specific work</div><p>BGE-M3 offered all three retrieval modes, over 100 languages and inputs up to 8,192 tokens. For Arabic, the Swan models and the ArabicMTEB benchmark (94 datasets across eight tasks, published at NAACL 2025) report gains over Multilingual-E5-large; these are the authors' own results.</p><div class="src">Chen et al., arXiv 2402.03216; Bhatia et al., arXiv 2411.01192</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Large LLM-based embedders and Matryoshka-style vectors</div><p>Recent top-scoring embedders are built on decoder language models and ship with truncatable vectors and instruction prompts. Vendors and aggregators publish many leaderboard claims; independent evidence for Arabic banking text is thin, and critiques note that MTEB averages hide domain, language and cross-lingual weaknesses. I could not verify a trustworthy current top ranking for Arabic retrieval.</p><div class="src">MTEB leaderboard (live); practitioner critiques, 2026</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banks specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>BM25 in Elasticsearch or OpenSearch</b></td><td>Enterprise search over policies, tickets and documents. Usually already deployed.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Dense retrieval with an off-the-shelf model</b></td><td>Open-weights model hosted internally, or a vendor API for non-sensitive text, behind a vector index.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Hybrid plus reranker</b></td><td>The usual production design for internal copilots (next lesson).</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Fine-tuned embeddings on in-house pairs</b></td><td>A few thousand mined or synthetic query-passage pairs, evaluated on a held-out set.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Dialect-aware Arabic retrieval</b></td><td>Gulf dialect queries against MSA documents. Benchmarks are emerging; production evidence is scarce.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Learned sparse (SPLADE-style) in place of BM25</b></td><td>Available in some search products; rare in banks.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Start with BM25, add a dense model that you picked by recall on your own bilingual question set, combine them, and spend effort on chunking and evaluation before chasing a bigger model.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each failure comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Picking the embedding model from the leaderboard</div><p>"It is number one on MTEB, so we use it." Your Arabic, your jargon and your documents are not in the average.</p><div class="spot"><b>Spot it</b>Ask for recall@5 on a bank-specific question set, in both languages, with an interval.</div></li>
+        <li><div class="t">Dense-only search that loses exact codes</div><p>A staff member pastes a circular number and gets three vaguely related circulars.</p><div class="spot"><b>Spot it</b>Include exact-identifier queries in the test set. If recall on them is below BM25's, add the lexical leg.</div></li>
+        <li><div class="t">Keyword-only search that misses paraphrase</div><p>Zero results for a complaint written in the customer's own words.</p><div class="spot"><b>Spot it</b>Log queries with no or weak results and review them weekly.</div></li>
+        <li><div class="t">Arabic analyser left on default</div><p>Alef variants, the definite article and clitics break matching; mixed Arabic and English fields are tokenised as one language.</p><div class="spot"><b>Spot it</b>Run the same query with and without the hamza and the prefix, and see if results differ.</div></li>
+        <li><div class="t">Missing query or document prefix</div><p>The model needs "query:" and "passage:" or an instruction, but the pipeline omits it. Quality drops quietly.</p><div class="spot"><b>Spot it</b>Compare against the model card's usage example on a few known pairs.</div></li>
+        <li><div class="t">Silent truncation</div><p>Chunks longer than the model's input limit are cut; the end of every chunk is never embedded.</p><div class="spot"><b>Spot it</b>Check chunk token lengths against the model's maximum.</div></li>
+        <li><div class="t">Wrong passage, high similarity</div><p>The Gold-card limit is returned for a Platinum-card question, because the two read almost the same.</p><div class="spot"><b>Spot it</b>Add near-duplicate pairs to the test set; consider metadata filters (product, date, version) and a reranker.</div></li>
+        <li><div class="t">Stale or mixed-version indexes</div><p>Some vectors from the old model, some from the new; or superseded policies still indexed.</p><div class="spot"><b>Spot it</b>Store model name, version and document effective date with each vector, and test that only current versions are returned.</div></li>
+        <li><div class="t">Testing on questions made from the chunks</div><p>Synthetic questions generated by an LLM from a chunk copy its wording, so every method looks excellent.</p><div class="spot"><b>Spot it</b>Include real user queries; compare synthetic-set scores with real-set scores.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Our copilot is only as good as the passages it finds. Keyword search is excellent when staff quote a code or a name, and weak when they describe a problem in their own words. Meaning-based search is the reverse. We'll combine both and choose the meaning-based model by testing a few hundred real questions in Arabic and English, rather than by a public ranking. That test is cheap and it's what tells us whether the system will be trusted.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd build a labelled retrieval set from real queries, including identifier lookups, paraphrases and Arabic, and report recall@k and nDCG with bootstrap intervals for BM25, a few candidate embedders, and hybrid. I'd check the Arabic analyser for BM25, the prefixes and input limits for the embedder, and store model version with each vector so re-embedding is controlled. The shortlist comes from MTEB; the decision comes from our set.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just use embeddings for everything? Isn't BM25 obsolete?”</summary><div class="ans"><p>No. It is cheap, explainable, needs no training, and wins on exact strings and on data unlike an embedding model's training set. On BEIR it was a hard baseline to beat zero-shot. Dense models win on paraphrase and cross-language. I would run both and measure.</p></div></details>
+        <details class="reveal"><summary>“Which embedding model should we use?”</summary><div class="ans"><p>I don't know until we test. I'd shortlist three or four that support Arabic and English, fit our hosting constraints and input length, and run them on 150 or so real questions with known answers. The shortlist can come from a public leaderboard; the choice comes from recall@5 on our data.</p></div></details>
+        <details class="reveal"><summary>“Can we use a vendor's embedding API with customer data?”</summary><div class="ans"><p>That is a data-governance question before a technical one: what leaves the bank, where it is processed, retention, and what our regulator and outsourcing rules require. I'd get the answer from legal and information security. For sensitive text, open weights hosted inside our environment avoid the question, at the cost of running them.</p></div></details>
+        <details class="reveal"><summary>“Search is missing an obvious document. Where do you look?”</summary><div class="ans"><p>Work backwards: is the document in the index at all and parsed properly; was it chunked so that the answer is in one chunk; does BM25 find it with the right words; does dense find it; where does it land before reranking? That identifies whether it's a data, chunking, lexical or semantic failure.</p></div></details>
+        <details class="reveal"><summary>“What happens if we change the embedding model next year?”</summary><div class="ans"><p>We re-embed the whole corpus and rebuild the index, because vectors from different models can't be compared. So I'd keep source text and chunking reproducible, tag vectors with model version, and keep the evaluation set so we can prove the new model is better before switching.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A corpus has 10,000 documents. "account" appears in 6,000 and "murabaha" in 20. Which gets the higher IDF, and roughly by how much?</summary><div class="ans"><p>IDF = ln(1 + (N − n + 0.5)/(n + 0.5)). For "account": ln(1 + 4000.5/6000.5) = ln 1.667 ≈ 0.51. For "murabaha": ln(1 + 9980.5/20.5) = ln 487.8 ≈ 6.19. Murabaha is worth about twelve times as much.</p></div></details>
+        <details class="reveal"><summary>2. What does k<sub>1</sub> = 0 do? What does b = 0 do?</summary><div class="ans"><p>k<sub>1</sub> = 0 makes the frequency part equal 1 whenever the term appears, so only presence matters. b = 0 removes the length penalty, so long documents are not penalised for being long.</p></div></details>
+        <details class="reveal"><summary>3. A term appears 50 times in a document and 5 times in another, same length. With k<sub>1</sub> = 1.2 and an average-length document, which frequency part is larger and by how much?</summary><div class="ans"><p>With length equal to average the denominator is f + 1.2. For f = 50: 50 × 2.2 / 51.2 ≈ 2.15. For f = 5: 5 × 2.2 / 6.2 ≈ 1.77. Ten times the occurrences give 21% more. The ceiling is 2.2.</p></div></details>
+        <details class="reveal"><summary>4. Why can two wire confirmations with different reference numbers look the same to an embedding model but not to BM25?</summary><div class="ans"><p>The embedding squeezes a whole text into a vector that captures its overall topic; a short identifier changes it very little, and the tokeniser splits it into meaningless fragments. BM25 indexes the whole token and gives a rare one a very high IDF.</p></div></details>
+        <details class="reveal"><summary>5. A teammate says model A has a higher MTEB average than model B, so use A. Give three reasons that is not enough.</summary><div class="ans"><p>The average covers tasks and languages unlike ours; public test sets can be targeted by developers and vendor numbers may be unverified; it ignores cost, hosting, input length, and licence; and nothing tells us how it behaves on Arabic banking text. Test on our own set.</p></div></details>
+        <details class="reveal"><summary>6. You have 50 million chunks. Compare the vector storage of 1,024-dimension float32 and 256-dimension int8.</summary><div class="ans"><p>50M × 1,024 × 4 bytes = 204.8 GB. 50M × 256 × 1 byte = 12.8 GB, sixteen times smaller. The smaller form will lose some recall, which you measure; a reranker over the shortlist often recovers it.</p></div></details>
+        <details class="reveal"><summary>7. Recall@5 is 62% on your evaluation set of 100 questions. How sure are you?</summary><div class="ans"><p>Standard error ≈ √(0.62 × 0.38 / 100) ≈ 4.9 points, so a 95% interval of roughly 52% to 72%. A rival model at 66% is not distinguishable. You need more questions or a paired comparison on the same questions.</p></div></details>
+        <details class="reveal"><summary>8. A customer's question is in Gulf Arabic and the policy is in Modern Standard Arabic. Which method is likely to struggle, and what would you test?</summary><div class="ans"><p>BM25 will, since dialect words differ from the formal terms. A multilingual embedding may bridge it, but dialect coverage varies by model. I'd build a test set of real dialect queries against the MSA documents and compare recall@k for each candidate, with and without hybrid.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>S. Robertson, H. Zaragoza. <a href="https://doi.org/10.1561/1500000019">The Probabilistic Relevance Framework: BM25 and Beyond</a>. Foundations and Trends in Information Retrieval, 2009.</li>
+        <li>C. Manning, P. Raghavan, H. Schütze. <a href="https://nlp.stanford.edu/IR-book/">Introduction to Information Retrieval</a>. Cambridge University Press, 2008. Free online; chapters 1, 6 and 11.</li>
+        <li>N. Reimers, I. Gurevych. <a href="https://arxiv.org/abs/1908.10084">Sentence-BERT</a>. EMNLP, 2019.</li>
+        <li>V. Karpukhin et al. <a href="https://arxiv.org/abs/2004.04906">Dense Passage Retrieval for Open-Domain Question Answering</a>. EMNLP, 2020.</li>
+        <li>O. Khattab, M. Zaharia. <a href="https://arxiv.org/abs/2004.12832">ColBERT</a>. SIGIR, 2020.</li>
+        <li>N. Thakur et al. <a href="https://arxiv.org/abs/2104.08663">BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models</a>. NeurIPS Datasets and Benchmarks, 2021.</li>
+        <li>T. Formal et al. <a href="https://arxiv.org/abs/2107.05720">SPLADE</a>. SIGIR, 2021.</li>
+        <li>N. Muennighoff et al. <a href="https://arxiv.org/abs/2210.07316">MTEB: Massive Text Embedding Benchmark</a>. EACL, 2023. Live board: <a href="https://huggingface.co/spaces/mteb/leaderboard">MTEB leaderboard</a>.</li>
+        <li>J. Chen et al. <a href="https://arxiv.org/abs/2402.03216">BGE M3-Embedding</a>. arXiv, 2024.</li>
+        <li>G. Bhatia et al. <a href="https://arxiv.org/abs/2411.01192">Swan and ArabicMTEB: Dialect-Aware, Arabic-Centric, Cross-Lingual, and Cross-Cultural Embedding Models and Benchmarks</a>. Findings of NAACL, 2025.</li>
+        <li>A. Kusupati et al. <a href="https://arxiv.org/abs/2205.13147">Matryoshka Representation Learning</a>. NeurIPS, 2022.</li>
+        <li><a href="https://lucene.apache.org/core/">Apache Lucene</a> and <a href="https://www.sbert.net/">Sentence-Transformers</a> documentation. Practical references for BM25 analysers and bi-encoder usage.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in M3: <a href="m3-hybrid-search-and-reciprocal-rank.html">Hybrid search and reciprocal rank fusion (M3.3)</a></span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  function mk(box, W, H, label) { box.innerHTML = ""; return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box); }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+  // ---- shared corpus (invented) ----
+  const DOCS = [
+    "Card lost or stolen: block your debit card in the app and request a replacement card.",
+    "Wire transfer SWIFT MT103 confirmation: reference TXN4471 sent to the beneficiary bank.",
+    "Refund policy for disputed card transactions: file a chargeback within 60 days.",
+    "How to reset your online banking password if you forgot your login.",
+    "Murabaha financing: the bank buys the asset and sells it to you at an agreed profit margin.",
+    "Early settlement of a personal loan: fees and the settlement letter.",
+    "Unauthorised transaction on my account: report fraud immediately and we will freeze the card.",
+    "Daily ATM withdrawal limits for debit cards and how to raise the limit.",
+    "Our full guide to card services covers card activation, card limits, card delivery, card fees, card statements, card rewards and, in one short section near the end, what to do about a lost card.",
+    "Wire transfer SWIFT MT202 confirmation: reference TXN9920 sent to the correspondent bank."
+  ];
+  // hand-assigned toy vectors: [card loss, transfers, fraud/disputes, login, financing, fees/limits]
+  const DV = [[.9,0,.3,.1,0,.1],[0,.95,.05,0,.1,0],[.3,.1,.7,0,0,.2],[0,0,.1,.95,0,0],[0,0,0,0,.95,.2],[0,.1,0,0,.6,.7],[.4,.1,.85,.1,0,0],[.3,0,0,0,0,.9],[.7,0,.1,.1,0,.5],[0,.95,.05,0,.1,.01]];
+  const STOP = new Set("the a an to and or of for in on my your you we will is it how if at from one be by was i with what us do about near".split(" "));
+  const tok = s => s.toLowerCase().split(/[^a-z0-9]+/).filter(w => w && !STOP.has(w));
+  const D = DOCS.map(tok), N = D.length, AVG = D.reduce((a, d) => a + d.length, 0) / N;
+  const DF = {}; D.forEach(d => new Set(d).forEach(t => DF[t] = (DF[t] || 0) + 1));
+  const idf = t => { const n = DF[t] || 0; return Math.log(1 + (N - n + 0.5) / (n + 0.5)); };
+  function bm25(qt, i, k1, b) {
+    const d = D[i], parts = [];
+    let s = 0;
+    new Set(qt).forEach(t => {
+      const f = d.filter(x => x === t).length;
+      if (!f) return;
+      const c = idf(t) * f * (k1 + 1) / (f + k1 * (1 - b + b * d.length / AVG));
+      s += c; parts.push([t, c]);
+    });
+    return { s, parts };
+  }
+
+  // ---- Sim 1 ----
+  const S1 = { k1: 1.2, b: 0.75 };
+  function render1() {
+    const q = $("q1-in").value, qt = tok(q);
+    const rows = DOCS.map((t, i) => Object.assign({ i }, bm25(qt, i, S1.k1, S1.b))).sort((a, c) => c.s - a.s || a.i - c.i);
+    const mx = Math.max(rows[0].s, 1e-9);
+    let h = '<table class="data"><thead><tr><th>Doc</th><th>Text (tokens)</th><th>Score</th><th>Where it comes from</th></tr></thead><tbody>';
+    rows.forEach(r => {
+      h += `<tr><td>${r.i + 1}</td><td class="dim">${esc(DOCS[r.i])} <i>(${D[r.i].length})</i></td><td><span class="sbar" style="width:${Math.round(60 * r.s / mx)}px"></span>${r.s.toFixed(2)}</td><td class="dim">${r.parts.map(p => p[0] + " " + p[1].toFixed(2)).join(" + ") || "no query word"}</td></tr>`;
+    });
+    $("q1-table").innerHTML = h + "</tbody></table>";
+    const ids = qt.map(t => `${t} (in ${DF[t] || 0} of ${N} docs, IDF ${idf(t).toFixed(2)})`);
+    let v = "Query terms: " + (ids.join("; ") || "none after stop-word removal") + ". ";
+    if (rows[0].s === 0) v += "<b>No document contains any query word</b>, so nothing is returned.";
+    else {
+      v += `Top: <b>doc ${rows[0].i + 1}</b> with ${rows[0].s.toFixed(2)}.`;
+      const ranked = new Set(qt); // note on long doc
+      if (qt.includes("card") && rows[0].i !== 8) {
+        const p8 = rows.findIndex(r => r.i === 8) + 1;
+        v += ` The long guide (doc 9) is ranked ${p8}. Its eight "card"s are capped by saturation and discounted for length.`;
+      } else if (qt.includes("card") && rows[0].i === 8) v += " The long guide wins: it repeats the query word often enough, and the length penalty is too weak at this b.";
+    }
+    $("s1-verdict").innerHTML = v;
+  }
+  L.bind("s-k1", v => v.toFixed(1), v => { S1.k1 = v; render1(); });
+  L.bind("s-b", v => v.toFixed(2), v => { S1.b = v; render1(); });
+  $("q1-in").addEventListener("input", render1);
+  document.querySelectorAll("[data-q]").forEach(b => b.addEventListener("click", () => { $("q1-in").value = b.dataset.q; render1(); }));
+
+  // ---- Sim 2 ----
+  const S2 = { k1: 1.2, b: 0.75 };
+  const satBox = $("sat-chart");
+  function render2() {
+    const W = Math.max(300, satBox.clientWidth), H = 270, m = { l: 40, r: 12, t: 14, b: 40 };
+    const svg = mk(satBox, W, H, "Term frequency part of BM25 against occurrences");
+    const x = L.scale(0, 20, m.l, W - m.r), YM = 4.2, y = L.scale(0, YM, H - m.b, m.t);
+    [0, 1, 2, 3, 4].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v, { "text-anchor": "end" }); });
+    [0, 5, 10, 15, 20].forEach(v => tx(svg, x(v), H - m.b + 16, v, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Occurrences of the term in the document", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Frequency part", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const cap = S2.k1 + 1;
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(cap), y2: y(cap), class: "cv-cap" }, svg);
+    tx(svg, W - m.r - 4, y(cap) - 5, "ceiling " + cap.toFixed(1), { class: "lbl-ink", "text-anchor": "end" });
+    const f = (t, r) => t === 0 ? 0 : t * (S2.k1 + 1) / (t + S2.k1 * (1 - S2.b + S2.b * r));
+    [[0.5, "cv-a"], [1, "cv-c"], [2, "cv-b"]].forEach(([r, c]) => {
+      const pts = []; for (let t = 0; t <= 20.001; t += 0.25) pts.push([x(t), y(Math.min(f(t, r), YM))]);
+      L.svg("path", { d: L.path(pts), class: c }, svg);
+    });
+    const at = (t, r) => f(t, r).toFixed(2);
+    $("s2-verdict").innerHTML = `At 3 occurrences: short <b>${at(3, .5)}</b>, average <b>${at(3, 1)}</b>, long <b>${at(3, 2)}</b>. At 15: <b>${at(15, .5)}</b>, <b>${at(15, 1)}</b>, <b>${at(15, 2)}</b>. Going from 3 to 15 occurrences (five times) multiplies an average document's score by <b>${(f(15, 1) / f(3, 1)).toFixed(2)}</b>.`;
+  }
+  L.bind("s2-k1", v => v.toFixed(1), v => { S2.k1 = v; render2(); });
+  L.bind("s2-b", v => v.toFixed(2), v => { S2.b = v; render2(); });
+
+  // ---- Sim 3 ----
+  const QS = [
+    ["lost card", [.9,0,.3,.1,0,.1], [0, 8]],
+    ["My money was taken by a thief", [.3,.1,.9,.1,0,0], [6]],
+    ["I can't get into my app", [0,0,.1,.9,0,0], [3]],
+    ["MT103 TXN4471", [0,.9,.05,0,.1,0], [1]],
+    ["Islamic financing profit margin", [0,0,0,0,.95,.15], [4]]
+  ];
+  const cos = (a, c) => { let d = 0, na = 0, nc = 0; for (let i = 0; i < a.length; i++) { d += a[i] * c[i]; na += a[i] * a[i]; nc += c[i] * c[i]; } return d / Math.sqrt(na * nc); };
+  let qi = 0;
+  const vb = $("vs-btns");
+  QS.forEach((q, i) => { const b = document.createElement("button"); b.className = "btn"; b.type = "button"; b.textContent = q[0]; b.addEventListener("click", () => { qi = i; render3(); }); vb.appendChild(b); });
+  function render3() {
+    const [q, qv, gold] = QS[qi], qt = tok(q);
+    const bm = DOCS.map((t, i) => ({ i, s: bm25(qt, i, 1.2, 0.75).s })).sort((a, c) => c.s - a.s || a.i - c.i);
+    const dn = DOCS.map((t, i) => ({ i, s: cos(qv, DV[i]) })).sort((a, c) => c.s - a.s || a.i - c.i);
+    const li = (r, lab) => `<li class="${gold.includes(r.i) ? "hit" : ""}"><b>Doc ${r.i + 1}</b> · ${esc(DOCS[r.i].length > 70 ? DOCS[r.i].slice(0, 68) + "…" : DOCS[r.i])}<span class="sc">${lab}</span></li>`;
+    $("vs-bm").innerHTML = bm[0].s === 0 ? '<li>Nothing returned: no shared words.</li>' : bm.slice(0, 3).filter(r => r.s > 0).map(r => li(r, "BM25 " + r.s.toFixed(2))).join("");
+    $("vs-dn").innerHTML = dn.slice(0, 3).map(r => li(r, "cosine " + r.s.toFixed(3))).join("");
+    [...vb.children].forEach((b, i) => b.setAttribute("aria-pressed", String(i === qi)));
+    const bmOk = bm[0].s > 0 && gold.includes(bm[0].i), dnOk = gold.includes(dn[0].i);
+    let v = `BM25 puts a correct passage first: <b>${bmOk ? "yes" : "no"}</b>. Dense does: <b>${dnOk ? "yes" : "no"}</b>. `;
+    if (qi === 3) { const a = cos(qv, DV[1]), c = cos(qv, DV[9]); v += `Dense scores for the two wire confirmations (docs 2 and 10): ${a.toFixed(3)} and ${c.toFixed(3)}, a gap of ${Math.abs(a - c).toFixed(3)}. BM25 gives ${bm25(qt, 1, 1.2, .75).s.toFixed(2)} and ${bm25(qt, 9, 1.2, .75).s.toFixed(2)}.`; }
+    else if (qi === 1) v += "No word is shared with the right snippet, so lexical search is blind.";
+    else if (qi === 2) v += "BM25 matched on the word \"app\" alone, an accident of wording.";
+    $("s3-verdict").innerHTML = v;
+  }
+
+  // ---- Sim 4 ----
+  const DIMS = [256, 384, 768, 1024, 1536, 3072], PREC = [["float32", 4], ["float16", 2], ["int8", 1], ["binary", 0.125]];
+  const nFmt = v => { const n = Math.pow(10, v); return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + " million" : L.fmtInt(Math.round(n / 1000) * 1000) ; };
+  const gb = by => by >= 1e12 ? (by / 1e12).toFixed(2) + " TB" : by >= 1e9 ? (by / 1e9).toFixed(1) + " GB" : (by / 1e6).toFixed(0) + " MB";
+  const S4 = { n: 5.7, d: 2, p: 0 };
+  function render4() {
+    const n = Math.pow(10, S4.n), d = DIMS[S4.d], [pn, pb] = PREC[S4.p];
+    const raw = n * d * pb, tot = raw + n * 128, big = n * 3072 * 4 + n * 128;
+    $("st4-raw").textContent = gb(raw); $("st4-raw-s").textContent = `${L.fmtInt(Math.round(n))} × ${d} × ${pb} byte${pb === 1 ? "" : "s"}`;
+    $("st4-tot").textContent = gb(tot); $("st4-rel").textContent = (100 * tot / big).toFixed(tot / big < 0.1 ? 1 : 0) + "%";
+    $("st4-tot-b").className = "stat " + (tot > 64e9 ? "bad" : tot > 8e9 ? "warn" : "ok");
+    $("s4-verdict").innerHTML = tot > 64e9 ? "Too big for one ordinary server's memory: you would shard the index or compress the vectors, and check recall after each step." : tot > 8e9 ? "Fits on a large server but needs deliberate sizing." : "Small: memory is not the constraint, so choose on quality.";
+  }
+  L.bind("s-n", nFmt, v => { S4.n = v; render4(); });
+  L.bind("s-dim", v => DIMS[v] + "", v => { S4.d = v; render4(); });
+  L.bind("s-prec", v => PREC[v][0], v => { S4.p = v; render4(); });
+
+  window.addEventListener("resize", () => { render2(); });
+  render1(); render2(); render3(); render4();
+})();
+</script>
+</body>
+</html>

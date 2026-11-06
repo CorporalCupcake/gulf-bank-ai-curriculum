@@ -48,6 +48,16 @@ window.CATALOG = [
   {file: "m1-context-windows-and-the-kv.html", module: "M1", title: "What a Model Can Read, Why It Makes Things Up, and Which Kind of Model Fits the Job", codes: ["M1.5","M1.6","M1.7"], label: "M1.5 – M1.7", tier: "d", minutes: 45, star: true},
   {file: "m2-prompting-and-context-engineering.html", module: "M2", title: "Prompting and Context Engineering: Deciding What the Model Sees, and Getting Back Something a System Can Use", codes: ["M2.1","M2.2"], label: "M2.1 · M2.2", tier: "d", minutes: 40, star: true},
   {file: "m2-prompting-versus-rag-versus-fine.html", module: "M2", title: "Prompting, RAG or Fine-Tuning? Choosing How to Adapt a Model, and Doing It Cheaply with LoRA", codes: ["M2.3","M2.4"], label: "M2.3 · M2.4", tier: "d", minutes: 42, star: true},
+  {file: "m2-model-choice-cost-and-latency.html", module: "M2", title: "Choosing the Model, Counting the Cost, and Feeding It Documents, Images and Audio", codes: ["M2.5","M2.6"], label: "M2.5 · M2.6", tier: "d", minutes: 42},
+  {file: "m3-keyword-search-and-bm25.html", module: "M3", title: "Finding the Right Passage: Keyword Search (BM25), Dense Retrieval and Choosing an Embedding Model", codes: ["M3.1","M3.2"], label: "M3.1 · M3.2", tier: "d", minutes: 42},
+  {file: "m3-hybrid-search-and-reciprocal-rank.html", module: "M3", title: "Hybrid Search, Rank Fusion and Reranking: Two Searches, Then a Careful Reader", codes: ["M3.3","M3.4"], label: "M3.3 · M3.4", tier: "n", minutes: 40},
+  {file: "m3-chunking-strategies.html", module: "M3", title: "Chunking and Vector Search: How Documents Are Cut Up and How They Are Found Fast", codes: ["M3.5","M3.6"], label: "M3.5 · M3.6", tier: "d", minutes: 40},
+  {file: "m3-query-rewriting-hyde-and-multi.html", module: "M3", title: "Fixing the Question, Fencing the Answers: Query Rewriting, HyDE and Permission-Aware Retrieval", codes: ["M3.7","M3.8"], label: "M3.7 · M3.8", tier: "d", minutes: 40, star: true},
+  {file: "m3-parsing-messy-pdfs-and-scans.html", module: "M3", title: "Garbage In, Confident Answer Out: Parsing Messy PDFs and Diagnosing RAG Failures", codes: ["M3.9","M3.10"], label: "M3.9 · M3.10", tier: "d", minutes: 40, star: true},
+  {file: "m4-the-agent-loop-reason-act.html", module: "M4", title: "The Agent Loop and the Tools It Holds", codes: ["M4.1","M4.2"], label: "M4.1 · M4.2", tier: "d", minutes: 40, star: true},
+  {file: "m4-memory-short-term-long-term.html", module: "M4", title: "Agent Memory and Planning: How an Agent Keeps Track, and Breaks Work into Steps", codes: ["M4.3","M4.4"], label: "M4.3 · M4.4", tier: "n", minutes: 40},
+  {file: "m4-guardrails-and-approval-gates.html", module: "M4", title: "Guardrails, Approval Gates and Choosing the Simplest Agent Design", codes: ["M4.5","M4.6"], label: "M4.5 · M4.6", tier: "d", minutes: 42, star: true},
+  {file: "m5-reference-based-metrics-bleu-rouge.html", module: "M5", title: "Grading Generated Text: Overlap Metrics and LLM-as-Judge", codes: ["M5.1","M5.2"], label: "M5.1 · M5.2", tier: "d", minutes: 40, star: true},
   {file: "a1-know-your-agent.html", module: "A1", title: "Know Your Agent: How AI Agents Get Permission to Pay", codes: ["A1.1","A1.2","A1.3","A1.4","A1.5"], label: "A1.1 – A1.5", tier: "n", star: true, fast: true, minutes: 40}
 ];
 

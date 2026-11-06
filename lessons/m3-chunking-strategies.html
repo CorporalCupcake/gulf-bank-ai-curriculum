@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chunking and Vector Search: How Documents Are Cut Up and How They Are Found Fast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  pre { font-family: var(--font-mono); font-size: 13px; line-height: 1.5; background: var(--sunk); padding: 12px 14px; border-radius: 8px; overflow-x: auto; max-width: 100%; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .sec-a { fill: var(--neutral); fill-opacity: .35; }
+  .sec-b { fill: var(--neutral); fill-opacity: .6; }
+  .sec-bad { fill: var(--bad); fill-opacity: .6; }
+  .chk { fill: var(--accent); fill-opacity: .35; stroke: var(--accent); stroke-width: 1; }
+  .ln-ink { stroke: var(--ink); stroke-width: 2.4; fill: none; }
+  .ln-acc { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .ln-warn { stroke: var(--warn); stroke-width: 2.2; stroke-dasharray: 5 4; fill: none; }
+  .ln-cur { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; }
+  .dot-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .dot-hl { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track M · Modern AI systems</span>
+    <span>Module M3 · Retrieval and RAG</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>M3.5 · M3.6</span>
+        <span class="pill d">Day one</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Chunking and Vector Search: How Documents Are Cut Up and How They Are Found Fast</h1>
+      <p class="dek">Why the way you split a policy manual decides what a RAG system can ever find, and how HNSW, IVF and product quantisation make nearest-neighbour search over millions of chunks fast enough, at the price of sometimes missing the best answer.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A retrieval system can only return pieces you created, so chunking sets the ceiling on what it can find, and an approximate index then trades a small, measurable slice of recall for speed and memory, so you must measure both rather than assume either is fine.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A staff copilot at a Gulf bank answers questions from the 400-page credit policy manual. An officer asks: <em>"Can we lend to a self-employed customer with 11 months of trading history?"</em> Somewhere on page 212 the policy says <em>"Self-employed applicants must show 24 months of trading history."</em> On the next line: <em>"Exception: 12 months is acceptable for customers of the bank for more than five years, with Credit Committee approval."</em></p>
+        <p>Now imagine the manual was cut into pieces of 500 characters, with no regard for where sentences end. The rule lands in one piece and the exception in the next. The search engine finds the first piece, which is relevant, and hands it to the language model. The model says: "No, 24 months are required." It never saw the exception. Nothing malfunctioned. The failure happened months earlier, in a line of data-preparation code that chose a number.</p>
+        <p>Cutting is only the first half. The second half is <strong>finding</strong>. Suppose the manual, plus every circular, product guide and complaint procedure, becomes five million chunks, each stored as a list of 1,024 numbers (an <em>embedding</em>, see <a href="f1-vectors-matrices-geometry.html">F1.1</a>). To answer a question you need the few chunks whose vectors are closest to the question's vector. Comparing against all five million takes a noticeable fraction of a second per query on a single machine, and a serving cluster has to do it for hundreds of staff at once. So production systems build an <em>index</em> that jumps to the right neighbourhood and compares against a few thousand vectors instead. The jump is a guess. Sometimes the true nearest neighbour is in a neighbourhood the index never visited.</p>
+      </div>
+
+      <div class="prose">
+        <p>Two ideas, then, and one theme running through both.</p>
+        <ul>
+          <li><strong>Chunking is a bet about what a question will need.</strong> Big chunks keep context together but dilute the match and fill the model's window with noise. Small chunks match precisely but lose the surrounding facts. There is no universal size. There are structure, size and overlap choices, and you test them on your own documents.</li>
+          <li><strong>Approximate nearest-neighbour (ANN) search is a controlled bet too.</strong> You accept finding, say, 95 of the true top 100 in exchange for a hundredfold speed-up and a fraction of the memory. The settings are dials, and the loss is something you can measure.</li>
+          <li><strong>Neither failure is visible in the answer.</strong> A missed exception or a missed neighbour produces a fluent, confident, wrong reply. You only see it if you test retrieval itself, before the model speaks.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Ask of any RAG system: <em>what are the chunks, what is the retrieval recall on a test set of real questions, and what fraction of exact-search results does the index return?</em> Those are three different numbers, and most teams only know the third, if any.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-chunk">Chunking strategies</h3>
+      <div class="prose">
+        <p>A <strong>chunk</strong> is the unit of retrieval: one embedding, one search hit, one passage given to the model. Its size is measured in tokens (<a href="m1-tokenisation.html">M1.1</a>) rather than characters, because the embedding model and the language model both have token limits, and because Arabic and English text produce different token counts for the same sentence. The main strategies, from the simplest:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Strategy</th><th>How it cuts</th><th>Good at</th><th>Weak at</th></tr></thead>
+          <tbody>
+            <tr><td><b>Fixed-size window</b></td><td>Every <i>C</i> tokens, optionally overlapping by <i>O</i> tokens so neighbouring chunks share an edge.</td><td>Simple, predictable cost, works on any text.</td><td>Cuts mid-sentence and mid-clause. Splits a rule from its exception.</td></tr>
+            <tr><td><b>Recursive / separator-based</b></td><td>Try to split on paragraph breaks, then sentences, then words, only going finer when a piece is still too big.</td><td>Respects natural breaks. The usual sensible default.</td><td>Knows nothing about meaning or document layout.</td></tr>
+            <tr><td><b>Structure-aware</b></td><td>Split by the document's own structure: headings, numbered clauses, tables, pages, email threads. Keep the heading path with each chunk.</td><td>Policies, contracts, regulations, product terms. A clause stays whole.</td><td>Needs good parsing first (<a href="m3-parsing-messy-pdfs-and-scans.html">M3.9</a>). Sections vary wildly in length.</td></tr>
+            <tr><td><b>Semantic</b></td><td>Embed sentences, cut where the similarity between neighbouring sentences drops.</td><td>Mixed-topic prose with no headings.</td><td>Can produce tiny fragments; costs an embedding pass; gains over recursive splitting are mixed (Part 4).</td></tr>
+            <tr><td><b>Parent-child (small-to-big)</b></td><td>Embed small child chunks for precise matching, but return the larger parent section that contains the match.</td><td>Precision of small chunks with the context of large ones.</td><td>More plumbing; parents can still be too large.</td></tr>
+            <tr><td><b>Contextualised chunks</b></td><td>Prepend a short generated or templated description to each chunk ("From the Retail Credit Policy, section 4.2, self-employed applicants") before embedding and indexing.</td><td>Chunks that make no sense alone: "Exception: 12 months is acceptable."</td><td>Indexing cost (an LLM call per chunk, reduced with caching); description errors become index errors.</td></tr>
+            <tr><td><b>Late chunking</b></td><td>Run a long-context embedding model over the whole document first, then pool token vectors into chunk vectors, so each chunk's embedding has seen the surrounding text.</td><td>Pronouns and references ("the Bank", "this clause") that need context.</td><td>Needs a long-context embedding model; documents beyond its window still need splitting.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Four design choices matter more than the names.</p>
+        <ul>
+          <li><strong>Size.</strong> A chunk that is too long mixes several topics into one vector, which then sits "between" them and matches none well; it also fills the context window with irrelevant text, which raises cost and can bury the answer (<a href="m1-context-windows-and-the-kv.html">M1.5</a>). A chunk that is too short can't carry the facts needed to answer. A common starting range is 200 to 800 tokens, but the right answer depends on the shortest self-contained unit in your documents. For a FAQ, one question and answer. For a regulation, one article.</li>
+          <li><strong>Overlap.</strong> Repeating the last 10 to 20% of each chunk at the start of the next reduces the chance that a fact straddles a boundary, at the price of a larger index and duplicate hits. Overlap helps fixed windows a lot and structure-aware splitting very little, because the latter doesn't cut inside units.</li>
+          <li><strong>Metadata.</strong> Each chunk should carry its document, section path, date, version, language, product and access class. This does three jobs: the heading path can be embedded with the text, filters can enforce who may see what (a hard requirement in a bank, see Part 3), and the citation shown to the user can point to a real page.</li>
+          <li><strong>What counts as "the same document".</strong> The same policy exists in versions. If old and new versions are both indexed, retrieval returns both and the model blends them. Chunking is also where you attach the effective date and, ideally, retire superseded content.</li>
+        </ul>
+        <p>The tension in one sentence: the unit that is best for <em>matching</em> a query is small and focused, while the unit that is best for <em>answering</em> is large enough to hold the whole rule. Parent-child chunking, contextualised chunks and late chunking are three different ways to have both. A fourth is to retrieve small and then let an agent read around the hit (<a href="a6-agentic-rag.html">A6.3</a>).</p>
+        <p>Here is what a minimal structure-aware chunker looks like. It is about twelve lines, and it encodes three decisions: split on headings, never exceed a token cap, and keep the heading path as context.</p>
+<pre><code>def chunk_policy(sections, max_tokens=500):
+    chunks = []
+    for sec in sections:                      # sec.path = "Retail credit > 4.2 Self-employed"
+        buf, n = [], 0
+        for para in sec.paragraphs:           # paragraphs, kept whole
+            t = count_tokens(para)
+            if buf and n + t &gt; max_tokens:   # flush before overflowing
+                chunks.append(make(sec, buf)); buf, n = [], 0
+            buf.append(para); n += t
+        if buf: chunks.append(make(sec, buf))
+    return chunks                             # make() prepends sec.path and attaches metadata</code></pre>
+        <p>A real one also needs a fallback for a single paragraph longer than the cap, a rule for tables (keep a table whole, or one row per chunk with the header repeated), and special handling for lists whose first line is the introduction to the rest.</p>
+      </div>
+
+      <figure class="figure" id="fig-chunk">
+        <div class="fig-head"><span class="fig-title">Cut the manual, and see which rules survive in one piece</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> start with fixed windows of 300 tokens and no overlap. Many sections (the red ones) are cut in two. Add 25% overlap and the broken share falls, but the index grows. Then switch to "Respect sections": rules are kept whole until a section is longer than the chunk size. Now push the chunk size up and watch the lower chart: coverage climbs, but the share of each chunk that is actually the answer falls.</p>
+        <div class="btns" role="group" aria-label="Chunking mode">
+          <button class="btn" type="button" id="b-fixed" aria-pressed="true">Fixed windows</button>
+          <button class="btn" type="button" id="b-struct" aria-pressed="false">Respect sections</button>
+        </div>
+        <div class="chart-wrap" id="chunk-strip"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral);opacity:.6"></i>Section kept whole</span>
+          <span><i class="sq" style="background:var(--bad);opacity:.6"></i>Section split across chunks</span>
+          <span><i class="sq" style="background:var(--accent);opacity:.4"></i>Chunks (alternating rows when they overlap)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-csize">Chunk size <output for="s-csize"></output></label><input type="range" id="s-csize" min="100" max="1600" step="50" value="300"></div>
+          <div class="ctl"><label for="s-cov">Overlap (fixed windows only) <output for="s-cov"></output></label><input type="range" id="s-cov" min="0" max="50" step="5" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st1-cov-b"><div class="k">Sections found whole in one chunk</div><div class="v" id="st1-cov"></div><div class="s">of 40 sections a question might need</div></div>
+          <div class="stat"><div class="k">Share of a hit that is the answer</div><div class="v" id="st1-share"></div><div class="s">average over sections kept whole</div></div>
+          <div class="stat"><div class="k">Chunks in the index</div><div class="v" id="st1-n"></div><div class="s" id="st1-n-s"></div></div>
+          <div class="stat"><div class="k">Tokens sent for top-5 hits</div><div class="v" id="st1-tok"></div><div class="s">goes into the model's context</div></div>
+        </div>
+        <div class="chart-wrap" id="chunk-curve" style="margin-top:14px"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Whole-section coverage, fixed windows</span>
+          <span><i style="background:var(--accent)"></i>Whole-section coverage, respect sections</span>
+          <span><i style="background:var(--warn)"></i>Share of a hit that is the answer (fixed)</span>
+        </div>
+        <p class="verdict" id="s1-verdict" style="margin-top:12px"></p>
+        <p class="sim-note">Simulated: a 12,000-token manual of 40 sections with lengths between 60 and 420 tokens, generated from a fixed seed, not a real policy. "Whole" means the section sits entirely inside one chunk, so the rule and its exception are retrieved together. Fixed windows start every (size minus overlap) tokens; "respect sections" packs whole sections greedily up to the size and splits only a section that is longer than the size. Exact counts for this document; a different manual would give different numbers, but the shape is the same.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things the simulation shows that rules of thumb hide. First, <strong>coverage and focus pull in opposite directions</strong> for fixed windows: there is no size that gives both. Second, <strong>structure beats size</strong>: respecting section boundaries reaches high coverage at much smaller chunks, which is also cheaper to send to the model. Third, <strong>overlap is a patch</strong> for blind cutting. It is useful, but it buys coverage with index size and duplicate results.</p>
+        <p>Chunking has its own evaluation: take 50 to 200 real questions with known source passages, run retrieval under each candidate chunking, and measure how often the right passage appears in the top 5 (recall@5) and how often the answer is actually derivable from what was retrieved. Do this before comparing embedding models or prompts. Embedding model and chunking interact, so redo it when either changes.</p>
+      </div>
+
+      <h3 class="sub" id="m-ann">Vector databases and ANN indexes: HNSW, IVF, PQ</h3>
+      <div class="prose">
+        <p>Exact nearest-neighbour search compares the query with every stored vector: with <i>N</i> vectors of dimension <i>d</i>, that is about <i>N</i> × <i>d</i> multiplications per query. For five million 1,024-dimensional vectors, that is over five billion operations per query. Modern hardware can do it (and for under about a million vectors, exact search is often the right answer), but latency and cost scale linearly. At 100 million vectors it stops being a sensible plan for interactive use.</p>
+        <p>A <strong>vector database</strong> is a store that keeps the vectors, their metadata and an index together, and answers "give me the <i>k</i> nearest to this vector, among chunks matching these filters". Examples include dedicated systems and also extensions to databases the bank already runs, such as pgvector for PostgreSQL. The interesting part is the index. Three ideas do nearly all the work, and real systems combine them.</p>
+      </div>
+
+      <div class="prose">
+        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">IVF: group first, then search a few groups</h4>
+        <p>Inverted file (IVF) indexes run k-means clustering over the vectors, so each vector belongs to the cell of its nearest of <i>nlist</i> centroids. At query time, find the few centroids closest to the query (cheap, since there are only a few hundred), then scan only the vectors in those <i>nprobe</i> cells. With <i>nlist</i> = 1,000 and <i>nprobe</i> = 10, you look at roughly 1% of the data. The failure is geometric: a true neighbour sitting just across a cell boundary lives in a cell you did not probe. Raising <i>nprobe</i> recovers it at higher cost. Think of a library sorted into rooms: you search the three rooms that sound most relevant, and a book shelved in a fourth is invisible.</p>
+        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:18px">HNSW: a map you walk across</h4>
+        <p>Hierarchical Navigable Small World (HNSW) builds a graph where each vector links to a handful of nearby vectors. To search, start somewhere, look at the neighbours of your current position, step to whichever is closest to the query, and repeat until no neighbour is closer. Walking a graph like this finds the right region in a few dozen steps, not a few million comparisons. The "hierarchical" part adds sparse upper layers with long-range links, like motorways above local roads, so the walk starts near the target instead of at a random point. Two knobs matter: <i>M</i>, how many links per vector (more links, better graph, more memory), and <i>ef</i>, how many candidates the search keeps in play (a wider beam, higher recall, slower). HNSW is the default in most vector databases because it gives high recall at low latency. Its costs are memory (the graph lives in RAM, on top of the vectors) and slower, more awkward updates and deletions.</p>
+        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:18px">PQ: compress the vectors themselves</h4>
+        <p>Product quantisation (PQ) shrinks each vector. Split the 1,024 numbers into <i>m</i> pieces, say 64 pieces of 16 numbers. For each piece, learn a codebook of 256 typical 16-number patterns. Replace each piece with the index of its nearest pattern: one byte. A 4,096-byte float vector becomes 64 bytes, a 64-fold saving. Distances are then estimated by table lookups: precompute the distance from the query's piece to each of the 256 patterns, and sum <i>m</i> table entries per stored vector. The cost is accuracy: you now rank by approximate distances. The standard remedy is <strong>re-ranking</strong>: use the compressed index to shortlist, say, 100 candidates, then compute exact distances for only those, using full vectors kept on disk or in cheaper memory.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>memory</mtext><mo>≈</mo><mi>N</mi><mo>·</mo><mi>d</mi><mo>·</mo><mn>4</mn><mtext> bytes (float32)</mtext><mspace width="1em"></mspace><mtext>versus</mtext><mspace width="1em"></mspace><mi>N</mi><mo>·</mo><mi>m</mi><mtext> bytes (PQ with 256 codewords per piece)</mtext></math>
+        <p class="where"><i>N</i> is the number of chunks, <i>d</i> the embedding dimension and <i>m</i> the number of pieces. Five million chunks at 1,024 dimensions is 5,000,000 × 1,024 × 4 ≈ 20.5 GB of raw vectors. With <i>m</i> = 64 the codes take 0.32 GB. An HNSW graph with 16 links per vector adds a few hundred bytes per vector on top (roughly 2 × 16 × 4 bytes at the base layer), about 0.6 to 1 GB here.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Other methods fall under the same ideas. <strong>DiskANN</strong> (2019) keeps a graph and compressed codes in memory but full vectors on SSD, so one machine can serve billions of vectors. <strong>ScaNN</strong> (Google) refines the quantisation to preserve the inner products that matter for ranking. <strong>Scalar quantisation</strong> to 8 or 4 bits per number, and <strong>binary quantisation</strong> to one bit, are cruder but simpler compression. FAISS, the library that packaged these methods, gives names like <code>IVF4096,PQ64</code> to combinations. The Matryoshka embeddings of <a href="r10-matryoshka-embeddings.html">R10.1</a> attack the same memory problem from the model side, by making short prefixes of the vector useful on their own.</p>
+      </div>
+
+      <figure class="figure" id="fig-ann">
+        <div class="fig-head"><span class="fig-title">Speed against recall: IVF and a graph index on the same data</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> choose IVF and set the number of cells probed to 1. The search is fast, but misses many neighbours. Increase it and recall climbs towards 100% as the cost approaches a full scan. Switch to the graph and widen the beam. Compare where each curve sits: for the same recall, which one compares fewer vectors? Find the setting where each reaches 95% recall.</p>
+        <div class="btns" role="group" aria-label="Index type">
+          <button class="btn" type="button" id="b-ivf" aria-pressed="true">IVF (cells)</button>
+          <button class="btn" type="button" id="b-graph" aria-pressed="false">Graph (HNSW-style walk)</button>
+        </div>
+        <div class="chart-wrap" id="ann-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>IVF, more cells probed</span>
+          <span><i style="background:var(--accent)"></i>Graph, wider beam</span>
+          <span><i style="background:var(--warn)"></i>Your setting</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-ann" id="l-ann">Cells probed <output for="s-ann"></output></label><input type="range" id="s-ann" min="0" max="9" step="1" value="2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st2-rec-b"><div class="k">Recall@10 (true top 10 found)</div><div class="v" id="st2-rec"></div><div class="s">average over 80 queries</div></div>
+          <div class="stat"><div class="k">Vectors compared</div><div class="v" id="st2-cost"></div><div class="s" id="st2-cost-s"></div></div>
+          <div class="stat"><div class="k">Speed-up over exact search</div><div class="v" id="st2-spd"></div><div class="s">in distance computations</div></div>
+          <div class="stat"><div class="k">Queries that missed something</div><div class="v" id="st2-miss"></div><div class="s">of 80, at least one of top 10 absent</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict" style="margin-top:12px"></p>
+        <p class="sim-note">Simulated and actually computed in your browser: 3,000 vectors in 16 dimensions, drawn around 30 cluster centres; 80 queries made by perturbing stored vectors. IVF uses 48 k-means cells. The graph is a single-layer nearest-neighbour graph (each vector linked to its 8 nearest, made two-way) searched with a beam, so it is HNSW without the upper layers, which only speed up finding the starting point. Distance computations are counted exactly; recall is measured against brute force. Real indexes on millions of vectors behave better in speed-up terms, because the gain grows with N.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What to read from the curves. Both families bend: the first improvements are cheap and the last few points of recall are expensive. Pushing from 90% to 99% recall can cost several times more than reaching 90%. Which recall you need depends on the use. A RAG system that retrieves 20 chunks and re-ranks them is robust to missing the 7th best; a duplicate-detection or sanctions-screening system that must find <em>the</em> matching record is not (<a href="b2-sanctions-screening-and-name-matching.html">B2.3</a>).</p>
+        <p>Recall at the ANN level is <em>not</em> answer quality. It measures how faithfully the index reproduces exact search. If exact search itself returns the wrong chunk because of poor chunking, a perfect index reproduces the error efficiently. Both layers need their own tests.</p>
+      </div>
+
+      <h4 class="subsub" style="font-family:var(--font-display);font-size:18px;margin:26px 0 6px">Compression: what product quantisation costs in recall</h4>
+      <figure class="figure" id="fig-pq">
+        <div class="fig-head"><span class="fig-title">Shrinking vectors, and winning accuracy back by re-ranking</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> start with 8 pieces and no re-ranking: recall is only middling (about 56%). Reduce to 1 or 2 pieces and it collapses, because there are too few distinct codes to tell vectors apart. Now switch re-ranking on, which shortlists 50 candidates by compressed distance and then re-scores them exactly: at 8 pieces recall returns to about 99%. At 1 piece it stays poor (about 26%), so re-ranking cannot rescue a shortlist that never contained the answer. Then use the memory sliders to size a real bank deployment.</p>
+        <div class="btns" role="group" aria-label="Re-ranking">
+          <button class="btn" type="button" id="b-rr" aria-pressed="false">Re-rank the top 50 with exact distances</button>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-pq">Pieces per vector (m) <output for="s-pq"></output></label><input type="range" id="s-pq" min="0" max="4" step="1" value="3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-rec-b"><div class="k">Recall@10 vs exact search</div><div class="v" id="st3-rec"></div><div class="s" id="st3-rec-s"></div></div>
+          <div class="stat"><div class="k">Bytes per vector</div><div class="v" id="st3-bytes"></div><div class="s">against 64 uncompressed</div></div>
+          <div class="stat"><div class="k">Compression</div><div class="v" id="st3-cmp"></div><div class="s">in this toy (16 dimensions)</div></div>
+        </div>
+        <h4 style="font-family:var(--font-display);font-size:16px;margin:18px 0 8px">Sizing calculator</h4>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Chunks in the index <output for="s-n"></output></label><input type="range" id="s-n" min="5.7" max="9" step="0.05" value="6.7"></div>
+          <div class="ctl"><label for="s-d">Embedding dimension <output for="s-d"></output></label><input type="range" id="s-d" min="0" max="3" step="1" value="2"></div>
+          <div class="ctl"><label for="s-m">PQ bytes per vector <output for="s-m"></output></label><input type="range" id="s-m" min="16" max="192" step="16" value="64"></div>
+        </div>
+        <div class="table-wrap" style="margin-top:10px"><div id="mem-table"></div></div>
+        <p class="verdict" id="s3-verdict" style="margin-top:12px"></p>
+        <p class="sim-note">Simulated and computed in your browser, on the same 3,000-vector set as Simulation 2. Here each piece has 16 codewords (4 bits) because 3,000 vectors cannot train 256; real systems use 256 per piece. Recall is measured against exact search. The memory table is arithmetic: raw vectors only for float32, float16, int8, 1-bit and PQ, and HNSW graph links estimated as 32 links of 4 bytes per vector (M = 16). Real systems add metadata, text and replicas, so treat the numbers as lower bounds.</p>
+      </figure>
+
+      <div class="prose">
+        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">Filters: the part that bites in a bank</h4>
+        <p>Real queries are never "nearest to this vector, full stop". They are "nearest to this vector, among documents this user may see, in English or Arabic, effective after January 2026, for the retail product". This is <strong>filtered search</strong>, and it is where approximate indexes are most fragile. If the index finds the 40 nearest vectors <em>first</em> and filters afterwards, a filter that keeps 5% of the data leaves you with about two results. If it filters first, the graph can fall apart, because most links lead to excluded nodes. Systems handle it differently (filter-aware graph traversal, partitioned indexes, per-tenant indexes, iterative scans that keep going until enough results pass), and behaviour differs across products and versions. Two consequences: test recall <em>with the filters you will really use</em>, and enforce access control in the retrieval layer, never in the prompt. A chunk the user may not see must not reach the model at all.</p>
+        <p>Other operational facts worth knowing: updates and deletes (a withdrawn policy must disappear promptly, and some index types handle deletion awkwardly), index rebuilds when you change the embedding model (every vector must be re-computed, as vectors from different models are not comparable), and the choice between exact search for small collections and an ANN index for large ones. If the collection is under a few hundred thousand chunks, brute force on one machine is simple, exact and often fast enough.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Chunking and indexing are the plumbing in the middle of the RAG pipeline. Their choices echo upstream and downstream.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M3.1 · M3.2 · Keyword search and BM25</span><span class="t"><a href="m3-keyword-search-and-bm25.html">The other way to find a chunk</a></span><p>BM25 searches the same chunks by exact words. Account numbers, product codes and clause numbers match there and not in embeddings. Chunking affects BM25 too: a term's weight depends on chunk length.</p></div>
+        <div class="link-card"><span class="code">M3.3 · M3.4 · Hybrid search and fusion</span><span class="t"><a href="m3-hybrid-search-and-reciprocal-rank.html">Run both, merge the ranks</a></span><p>Production retrieval usually combines a vector index with a keyword index. Both draw on the chunks you create here, and the ANN recall you accept feeds the fusion step.</p></div>
+        <div class="link-card"><span class="code">M3.7 · Query rewriting and HyDE</span><span class="t"><a href="m3-query-rewriting-hyde-and-multi.html">Fix the question, not the chunks</a></span><p>A short, vague query matches long chunks badly. Rewriting the query, or generating a hypothetical answer to embed, bridges the gap from the other side.</p></div>
+        <div class="link-card"><span class="code">M3.9 · Parsing messy PDFs and scans</span><span class="t"><a href="m3-parsing-messy-pdfs-and-scans.html">Structure-aware chunking needs structure</a></span><p>You can only respect headings, tables and clauses if the parser found them. A scrambled two-column PDF cannot be rescued by a clever chunker.</p></div>
+        <div class="link-card"><span class="code">M2.3 · RAG versus prompting versus fine-tuning</span><span class="t"><a href="m2-prompting-versus-rag-versus-fine.html">When retrieval is the right tool</a></span><p>That lesson decides whether to retrieve at all. This one decides how well the retrieval part performs once you have chosen it.</p></div>
+        <div class="link-card"><span class="code">M1.1 · M1.5 · Tokens and context</span><span class="t"><a href="m1-context-windows-and-the-kv.html">Chunk size is spent from a budget</a></span><p>Five hits of 800 tokens is 4,000 tokens of context on every question. At volume, that is a bill and a latency cost; irrelevant padding also degrades answers.</p></div>
+        <div class="link-card"><span class="code">F1.1 · Vectors and similarity</span><span class="t"><a href="f1-vectors-matrices-geometry.html">What "near" means</a></span><p>Cosine similarity and dot product are the distances ANN indexes approximate. Normalising vectors makes the two coincide, which many indexes assume.</p></div>
+        <div class="link-card"><span class="code">F5.7 · Contrastive learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">Where embeddings come from</a></span><p>Embedding models are trained so that matching question-passage pairs land close together. A chunk that looks unlike training passages (a table, a legal clause list) embeds worse.</p></div>
+        <div class="link-card"><span class="code">A6.1 · A6.3 · Agentic RAG and visual retrieval</span><span class="t"><a href="a6-agentic-rag.html">Beyond fixed pipelines</a></span><p>Agents can search again, read around a hit and follow cross-references, which softens chunking errors. <a href="a6-search-over-document-images-colpali.html">Page-image retrieval</a> sidesteps text chunking for layout-heavy documents.</p></div>
+        <div class="link-card"><span class="code">A4.3 · Groundedness</span><span class="t"><a href="a4-hallucination-detection-and-groundedness.html">Checking the answer against its sources</a></span><p>If the evidence was never retrieved, no groundedness check can save the answer. Evaluate retrieval first, generation second.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Staff copilots over policy and procedure</strong> (<a href="b7-internal-copilots-for-staff.html">B7.3</a>). Numbered clauses, exceptions, version dates and entitlement by role. Structure-aware chunks, effective-date filters and access filters are the core design. Bilingual manuals need a decision on whether Arabic and English versions are separate chunks, linked chunks or one chunk, and an embedding model that handles both.</li>
+          <li><strong>Trade finance and contract documents</strong> (<a href="b7-document-ai-for-trade-finance.html">B7.1</a>). Letters of credit and guarantees where the answer depends on a table or an annex referred to in a clause. Cross-references mean a chunk is not self-contained: contextualised chunks or parent-child retrieval help.</li>
+          <li><strong>Regulatory libraries.</strong> Circulars from the Central Bank of the UAE or SAMA, and internal mappings to them. Articles amend articles; keep the amendment history and dates in metadata so a superseded text is not quoted as current.</li>
+          <li><strong>Customer service and complaints.</strong> Short, self-contained FAQ answers want small chunks. Case notes and call transcripts are the opposite: speaker turns, timing, and the need to see the whole conversation. Transcripts chunked by fixed windows cut customer from agent reply.</li>
+          <li><strong>Privacy and entitlements.</strong> Chunking multiplies the number of items needing access control. A document-level permission must be copied onto every chunk, and permission changes must reach the index. Embedding vectors can leak information about source text, so treat the vector store as sensitive as the documents.</li>
+          <li><strong>Non-RAG uses of the same indexes.</strong> Finding similar past fraud cases, near-duplicate customer records, or candidate entities for screening. There the recall of the index is itself a control, not a convenience.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The index algorithms are mature and the open questions have moved. For chunking, the debate is about whether clever strategies beat sensible simple ones, and about adding context to chunks. For vector search, the live issues are filtered search, very large and disk-based indexes, and cheap compression.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with two light searches. Items from memory are marked as such; 2026 benchmark figures come from secondary write-ups, so verify them against the original reports before quoting.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2011</span><div><div class="t">Product quantisation</div><p>Jégou, Douze and Schmid introduced PQ for approximate nearest-neighbour search in compressed form, with the table-lookup distance estimate used ever since.</p><div class="src">Jégou et al., IEEE TPAMI, 2011 (from memory)</div></div></li>
+        <li><span class="yr">2016–18</span><div><div class="t">HNSW</div><p>Malkov and Yashunin's hierarchical navigable small-world graphs gave high recall at low latency and became the default index in most vector databases.</p><div class="src">Malkov &amp; Yashunin, IEEE TPAMI, 2018 (arXiv 2016; from memory)</div></div></li>
+        <li><span class="yr">2017–19</span><div><div class="t">FAISS and DiskANN</div><p>FAISS packaged IVF, PQ and graph methods, including GPU versions, for billion-scale search. DiskANN showed a single machine with an SSD could serve a billion points at high recall.</p><div class="src">Johnson, Douze &amp; Jégou, 2017; Subramanya et al., NeurIPS 2019 (from memory)</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Position matters inside the context</div><p>Models use information at the start and end of a long context better than the middle, an argument for sending fewer, better chunks instead of many.</p><div class="src">Liu et al., "Lost in the Middle", 2023 (from memory)</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Contextual retrieval and late chunking</div><p>Anthropic reported that prepending a model-written situating context to each chunk, before embedding and before BM25 indexing, cut failed top-20 retrievals by 35% with embeddings alone, by 49% combined with BM25, and by 67% with re-ranking added, on its own test sets. Jina's late chunking embeds the whole document first and pools token vectors into chunk vectors, so chunks carry surrounding context without any generation step.</p><div class="src">Anthropic, "Introducing Contextual Retrieval", Sep 2024; Günther et al., arXiv 2409.04701 (figures from memory)</div></div></li>
+        <li><span class="yr">Feb 2026</span><div><div class="t">Simple recursive chunking holds its own</div><p>A benchmark reported in secondary write-ups compared chunkers on 50 academic papers: recursive splitting at about 512 tokens reached roughly 69% end-to-end answer accuracy against about 54% for semantic chunking, even though semantic chunking retrieved slightly more relevant passages (roughly 92% against 88%). One explanation offered is that semantic chunking produced very small fragments (around 43 tokens on average) that did not carry enough to answer from. Sources disagree on the fixed-size figures, and I did not read the original report.</p><div class="src">FloTorch/Vecta benchmark as summarised by <a href="https://denser.ai/blog/rag-chunking-strategies/">denser.ai</a> and <a href="https://blog.premai.io/rag-chunking-strategies-the-2026-benchmark-guide">premai.io</a></div></div></li>
+        <li><span class="yr">Mar 2026</span><div><div class="t">No universal winner</div><p>A preprint reported testing 36 chunking methods across six domains and five embedding models and concluded that no single strategy is best everywhere, with paragraph-group chunking beating tiny fixed chunks. I could not verify the preprint directly; its conclusion matches the practical advice to test on your own documents.</p><div class="src">Reported via <a href="https://www.olostep.com/blog/rag-chunking-strategies">olostep.com</a> (secondary; unverified)</div></div></li>
+        <li><span class="yr">Feb 2026</span><div><div class="t">Filtered vector search benchmarked</div><p>An arXiv benchmark of filtered ANN search across systems reported that pgvector's cost-based planner often chooses poor plans for filtered queries, and that another system held recall more steadily. Practitioner guides report that recall can collapse when a filter matches only a small share of the data, and recommend measuring filtered recall against exact results on your own data. Behaviour of pgvector's filtering has changed across versions (iterative scans arrived in 0.8.0), so check the current documentation.</p><div class="src"><a href="https://arxiv.org/abs/2602.11443">arXiv 2602.11443</a> (I read the summary, not the paper)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, for bank-grade RAG:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Recursive or structure-aware chunking with metadata</b></td><td>200 to 800 token chunks split on headings and paragraphs, with section path, date and access labels attached.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>HNSW index with tuned <i>ef</i>, recall checked against exact search</b></td><td>The default in most managed and open-source vector stores.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Scalar or product quantisation with exact re-ranking</b></td><td>Compressed vectors in memory for shortlisting; full vectors fetched for the final ordering.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Hybrid keyword and vector retrieval with a re-ranker</b></td><td>Both indexes, merged, then a cross-encoder re-scores the top candidates.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Contextualised chunks</b></td><td>An LLM writes a one-line situating prefix per chunk at indexing time; prompt caching keeps cost manageable.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Parent-child retrieval</b></td><td>Match on small children, return the parent section.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Disk-based graph indexes (DiskANN family)</b></td><td>Billion-scale collections on SSD; mostly relevant to very large corpora, rarely to one bank's policy library.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Late chunking and learned or semantic chunkers</b></td><td>Chunk boundaries chosen by model rather than rule. Published gains are mixed and benchmark-dependent.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Per-bank chunking evaluation sets with known source passages</b></td><td>Treated as good practice in internal AI standards; rarely published.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Start with structure-aware or recursive chunks of a few hundred tokens, carry metadata, use an HNSW index checked against exact search, add context or hybrid search only where your retrieval tests show a gap, and trust no published benchmark over a test set built from your own documents and questions.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These problems produce fluent wrong answers rather than error messages. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">A rule separated from its exception</div><p>The chunk with the rule is retrieved. The chunk with the exception is not. The answer is confidently wrong.</p><div class="spot"><b>Spot it</b>Take ten clauses with known exceptions. Check whether rule and exception appear in the same retrieved chunk, or whether the cut falls between them.</div></li>
+        <li><div class="t">Chunks that make no sense alone</div><p>"As described above, the Bank may, subject to Section 7, ..." has no subject in isolation. Its embedding is vague and it matches nothing well.</p><div class="spot"><b>Spot it</b>Read twenty random chunks without context. If you cannot tell what they are about, neither can the embedding model. Add the heading path or a context line.</div></li>
+        <li><div class="t">Tables and lists chopped into confetti</div><p>A fee schedule split into rows without its header: "0.75%, AED 150, AED 3,000" with no idea what they are fees for.</p><div class="spot"><b>Spot it</b>Retrieve for a question answered only by a table. If the numbers return without column labels, the table was chunked blindly.</div></li>
+        <li><div class="t">Old and new versions both indexed</div><p>Retrieval returns last year's limit and this year's limit. The model averages or picks one.</p><div class="spot"><b>Spot it</b>Search for a value that changed in a recent revision and see whether two versions return. Check that effective-date metadata exists and filters are applied.</div></li>
+        <li><div class="t">Only measuring the index, not the retrieval</div><p>"Recall is 98%." That is the index versus exact search. It says nothing about whether exact search finds the right passage.</p><div class="spot"><b>Spot it</b>Ask for two numbers: ANN recall against brute force, and retrieval recall@k on questions with known answers.</div></li>
+        <li><div class="t">Recall quietly collapses under filters</div><p>The index test is run without filters, production always uses a role and language filter, and a narrow filter returns three weak results.</p><div class="spot"><b>Spot it</b>Measure recall at the filter selectivities you really use, against exact filtered search. Watch for queries that return fewer than <i>k</i> results.</div></li>
+        <li><div class="t">Chunks too big, context stuffed</div><p>Ten 1,500-token hits cost 15,000 tokens a query, and the answer sits in the middle where models read least reliably.</p><div class="spot"><b>Spot it</b>Log tokens of retrieved context per query. Compare answer quality at 3 and at 10 chunks; if it does not improve, you are paying for padding.</div></li>
+        <li><div class="t">Mixing embedding models</div><p>Documents embedded with one model, queries with another, or half the index re-embedded after an upgrade. Distances are meaningless.</p><div class="spot"><b>Spot it</b>Store the model name and version with every vector, and refuse to query across versions.</div></li>
+        <li><div class="t">Access control in the prompt</div><p>"Do not reveal documents the user is not allowed to see", while those documents are in the context.</p><div class="spot"><b>Spot it</b>Query as a low-privilege test user and inspect the retrieved chunks themselves, not the final answer.</div></li>
+        <li><div class="t">Stale index after deletion</div><p>A withdrawn circular is removed from the document store but its chunks stay in the index.</p><div class="spot"><b>Spot it</b>Withdraw a test document and query it an hour later. Check how deletes propagate and when graph indexes are rebuilt.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“The assistant can only quote pieces of our policies that we've cut out and indexed in advance. If a rule and its exception end up in different pieces, it can give a confident wrong answer. So we cut along the manuals' own structure, label every piece with its version and who may see it, and test on a few hundred real questions before launch. The search itself is a speed-for-accuracy trade, and we measure how often it misses what an exhaustive search would have found.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd chunk structurally with a recursive fallback at a few hundred tokens, carrying the section path and effective-date and entitlement metadata, then build a labelled question set to compare chunkings on recall@5 and answer correctness. For the index I'd start with HNSW, tune <i>ef</i> against exact search to a target recall, test it under the production filters, and add quantisation with exact re-ranking only if memory demands it. Access control is enforced as a filter at retrieval, not in the prompt, and every vector carries its embedding-model version.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“What chunk size should we use?”</summary><div class="ans"><p>There isn't a universal number. I'd start with a few hundred tokens split on the documents' own structure, and then test two or three sizes on a set of real questions. The smallest self-contained unit in the content, a clause or an FAQ answer, is a better guide than any benchmark. If one size can't serve both factual lookups and explanatory questions, use small chunks for matching and return the parent section.</p></div></details>
+        <details class="reveal"><summary>“Isn't semantic chunking just better?”</summary><div class="ans"><p>Not reliably. Published comparisons are mixed: some find it retrieves slightly more relevant passages but produces fragments too small to answer from, so end-to-end accuracy falls. It also costs an embedding pass at indexing time. I'd treat it as one candidate in the test, with a minimum chunk size, and keep it only if it wins on our documents.</p></div></details>
+        <details class="reveal"><summary>“Why not just search everything exactly? Isn't approximate search a risk?”</summary><div class="ans"><p>For a collection up to a few hundred thousand chunks, exact search is often fine, and I'd use it. Beyond that, latency and cost grow linearly. Approximate indexes give large speed-ups for a small loss that we can measure: we compare the index's top 10 with brute force on a sample of queries and tune until recall meets our target. The risk is real only where a miss is costly, such as sanctions matching, and there we would set the target higher or use exact search.</p></div></details>
+        <details class="reveal"><summary>“HNSW or IVF?”</summary><div class="ans"><p>HNSW is the usual default: high recall at low latency, but the graph lives in memory and deletions and rebuilds are awkward. IVF is cheaper to build and combines naturally with quantisation, which matters at very large scale or tight memory. The decision comes down to collection size, update pattern, memory budget and the recall target, so I'd benchmark both on our own vectors and filters.</p></div></details>
+        <details class="reveal"><summary>“The model gave a wrong answer. Is it the model or the retrieval?”</summary><div class="ans"><p>Look at what was retrieved for that question before blaming the model. If the correct passage is absent from the top results, the fault is in chunking, embedding, filtering or the index, and a better prompt won't help. If it was present and the model ignored or misread it, it's a generation problem. Logging retrieved chunks per query makes that a one-minute check.</p></div></details>
+        <details class="reveal"><summary>“How do we keep restricted documents away from the wrong staff?”</summary><div class="ans"><p>With filters at retrieval time, using entitlement metadata copied onto every chunk and synchronised with the source system's permissions. The model must never receive text the user may not see, since prompt instructions are not a security control. I'd test with low-privilege accounts, and I'd check that filtered recall holds up, because narrow filters are where approximate indexes weaken. I don't know offhand what the bank's specific data-classification rules require, so I would confirm those with information security.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A 100,000-token manual is cut into fixed windows of 500 tokens with 100 tokens of overlap. Roughly how many chunks, and how many tokens go into the index in total?</summary><div class="ans"><p>The window advances 400 tokens each time, so about (100,000 − 100) ÷ 400 ≈ 250 chunks. Index tokens ≈ 250 × 500 = 125,000, which is 25% more than the manual, the price of the overlap.</p></div></details>
+        <details class="reveal"><summary>2. Why does enlarging chunks raise "whole-section coverage" but not necessarily answer quality?</summary><div class="ans"><p>Bigger chunks are more likely to contain a whole rule and its exception, so coverage rises. But the embedding then represents several topics at once and matches the question less sharply, the share of each hit that is relevant falls, and more irrelevant tokens enter the model's context at greater cost. Quality peaks at a middle size and depends on the documents.</p></div></details>
+        <details class="reveal"><summary>3. Five million chunks, 1,024 dimensions, float32. What is the raw vector memory, and what is it with 64-byte PQ codes?</summary><div class="ans"><p>5,000,000 × 1,024 × 4 = 20.48 GB raw. PQ: 5,000,000 × 64 = 0.32 GB, a 64-fold reduction. Add graph links and metadata on top, and keep the full vectors somewhere cheaper if you want to re-rank.</p></div></details>
+        <details class="reveal"><summary>4. An IVF index with 1,000 cells probes 10 of them. About what fraction of the vectors does it scan, and when does this miss a true neighbour?</summary><div class="ans"><p>About 1% (assuming reasonably even cells), plus the cheap comparison against 1,000 centroids. It misses a neighbour when that neighbour sits in a cell that is not among the 10 nearest centroids to the query, typically a point near a cell boundary. Probing more cells reduces the misses.</p></div></details>
+        <details class="reveal"><summary>5. The team reports "ANN recall is 99%". The assistant still fails 20% of test questions on retrieval. Is the index at fault?</summary><div class="ans"><p>Almost certainly not. 99% recall means the index reproduces exact search nearly perfectly. If exact search itself ranks the right passage low, the problem lies elsewhere: chunking, the embedding model, missing keyword search, the query wording or the filters. Measure retrieval recall against labelled questions, using exact search as the control.</p></div></details>
+        <details class="reveal"><summary>6. A filter keeps 2% of chunks. The index searches for the 40 nearest and then filters. How many results survive, roughly, and what are the fixes?</summary><div class="ans"><p>About 0.02 × 40 ≈ 1 result, assuming the 40 are a random sample with respect to the filter, which understates the problem when the filter correlates with the query. Fixes: filter-aware traversal that keeps searching until enough pass, a larger search width, separate indexes per tenant or language, or exact search over the filtered subset when that subset is small.</p></div></details>
+        <details class="reveal"><summary>7. You upgrade the embedding model. What must happen to the index, and why?</summary><div class="ans"><p>Every chunk must be re-embedded and the index rebuilt. Vectors from different models live in different spaces, so distances between an old document vector and a new query vector are meaningless. Plan for the compute cost, a side-by-side retrieval evaluation before cut-over, and a model-version tag on every vector.</p></div></details>
+        <details class="reveal"><summary>8. Why is re-ranking with exact distances so effective when combined with product quantisation?</summary><div class="ans"><p>PQ distances are approximate, so the true top 10 are usually inside the compressed top 50 or 100 even if their order within it is slightly off. Re-scoring just that shortlist with full-precision vectors restores the order cheaply: you pay for a few dozen exact distances, not millions. Simulation 3 shows recall returning to about 99% at 8 pieces, though it cannot rescue over-compressed codes that miss the true neighbours entirely.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>H. Jégou, M. Douze, C. Schmid. <a href="https://doi.org/10.1109/TPAMI.2010.57">Product Quantization for Nearest Neighbor Search</a>. IEEE TPAMI, 2011.</li>
+        <li>Y. Malkov, D. Yashunin. <a href="https://arxiv.org/abs/1603.09320">Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs</a>. IEEE TPAMI, 2018.</li>
+        <li>J. Johnson, M. Douze, H. Jégou. <a href="https://arxiv.org/abs/1702.08734">Billion-scale Similarity Search with GPUs</a>. 2017 (the FAISS paper).</li>
+        <li>S. Subramanya et al. <a href="https://papers.nips.cc/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html">DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node</a>. NeurIPS, 2019.</li>
+        <li>R. Guo et al. <a href="https://arxiv.org/abs/1908.10396">Accelerating Large-Scale Inference with Anisotropic Vector Quantization</a> (ScaNN). ICML, 2020.</li>
+        <li>M. Aumüller, E. Bernhardsson, A. Faithfull. <a href="https://arxiv.org/abs/1807.05614">ANN-Benchmarks: A Benchmarking Tool for Approximate Nearest Neighbor Algorithms</a>. 2018/2020.</li>
+        <li>N. Liu et al. <a href="https://arxiv.org/abs/2307.03172">Lost in the Middle: How Language Models Use Long Contexts</a>. TACL, 2024.</li>
+        <li>Anthropic. <a href="https://www.anthropic.com/news/contextual-retrieval">Introducing Contextual Retrieval</a>. September 2024.</li>
+        <li>M. Günther et al. <a href="https://arxiv.org/abs/2409.04701">Late Chunking: Contextual Chunk Embeddings Using Long-Context Embedding Models</a>. 2024.</li>
+        <li>Filtered approximate nearest-neighbour search benchmark. <a href="https://arxiv.org/abs/2602.11443">arXiv 2602.11443</a>, February 2026 (preprint; summary read only).</li>
+        <li><a href="https://blog.premai.io/rag-chunking-strategies-the-2026-benchmark-guide">RAG Chunking Strategies: The 2026 Benchmark Guide</a> and <a href="https://denser.ai/blog/rag-chunking-strategies/">RAG Chunking Strategies 2026</a>. Secondary summaries of the FloTorch/Vecta benchmark; check the original.</li>
+        <li><a href="https://github.com/facebookresearch/faiss/wiki">FAISS wiki</a>. Index types, tuning and the factory-string notation.</li>
+        <li><a href="https://github.com/pgvector/pgvector">pgvector documentation</a>. HNSW and IVFFlat in PostgreSQL, including notes on filtering.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in M3: Query rewriting, HyDE and multi-step retrieval (M3.7)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  function mk(box, W, H, label) { box.innerHTML = ""; return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box); }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  function gaussFn(r) { return () => { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }; }
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  function setBtn(a, b, first) { a.setAttribute("aria-pressed", String(first)); b.setAttribute("aria-pressed", String(!first)); }
+
+  // =====================================================================
+  // Simulation 1: chunking
+  // =====================================================================
+  const r1 = rng(11); const SECS = []; let pos = 0;
+  while (SECS.length < 40) { const len = 60 + Math.floor(r1() * 360); SECS.push({ a: pos, b: pos + len, L: len }); pos += len; }
+  const DOC = pos;
+  function chunkSim(C, ovPct, struct) {
+    if (struct) {
+      const list = structChunks(C); let whole = 0, sh = 0;
+      SECS.forEach(s => { if (s.L <= C) { whole++; const ch = list.find(c => c[0] <= s.a && c[1] >= s.b); sh += s.L / (ch[1] - ch[0]); } });
+      return { cov: whole / SECS.length, share: whole ? sh / whole : 0, n: list.length, idx: DOC, avg: DOC / list.length };
+    }
+    const O = Math.round(C * ovPct / 100), st = C - O; let whole = 0; const ok = [];
+    SECS.forEach(s => { const k = Math.floor(s.a / st); const good = k * st + C >= s.b; ok.push(good); if (good) whole++; });
+    const n = Math.ceil(Math.max(1, (DOC - O)) / st);
+    let sh = 0; SECS.forEach((s, i) => { if (ok[i]) sh += s.L / C; });
+    return { cov: whole / SECS.length, share: whole ? sh / whole : 0, n, idx: n * C, ok, avg: C, st, C };
+  }
+  function structChunks(C) { // boundaries for drawing
+    const out = []; let cur = 0, start = 0;
+    SECS.forEach(s => {
+      if (s.L > C) { if (cur > 0) { out.push([start, start + cur]); } for (let a = s.a; a < s.b; a += C) out.push([a, Math.min(a + C, s.b)]); cur = 0; start = s.b; return; }
+      if (cur > 0 && cur + s.L > C) { out.push([start, start + cur]); start = s.a; cur = 0; }
+      if (cur === 0) start = s.a; cur += s.L;
+    });
+    if (cur > 0) out.push([start, start + cur]);
+    return out;
+  }
+  const S1 = { c: 300, o: 0, struct: false };
+  const stripBox = $("chunk-strip"), curveBox = $("chunk-curve");
+  function renderChunk() {
+    const res = chunkSim(S1.c, S1.o, S1.struct);
+    // strip
+    const W = Math.max(300, stripBox.clientWidth), H = 118, m = { l: 10, r: 10 }, VIEW = 2600;
+    const svg = mk(stripBox, W, H, "Sections and chunks over the first 2,600 tokens of the manual");
+    const X = L.scale(0, VIEW, m.l, W - m.r);
+    tx(svg, m.l, 12, "Sections (first " + L.fmtInt(VIEW) + " tokens)", { class: "lbl-ink" });
+    SECS.forEach((s, i) => { if (s.a >= VIEW) return; L.svg("rect", { x: X(s.a) + 0.5, y: 18, width: Math.max(1, X(Math.min(s.b, VIEW)) - X(s.a) - 1), height: 28, rx: 2, class: res.ok[i] ? (i % 2 ? "sec-a" : "sec-b") : "sec-bad" }, svg); });
+    tx(svg, m.l, 64, "Chunks", { class: "lbl-ink" });
+    let list = [];
+    if (S1.struct) list = structChunks(S1.c); else { const st = res.st; for (let k = 0; k * st < VIEW; k++) list.push([k * st, k * st + S1.c]); }
+    list.forEach((c, k) => { if (c[0] >= VIEW) return; const alt = S1.struct ? 0 : k % 2; L.svg("rect", { x: X(c[0]), y: 70 + alt * 20, width: Math.max(1, X(Math.min(c[1], VIEW)) - X(c[0])), height: 16, rx: 2, class: "chk" }, svg); });
+    tx(svg, W - m.r, H - 4, "tokens →", { "text-anchor": "end" });
+    $("st1-cov").textContent = pct(res.cov); cls($("st1-cov-b"), res.cov >= 0.9 ? "ok" : res.cov >= 0.7 ? "warn" : "bad");
+    $("st1-share").textContent = pct(res.share);
+    $("st1-n").textContent = L.fmtInt(res.n);
+    $("st1-n-s").textContent = S1.struct ? "no overlap needed" : (res.idx / DOC).toFixed(2) + "× the manual's tokens indexed";
+    $("st1-tok").textContent = L.fmtInt(5 * res.avg);
+    // curve
+    const Cs = [100, 150, 200, 300, 400, 600, 800, 1200, 1600];
+    const W2 = Math.max(300, curveBox.clientWidth), H2 = 230, mm = { l: 40, r: 12, t: 14, b: 40 };
+    const sv = mk(curveBox, W2, H2, "Coverage and focus against chunk size");
+    const x = L.scale(Math.log(100), Math.log(1600), mm.l, W2 - mm.r), y = L.scale(0, 1, H2 - mm.b, mm.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: mm.l, x2: W2 - mm.r, y1: y(v), y2: y(v), class: "grid" }, sv); tx(sv, mm.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" }); });
+    [100, 200, 400, 800, 1600].forEach(v => tx(sv, x(Math.log(v)), H2 - mm.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(sv, (mm.l + W2 - mm.r) / 2, H2 - 6, "Chunk size (tokens)", { "text-anchor": "middle" });
+    const f = Cs.map(c => chunkSim(c, S1.o, false)), s = Cs.map(c => chunkSim(c, 0, true));
+    L.svg("path", { d: L.path(f.map((r, i) => [x(Math.log(Cs[i])), y(r.cov)])), class: "ln-ink" }, sv);
+    L.svg("path", { d: L.path(s.map((r, i) => [x(Math.log(Cs[i])), y(r.cov)])), class: "ln-acc" }, sv);
+    L.svg("path", { d: L.path(f.map((r, i) => [x(Math.log(Cs[i])), y(r.share)])), class: "ln-warn" }, sv);
+    const xc = x(Math.log(S1.c)); L.svg("line", { x1: xc, x2: xc, y1: mm.t, y2: H2 - mm.b, class: "ln-cur" }, sv);
+    L.svg("circle", { cx: xc, cy: y(res.cov), r: 5, class: "dot-now" }, sv);
+    const fx = chunkSim(S1.c, S1.o, false), sx = chunkSim(S1.c, 0, true);
+    $("s1-verdict").innerHTML = S1.struct
+      ? "Respecting sections at " + S1.c + " tokens keeps <b>" + pct(sx.cov) + "</b> of sections whole, against <b>" + pct(fx.cov) + "</b> for blind windows of the same size with " + S1.o + "% overlap. Sections longer than the chunk size still get split, so very small sizes lose coverage."
+      : "Blind windows of " + S1.c + " tokens keep <b>" + pct(fx.cov) + "</b> of sections whole. Respecting section boundaries at the same size would keep <b>" + pct(sx.cov) + "</b>. The fix for fixed windows is bigger chunks (diluting the match) or overlap (a bigger index).";
+  }
+  L.bind("s-csize", v => L.fmtInt(v) + " tokens", v => { S1.c = v; renderChunk(); });
+  L.bind("s-cov", v => v + "%", v => { S1.o = v; renderChunk(); });
+  $("b-fixed").addEventListener("click", () => { S1.struct = false; setBtn($("b-fixed"), $("b-struct"), true); renderChunk(); });
+  $("b-struct").addEventListener("click", () => { S1.struct = true; setBtn($("b-fixed"), $("b-struct"), false); renderChunk(); });
+
+  // =====================================================================
+  // Shared vector data for Simulations 2 and 3
+  // =====================================================================
+  const N = 3000, DIM = 16, NQ = 80, K = 10;
+  const rv = rng(5), gv = gaussFn(rv);
+  const centres = []; for (let c = 0; c < 30; c++) { const v = []; for (let j = 0; j < DIM; j++) v.push(gv()); centres.push(v); }
+  const P = new Float32Array(N * DIM);
+  for (let i = 0; i < N; i++) { const c = centres[i % 30]; for (let j = 0; j < DIM; j++) P[i * DIM + j] = c[j] + 0.7 * gv(); }
+  const Q = new Float32Array(NQ * DIM);
+  for (let q = 0; q < NQ; q++) { const i = Math.floor(rv() * N); for (let j = 0; j < DIM; j++) Q[q * DIM + j] = P[i * DIM + j] + 0.25 * gv(); }
+  function d2(A, ia, B, ib) { let s = 0; for (let j = 0; j < DIM; j++) { const t = A[ia * DIM + j] - B[ib * DIM + j]; s += t * t; } return s; }
+  function topK(arr, k) { return arr.slice().sort((a, b) => a[0] - b[0]).slice(0, k).map(x => x[1]); }
+  const TRUTH = [];
+  for (let q = 0; q < NQ; q++) { const a = []; for (let i = 0; i < N; i++) a.push([d2(Q, q, P, i), i]); TRUTH.push(new Set(topK(a, K))); }
+  const recallOf = (found, q) => { let h = 0; found.forEach(i => { if (TRUTH[q].has(i)) h++; }); return h / K; };
+
+  // k-means (generic, on arbitrary sub-dimension)
+  function kmeans(data, n, dim, k, iters, seed) {
+    const r = rng(seed), cen = new Float32Array(k * dim), asg = new Int32Array(n);
+    for (let c = 0; c < k; c++) { const i = Math.floor(r() * n); for (let j = 0; j < dim; j++) cen[c * dim + j] = data[i * dim + j]; }
+    for (let it = 0; it < iters; it++) {
+      for (let i = 0; i < n; i++) { let best = 1e30, bc = 0; for (let c = 0; c < k; c++) { let s = 0; for (let j = 0; j < dim; j++) { const t = data[i * dim + j] - cen[c * dim + j]; s += t * t; } if (s < best) { best = s; bc = c; } } asg[i] = bc; }
+      const sum = new Float32Array(k * dim), cnt = new Int32Array(k);
+      for (let i = 0; i < n; i++) { cnt[asg[i]]++; for (let j = 0; j < dim; j++) sum[asg[i] * dim + j] += data[i * dim + j]; }
+      for (let c = 0; c < k; c++) if (cnt[c]) for (let j = 0; j < dim; j++) cen[c * dim + j] = sum[c * dim + j] / cnt[c];
+    }
+    for (let i = 0; i < n; i++) { let best = 1e30, bc = 0; for (let c = 0; c < k; c++) { let s = 0; for (let j = 0; j < dim; j++) { const t = data[i * dim + j] - cen[c * dim + j]; s += t * t; } if (s < best) { best = s; bc = c; } } asg[i] = bc; }
+    return { cen, asg };
+  }
+
+  // IVF
+  const NLIST = 48;
+  const km = kmeans(P, N, DIM, NLIST, 8, 21);
+  const cells = Array.from({ length: NLIST }, () => []);
+  for (let i = 0; i < N; i++) cells[km.asg[i]].push(i);
+  function ivfSearch(q, nprobe) {
+    const cd = []; for (let c = 0; c < NLIST; c++) { let s = 0; for (let j = 0; j < DIM; j++) { const t = Q[q * DIM + j] - km.cen[c * DIM + j]; s += t * t; } cd.push([s, c]); }
+    cd.sort((a, b) => a[0] - b[0]);
+    const cand = []; let cost = NLIST;
+    for (let p = 0; p < nprobe; p++) cells[cd[p][1]].forEach(i => { cand.push([d2(Q, q, P, i), i]); cost++; });
+    return { found: topK(cand, K), cost };
+  }
+  // Graph
+  const MG = 8, adj = Array.from({ length: N }, () => new Set());
+  for (let i = 0; i < N; i++) { const a = []; for (let j = 0; j < N; j++) if (j !== i) a.push([d2(P, i, P, j), j]); topK(a, MG).forEach(j => { adj[i].add(j); adj[j].add(i); }); }
+  const ADJ = adj.map(s => Array.from(s));
+  let entry = 0; { const mean = new Float32Array(DIM); for (let i = 0; i < N; i++) for (let j = 0; j < DIM; j++) mean[j] += P[i * DIM + j] / N; let b = 1e30; for (let i = 0; i < N; i++) { let s = 0; for (let j = 0; j < DIM; j++) { const t = P[i * DIM + j] - mean[j]; s += t * t; } if (s < b) { b = s; entry = i; } } }
+  function graphSearch(q, ef) {
+    const vis = new Set([entry]); let cost = 1; const d0 = d2(Q, q, P, entry);
+    let cand = [[d0, entry]], res = [[d0, entry]];
+    while (cand.length) {
+      cand.sort((a, b) => a[0] - b[0]); const c = cand.shift();
+      res.sort((a, b) => a[0] - b[0]);
+      if (res.length >= ef && c[0] > res[ef - 1][0]) break;
+      ADJ[c[1]].forEach(nb => {
+        if (vis.has(nb)) return; vis.add(nb); cost++;
+        const d = d2(Q, q, P, nb);
+        res.sort((a, b) => a[0] - b[0]);
+        if (res.length < ef || d < res[res.length - 1][0]) { cand.push([d, nb]); res.push([d, nb]); res.sort((a, b) => a[0] - b[0]); if (res.length > ef) res.pop(); }
+      });
+    }
+    res.sort((a, b) => a[0] - b[0]);
+    return { found: res.slice(0, K).map(x => x[1]), cost };
+  }
+  const NPROBES = [1, 2, 3, 4, 6, 8, 12, 16, 24, 48], EFS = [10, 12, 16, 20, 30, 50, 80, 120, 200, 400];
+  function evalCurve(fn, params) {
+    return params.map(p => { let rec = 0, cost = 0, miss = 0; for (let q = 0; q < NQ; q++) { const r = fn(q, p); const rc = recallOf(r.found, q); rec += rc; cost += r.cost; if (rc < 1) miss++; } return { p, rec: rec / NQ, cost: cost / NQ, miss }; });
+  }
+  const CIVF = evalCurve(ivfSearch, NPROBES), CGR = evalCurve(graphSearch, EFS);
+
+  const S2 = { g: false, i: 2 };
+  const annBox = $("ann-chart");
+  function renderAnn() {
+    const W = Math.max(300, annBox.clientWidth), H = 270, m = { l: 44, r: 12, t: 14, b: 44 };
+    const svg = mk(annBox, W, H, "Recall against share of vectors compared");
+    const x = L.scale(Math.log(0.01), Math.log(1), m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" }); });
+    [0.01, 0.03, 0.1, 0.3, 1].forEach(v => tx(svg, x(Math.log(v)), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Share of the 3,000 vectors compared per query (log scale)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Recall@10", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const pt = r => [x(Math.log(Math.max(0.01, Math.min(1, r.cost / N)))), y(r.rec)];
+    L.svg("path", { d: L.path(CIVF.map(pt)), class: "ln-ink" }, svg);
+    L.svg("path", { d: L.path(CGR.map(pt)), class: "ln-acc" }, svg);
+    const cur = (S2.g ? CGR : CIVF)[S2.i], p = pt(cur);
+    L.svg("circle", { cx: p[0], cy: p[1], r: 6, fill: "var(--warn)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    $("l-ann").firstChild.textContent = S2.g ? "Beam width (ef) " : "Cells probed (of 48) ";
+    $("st2-rec").textContent = pct(cur.rec, 1); cls($("st2-rec-b"), cur.rec >= 0.95 ? "ok" : cur.rec >= 0.8 ? "warn" : "bad");
+    $("st2-cost").textContent = L.fmtInt(Math.round(cur.cost)); $("st2-cost-s").textContent = "of 3,000 (" + pct(cur.cost / N, 1) + ")";
+    $("st2-spd").textContent = (N / cur.cost).toFixed(1) + "×";
+    $("st2-miss").textContent = cur.miss;
+    $("s2-verdict").innerHTML = "At this setting the " + (S2.g ? "graph walk" : "IVF index") + " finds <b>" + pct(cur.rec, 1) + "</b> of the true top 10 while comparing <b>" + pct(cur.cost / N, 1) + "</b> of the data. " + (cur.rec < 0.9 ? "Below about 90% a re-ranker downstream cannot recover what was never retrieved." : "Whether this is enough depends on how many hits you retrieve and what a miss costs.");
+  }
+  const annCtl = $("s-ann");
+  L.bind("s-ann", v => String((S2.g ? EFS : NPROBES)[Math.round(v)]), v => { S2.i = Math.round(v); renderAnn(); });
+  $("b-ivf").addEventListener("click", () => { S2.g = false; setBtn($("b-ivf"), $("b-graph"), true); annCtl.dispatchEvent(new Event("input")); });
+  $("b-graph").addEventListener("click", () => { S2.g = true; setBtn($("b-ivf"), $("b-graph"), false); annCtl.dispatchEvent(new Event("input")); });
+
+  // =====================================================================
+  // Simulation 3: PQ
+  // =====================================================================
+  const MS = [1, 2, 4, 8, 16], KS = 16, pqCache = {};
+  function pqModel(m) {
+    if (pqCache[m]) return pqCache[m];
+    const sd = DIM / m, books = [], codes = new Uint8Array(N * m);
+    for (let s = 0; s < m; s++) {
+      const sub = new Float32Array(N * sd); for (let i = 0; i < N; i++) for (let j = 0; j < sd; j++) sub[i * sd + j] = P[i * DIM + s * sd + j];
+      const km2 = kmeans(sub, N, sd, KS, 8, 100 + s); books.push(km2.cen); for (let i = 0; i < N; i++) codes[i * m + s] = km2.asg[i];
+    }
+    let rec = 0, recRR = 0;
+    for (let q = 0; q < NQ; q++) {
+      const tab = books.map((cen, s) => { const t = new Float32Array(KS); for (let c = 0; c < KS; c++) { let a = 0; for (let j = 0; j < sd; j++) { const d = Q[q * DIM + s * sd + j] - cen[c * sd + j]; a += d * d; } t[c] = a; } return t; });
+      const arr = []; for (let i = 0; i < N; i++) { let a = 0; for (let s = 0; s < m; s++) a += tab[s][codes[i * m + s]]; arr.push([a, i]); }
+      rec += recallOf(topK(arr, K), q);
+      const sl = topK(arr, 50).map(i => [d2(Q, q, P, i), i]); recRR += recallOf(topK(sl, K), q);
+    }
+    return (pqCache[m] = { rec: rec / NQ, recRR: recRR / NQ });
+  }
+  const S3 = { i: 3, rr: false, n: 6.7, d: 2, m: 64 };
+  const DIMS = [384, 768, 1024, 3072];
+  const fmtB = b => b >= 1e12 ? (b / 1e12).toFixed(2) + " TB" : b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(0) + " MB";
+  function renderPQ() {
+    const m = MS[S3.i], r = pqModel(m), v = S3.rr ? r.recRR : r.rec, bytes = m * KS / 256 * 0 + m * 0.5;
+    $("st3-rec").textContent = pct(v, 1); cls($("st3-rec-b"), v >= 0.95 ? "ok" : v >= 0.8 ? "warn" : "bad");
+    $("st3-rec-s").textContent = S3.rr ? "after exact re-ranking of 50" : "compressed distances only";
+    $("st3-bytes").textContent = bytes % 1 ? bytes.toFixed(1) : String(bytes); $("st3-cmp").textContent = Math.round(64 / bytes) + "×";
+    $("s3-verdict").innerHTML = S3.rr ? "With re-ranking, <b>" + m + "</b> piece" + (m > 1 ? "s" : "") + " give <b>" + pct(v, 1) + "</b>. The compressed index only has to put the true neighbours somewhere in its top 50; if the codes are too coarse, it cannot." : "Without re-ranking, <b>" + m + "</b> piece" + (m > 1 ? "s" : "") + " give <b>" + pct(v, 1) + "</b>. Turn on re-ranking to see how much of the loss is only an ordering error.";
+    const n = Math.pow(10, S3.n), d = DIMS[S3.d], rows = [["float32 (as produced)", n * d * 4, "baseline"], ["float16", n * d * 2, "usually negligible loss"], ["int8 scalar quantisation", n * d, "small loss, often fine"], ["Product quantisation, " + S3.m + " bytes", n * S3.m, "needs re-ranking for best recall"], ["1 bit per dimension", n * d / 8, "coarse; shortlist then re-rank"], ["HNSW graph links (M = 16), extra", n * 32 * 4, "on top of whichever vectors you hold"]];
+    let h = '<table class="data"><thead><tr><th>Representation</th><th>Memory</th><th>Note</th></tr></thead><tbody>';
+    rows.forEach(x => { h += `<tr><td><b>${x[0]}</b></td><td>${fmtB(x[1])}</td><td>${x[2]}</td></tr>`; });
+    $("mem-table").innerHTML = h + "</tbody></table>";
+  }
+  L.bind("s-pq", v => String(MS[Math.round(v)]), v => { S3.i = Math.round(v); renderPQ(); });
+  L.bind("s-n", v => L.fmtInt(Math.round(Math.pow(10, v))) + " chunks", v => { S3.n = v; renderPQ(); });
+  L.bind("s-d", v => String(DIMS[Math.round(v)]), v => { S3.d = Math.round(v); renderPQ(); });
+  L.bind("s-m", v => v + " bytes", v => { S3.m = v; renderPQ(); });
+  $("b-rr").addEventListener("click", e => { S3.rr = !S3.rr; e.currentTarget.setAttribute("aria-pressed", String(S3.rr)); renderPQ(); });
+  renderChunk(); renderAnn(); renderPQ();
+  window.addEventListener("resize", () => { renderChunk(); renderAnn(); });
+})();
+</script>
+</body>
+</html>

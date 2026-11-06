@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Guardrails, Approval Gates and Choosing the Simplest Agent Design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-bad { fill: var(--bad) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .cv-bad { stroke: var(--bad); stroke-width: 2.6; fill: none; }
+  .cv-good { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-ink { stroke: var(--ink); stroke-width: 2.4; fill: none; }
+  .cv-ref { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .cv-opt { stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+
+  .acts { display: grid; gap: 10px; }
+  .act { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface); display: grid; gap: 8px; }
+  .act .at { font-weight: 600; font-size: 15px; }
+  .act .ac { font-size: 13px; color: var(--muted); }
+  .act .res { font-size: 14px; padding: 8px 10px; border-radius: 6px; background: var(--sunk); }
+  .act .res.ok { background: var(--ok-soft); }
+  .act .res.warn { background: var(--warn-soft); }
+  .act .res.bad { background: var(--bad-soft); }
+  .act .res b { font-weight: 600; }
+  .gbar { display: grid; grid-template-columns: 92px 1fr 34px; align-items: center; gap: 8px; font-size: 13px; margin: 4px 0; }
+  .gbar .tr { height: 12px; border-radius: 6px; background: var(--sunk); overflow: hidden; }
+  .gbar .fl { height: 100%; background: var(--neutral); border-radius: 6px; }
+  .gbar.top .fl { background: var(--accent); }
+  .gbar .n { text-align: right; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .layers { display: grid; gap: 8px; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } .gbar { grid-template-columns: 76px 1fr 30px; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track M · Modern AI systems</span>
+    <span>Module M4 · Agents</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>M4.5 · M4.6</span>
+        <span class="pill d">Day one</span>
+        <span>★ Priority</span>
+        <span>About 42 minutes</span>
+      </div>
+      <h1>Guardrails, Approval Gates and Choosing the Simplest Agent Design</h1>
+      <p class="dek">Which actions an agent may take alone, which need a human, why the gate must live in code and not in the prompt, why too many approvals make oversight worse, and how to pick the least autonomous design that still does the job.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Give an agent the least power that gets the job done, put a human only in front of actions that are hard to undo, enforce that rule in ordinary code the model cannot talk its way past, and keep the approval queue small enough that people still read it.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A bank gives a new analyst a laptop, read access to some systems, and a list of things that need a second signature. It does not give them the ability to wire AED 2 million alone on day one, however clever they are. Cleverness is not the control. The control is the structure around them: limited access, a second pair of eyes on the risky moves, and a record of what they did.</p>
+        <p>An AI agent (<a href="m4-the-agent-loop-reason-act.html">M4.1</a>) is a new analyst that works at machine speed, never gets tired, and can be fooled by a sentence hidden in a PDF. So the same structure applies, and it matters more. Three ideas make up this lesson.</p>
+        <ul>
+          <li><strong>A guardrail is any check that sits between the model's wish and the world.</strong> It can inspect what goes in, what comes out, or, most importantly, what the agent is about to <em>do</em>.</li>
+          <li><strong>An approval gate is the strongest guardrail: it stops the action until a person says yes.</strong> It is expensive in attention, so you spend it where a mistake cannot be taken back.</li>
+          <li><strong>The simplest design that works is the safest one.</strong> A fixed workflow with a model inside one step is easier to gate, test and explain than an agent that chooses its own path, and far easier than several agents talking to each other.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Two questions for every action an agent can take. <em>Can it be undone, and how cheaply?</em> and <em>How much damage if it is wrong or hijacked?</em> The answers, not the model's confidence, decide whether the action runs freely, runs with a log, waits for a human, or is not available at all.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-layers">The layers of a guardrail</h3>
+      <div class="prose">
+        <p>"Guardrails" is used loosely. It helps to name where a check sits, because each place catches different failures and has different strengths.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Layer</th><th>What it checks</th><th>Typical tools</th><th>Strength and weakness</th></tr></thead>
+          <tbody>
+            <tr><td><b>Input</b></td><td>What reaches the model: prompt-injection patterns, PII, off-topic or abusive requests, out-of-scope tasks.</td><td>Classifiers, regexes, allow-lists, sanitising of retrieved text.</td><td>Cheap and early. Probabilistic: a clever attack can slip through, so never the only layer (see <a href="a3-indirect-prompt-injection.html">A3.1</a>).</td></tr>
+            <tr><td><b>Action (tool)</b></td><td>What the agent tries to do: which tool, which arguments, on whose behalf, how large.</td><td>Allow-lists, argument validation, spending limits, scope checks, approval gates.</td><td>The strongest layer. Deterministic code, tested like any other code. It limits the damage even if the model is fully compromised.</td></tr>
+            <tr><td><b>Output</b></td><td>What goes to the user or another system: leaked data, unsupported claims, tone, banned advice, format.</td><td>Schema validation, groundedness checks, redaction, a second model as judge.</td><td>Catches embarrassing replies. A judge model shares weaknesses with the model it judges.</td></tr>
+            <tr><td><b>System</b></td><td>Everything around the run: logging, rate limits, kill switch, budget caps, monitoring.</td><td>Gateways (<a href="a15-ai-gateways-guardrails-and-token.html">A15.3</a>), tracing (<a href="p2-prompt-versioning-and-llm-tracing.html">P2</a>), alerting.</td><td>What lets you see a problem and stop it. Does not prevent the first bad action.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>A useful split is <strong>soft</strong> guardrails (a model or a pattern matcher decides; it can be wrong or fooled) and <strong>hard</strong> guardrails (ordinary code that either allows or refuses; it cannot be argued with). Soft ones reduce how often something bad is attempted. Only hard ones bound how bad it can get. Security people put it as: the prompt is a request, the permission system is a law.</p>
+        <p>The broader risk has a name. OWASP lists <strong>excessive agency</strong> among its top risks for LLM applications: an agent given too many tools, too many permissions, or too much freedom to act without checks (OWASP, LLM06:2025). Guardrails are the practical answer to it.</p>
+      </div>
+
+      <h3 class="sub" id="m-tiers">Tiering actions by reversibility and blast radius</h3>
+      <div class="prose">
+        <p>Do not decide "does this agent need a human?" for the agent as a whole. Decide it for each <em>action</em>. Two properties do most of the work.</p>
+        <ul>
+          <li><strong>Reversibility.</strong> Can a mistake be undone cheaply? Reading a record, drafting a reply and freezing a card (the customer can unfreeze) are reversible. Sending money, sending an email to a customer, deleting data and changing contact details are not, or only at real cost.</li>
+          <li><strong>Blast radius.</strong> How much can go wrong if this one call is wrong or hijacked? One customer's balance is small. A bulk update, a rule change that affects every transaction, or a payment of AED 250,000 is large.</li>
+        </ul>
+        <p>Combine them into four tiers. Names vary between teams; the logic does not.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Tier</th><th>Reversibility and radius</th><th>What happens</th><th>Bank examples</th></tr></thead>
+          <tbody>
+            <tr><td><b>0 · Run freely</b></td><td>Read-only or purely internal; tiny radius.</td><td>Runs. Still covered by system-level logging.</td><td>Drafting text, summarising a document, a read on the customer in the current session.</td></tr>
+            <tr><td><b>1 · Run and log</b></td><td>Reversible, small radius, or protective and time-critical.</td><td>Runs, with a full audit record and after-the-fact sampling by a human.</td><td>Temporarily blocking a card on a fraud signal, tagging a case, read-only reporting queries.</td></tr>
+            <tr><td><b>2 · Needs approval</b></td><td>Hard to undo, or large radius, or external.</td><td>Pauses. A named human sees the exact action and approves, edits or rejects.</td><td>Payments to new beneficiaries, changing a customer's phone number, sending a letter, closing an AML alert.</td></tr>
+            <tr><td><b>3 · Not available</b></td><td>Severe and unneeded for the job.</td><td>The tool does not exist for this agent. No prompt can call it.</td><td>Editing audit logs, disabling a sanctions rule, changing the agent's own permissions.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Notice the asymmetry in tier 1. For a fraud freeze, <em>waiting</em> for approval is itself the harm: the money leaves while the ticket sits in a queue. So the right control is to make the action cheap to undo and to review it afterwards. Tiers are not "more careful is always better"; they are a trade between speed, cost of error and human attention. Try sorting some yourself.</p>
+      </div>
+
+      <figure class="figure" id="fig-sort">
+        <div class="fig-head"><span class="fig-title">Where would you put the gate?</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> for each action, choose the control you would apply to an AI agent at a retail bank. You get feedback straight away with the reasoning. Several have more than one defensible answer; one or two are traps that look safe either way.</p>
+        <div class="acts" id="acts"></div>
+        <div class="stats" style="margin-top:14px">
+          <div class="stat ok"><div class="k">Right call</div><div class="v" id="st1-ok">0</div><div class="s">matches or acceptable</div></div>
+          <div class="stat bad"><div class="k">Too loose</div><div class="v" id="st1-loose">0</div><div class="s">risk not controlled</div></div>
+          <div class="stat warn"><div class="k">Too tight</div><div class="v" id="st1-tight">0</div><div class="s">friction without benefit</div></div>
+          <div class="stat"><div class="k">Answered</div><div class="v" id="st1-n">0 / 9</div><div class="s">actions</div></div>
+        </div>
+        <p class="sim-note">Decision scenario, no simulated data. The "right" answers are a reasonable consensus on reversibility and blast radius, not a regulation. A real bank's policy, risk appetite and regulator may differ; the point is the reasoning.</p>
+      </figure>
+
+      <h3 class="sub" id="m-enforce">Enforce the gate in code, not in the prompt</h3>
+      <div class="prose">
+        <p>The most common mistake is writing the rule into the system prompt: <em>"Never transfer more than AED 10,000 without approval."</em> A prompt is text the model reads and weighs with everything else. It can be overridden by a clever user, by an instruction inside a retrieved document, by a long conversation that pushes the rule out of focus, or by plain model error. Each attempt has some chance of working. Over many attempts, a small chance becomes near-certainty.</p>
+        <p>The fix is to move the rule out of the model entirely. The model proposes a tool call. A piece of normal code, which the model cannot edit, decides whether it runs. Here is the shape, in a few lines:</p>
+      </div>
+<pre><code>def call_tool(name, args, ctx):
+    spec = REGISTRY[name]                           # allow-list: unknown tool = error
+    check_scope(ctx.user, spec, args)               # least privilege, checked every call
+    if spec.tier == "approve":
+        tok = ctx.approvals.get(hash_call(name, args))   # approval bound to the exact arguments
+        if tok is None or not tok.valid(now()):
+            return pending(name, args)              # pause: do NOT execute, show a human
+        if tok.approver == ctx.requester:           # four-eyes: no self-approval
+            raise Denied("self-approval")
+    audit.log(name, args, ctx, tok)                 # who, what, why, under which approval
+    return spec.run(**args)</code></pre>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Four details make this real rather than decorative.</p>
+        <ul>
+          <li><strong>Approval is bound to the exact arguments.</strong> If the human approved "pay AED 5,000 to account X", the token is valid for that call only. Otherwise the agent can get a harmless request approved and then swap the amount or beneficiary.</li>
+          <li><strong>The gate sits on the only path to the side effect.</strong> If the agent can reach the payments API by another tool, a shell command or a second agent, the gate is decoration. Coverage is the whole game.</li>
+          <li><strong>The agent acts with the user's permissions, not the bank's.</strong> A service account with broad rights turns a hijacked agent into a privileged insider (the "confused deputy" problem). Pass the end user's identity down and check it at the tool.</li>
+          <li><strong>Approval state lives on the server.</strong> Frameworks that support pause-and-resume store the paused run and return the pending requests; the client should only be able to say yes or no to a stored request, not supply a replacement call (this is how OpenAI's Agents SDK documents it).</li>
+        </ul>
+        <p>The next simulation puts numbers on why this matters. It uses a deliberately simple model: each attempt to push the agent into a forbidden action succeeds with some small probability against a prompt-only rule, attempts are independent, and a code gate blocks every dangerous action it covers.</p>
+      </div>
+
+      <figure class="figure" id="fig-enf">
+        <div class="fig-head"><span class="fig-title">A 2% chance per attempt is not safe</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> leave the per-attempt chance at 2% and drag attempts from 1 to 200. A prompt-only rule is more likely to be beaten than not by about 35 attempts. Now set the code gate coverage to 100% and then to 80%. The red curve is the rule in the prompt; the green one is the gate in code. Coverage below 100% leaves a leak: the attacker only needs the one tool you forgot.</p>
+        <div class="chart-wrap" id="enf-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Rule only in the prompt</span>
+          <span><i style="background:var(--accent)"></i>Gate in code (with your coverage)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-att">Attempts (users, documents, retries) <output for="s-att"></output></label><input type="range" id="s-att" min="0" max="3" step="0.05" value="1.3"></div>
+          <div class="ctl"><label for="s-p">Chance one attempt talks the model past the rule <output for="s-p"></output></label><input type="range" id="s-p" min="-3" max="-1" step="0.05" value="-1.7"></div>
+          <div class="ctl"><label for="s-cov">Share of dangerous tool paths the code gate covers <output for="s-cov"></output></label><input type="range" id="s-cov" min="0" max="100" step="1" value="100"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st2-pb"><div class="k">Prompt-only: chance of at least one breach</div><div class="v" id="st2-prompt"></div><div class="s" id="st2-prompt-s"></div></div>
+          <div class="stat" id="st2-cb"><div class="k">Code gate: chance of at least one breach</div><div class="v" id="st2-code"></div><div class="s" id="st2-code-s"></div></div>
+          <div class="stat"><div class="k">Attempts to reach a 50% breach chance</div><div class="v" id="st2-half"></div><div class="s">prompt-only / code gate</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: independent attempts, each succeeding against a prompt-only rule with the chosen probability p, so the breach chance is 1 − (1 − p)<sup>n</sup>. With a code gate covering a share c of dangerous paths, each attempt can only succeed through an uncovered path: 1 − (1 − p(1 − c))<sup>n</sup>. Real attacks are adaptive and attempts are not independent; real gates also have bugs. Treat it as an illustration of compounding, not a forecast. Exact formula, no sampling. Both sliders for attempts and chance are logarithmic.</p>
+      </figure>
+
+      <h3 class="sub" id="m-fatigue">Approval that works: why more gates can mean less safety</h3>
+      <div class="prose">
+        <p>A natural reaction is "put a human on everything". It fails for a human reason. People reviewing a long stream of mostly harmless requests stop reading. They approve in a second, because 99 out of 100 times the answer is yes. This is <strong>approval fatigue</strong>, a cousin of the alert fatigue that every transaction-monitoring team knows (<a href="b2-transaction-monitoring-rules-versus-ml.html">B2.1</a>). It is also automation bias: once a machine has proposed something, people tend to accept it.</p>
+        <p>The result is a rubber stamp. The bank can say a human approved every action, and the human caught nothing. Regulators and auditors increasingly look past "a human was in the loop" to whether that human could realistically have noticed a problem (for the EU's high-risk systems, human oversight under Article 14 of the AI Act is framed around exactly that ability; check the latest application dates).</p>
+        <p>Design for attention, not for the checkbox.</p>
+        <ul>
+          <li><strong>Gate by risk, not by volume.</strong> Only tier 2 actions reach a person. A risk score, amount limit or "first time to this beneficiary" rule decides. Everything else is logged and sampled.</li>
+          <li><strong>Show the exact action, in plain words, with the evidence.</strong> "Pay AED 250,000 to a new beneficiary in another country, requested at 02:14, customer has never paid abroad" beats "Approve agent action?". A reviewer who sees the diff can catch what a reviewer who sees a button cannot.</li>
+          <li><strong>Make reject easy and safe.</strong> If rejecting takes more effort than approving, approvals will win.</li>
+          <li><strong>Measure the reviewers.</strong> Track time to decision, approval rate, and how often reviewers edit or reject. A 100% approval rate in two seconds is a warning, not a success. Seed the queue with known-bad test cases to check that people still catch them.</li>
+          <li><strong>Keep sampled review for tier 1.</strong> Look at a random slice of what ran freely. That is how you learn the tiers are wrong.</li>
+        </ul>
+        <p>The next simulation models the trade. A queue of agent actions arrives each day. A few are bad (1%). Each has a risk score; bad ones score higher on average but overlap with the harmless ones, as they do in practice. You set the score above which an action goes to a human. Reviewers catch a bad action less often the faster they must work.</p>
+      </div>
+
+      <figure class="figure" id="fig-fat">
+        <div class="fig-head"><span class="fig-title">The U-shaped cost of gating</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start with the gate at a score of 0, which sends about half of all actions to people: the curve shows many bad actions still slip through, because reviewers are swamped. Slide the gate up and the harm falls, to a low point near a score of 1. Slide further and the harm rises again, because bad actions never reach a human at all. Then switch reviewers from "full context" to "bare approve button", or add reviewers, and watch the best gate move.</p>
+        <div class="toggles" role="group" aria-label="What the reviewer sees">
+          <button class="toggle" type="button" id="t-ctx" aria-pressed="true">Reviewer sees the exact action and its evidence</button>
+        </div>
+        <div class="chart-wrap" id="fat-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Bad actions slipping through per day, by gate score</span>
+          <span><i style="background:var(--muted)"></i>No gate at all</span>
+          <span><i style="background:var(--accent)"></i>Best gate for these settings</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-gate">Gate score: actions scoring above go to a human <output for="s-gate"></output></label><input type="range" id="s-gate" min="-1" max="3.5" step="0.05" value="0"></div>
+          <div class="ctl"><label for="s-vol">Agent actions per day <output for="s-vol"></output></label><input type="range" id="s-vol" min="2.7" max="4.3" step="0.05" value="3.48"></div>
+          <div class="ctl"><label for="s-rev">Reviewers on shift (8 hours each) <output for="s-rev"></output></label><input type="range" id="s-rev" min="1" max="12" step="1" value="4"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Actions sent to a human</div><div class="v" id="st3-gated"></div><div class="s" id="st3-gated-s"></div></div>
+          <div class="stat" id="st3-sec-b"><div class="k">Time per decision</div><div class="v" id="st3-sec"></div><div class="s">if reviewers are busy all shift</div></div>
+          <div class="stat" id="st3-catch-b"><div class="k">Bad actions a reviewer catches</div><div class="v" id="st3-catch"></div><div class="s">of those sent to them</div></div>
+          <div class="stat" id="st3-miss-b"><div class="k">Bad actions slipping through</div><div class="v" id="st3-miss"></div><div class="s" id="st3-miss-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: 1% of actions are bad. Risk scores are normal with equal spread; bad actions average 2 standard deviations higher (AUC about 0.92). A reviewer's catch rate is 95% (full context) or 70% (bare button) when relaxed, and falls as 1 ÷ (1 + (decisions per hour ÷ 40)²), a made-up curve with the right shape, not a measurement. Exact expected values.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The point of the curve is not the particular numbers. It is that <em>both</em> ends are bad and the optimum depends on things you can change: how much reviewers see, how many there are, and how well the risk score separates bad from harmless. Better scoring, better context for the reviewer and a smaller, sharper queue all push the whole curve down. This is the same threshold-and-capacity logic as alert tuning in fraud (<a href="f7-precision-recall-thresholds-calibration.html">F7</a>), now applied to an agent's own actions.</p>
+        <p>Two further control patterns are worth knowing. <strong>Four-eyes (maker-checker)</strong>: the agent is the maker; a different, authorised human is the checker; the system forbids the same identity from being both. And <strong>pre-commit plan approval</strong>: for a long task, a person approves the plan once, then the agent runs inside narrow limits and stops for anything outside the plan. That cuts the number of prompts without removing the check (see <a href="a2-long-running-agents.html">A2.3 and A2.4</a> on autonomy levels).</p>
+      </div>
+
+      <h3 class="sub" id="m-design">Workflow, single agent or multi-agent: pick the simplest that works</h3>
+      <div class="prose">
+        <p>Three designs, ordered by how much freedom the model has.</p>
+        <ul>
+          <li><strong>Workflow.</strong> Your code defines the steps. A model does a task inside a step, such as classify this email, extract these fields, draft this paragraph, and the code decides what comes next. Variants include a chain of steps, a router that sends each input to the right branch, parallel steps whose outputs are combined, and an evaluator that loops until a check passes.</li>
+          <li><strong>Single agent.</strong> One model in a loop (<a href="m4-the-agent-loop-reason-act.html">M4.1</a>) with tools. The model decides which tool to call next and when it is done. The path is not known in advance.</li>
+          <li><strong>Multi-agent.</strong> Several model-driven agents, often an orchestrator that delegates sub-tasks to workers with their own context and tools, then combines the results.</li>
+        </ul>
+        <p>Anthropic's guidance on this (Building effective agents, 2024) is plain: find the simplest solution and only add complexity when it measurably helps, because agentic systems trade latency and cost for flexibility. The costs of moving right are real.</p>
+        <ul>
+          <li><strong>Predictability falls.</strong> A workflow has a fixed path you can test and gate step by step. An agent has a distribution of paths. A multi-agent system has a distribution of conversations.</li>
+          <li><strong>Cost and latency climb.</strong> Anthropic reported that agents use around four times the tokens of a chat interaction and multi-agent systems around fifteen times (from their account of building a research system; check the source for the current figures). Each extra loop or hand-off is another model call.</li>
+          <li><strong>Errors compound.</strong> If each step is right 95% of the time, ten steps in sequence are right about 60% of the time (0.95<sup>10</sup>). Free-form agents have more steps than workflows.</li>
+          <li><strong>Control gets harder.</strong> More tools and more agents mean more permissions to scope, more gates to place, and more surface for injection to travel along.</li>
+        </ul>
+        <p>Multi-agent designs earn their cost in specific conditions: the work splits into independent pieces that can run in parallel (checking 40 related entities in a due-diligence review), the information would overflow one context, or different parts need <em>different permissions</em>, so that one agent reading untrusted documents is kept apart from another holding the ability to act. That last reason is a security design, not a performance one.</p>
+      </div>
+
+      <figure class="figure" id="fig-design">
+        <div class="fig-head"><span class="fig-title">Which design does this task call for?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> describe a task by switching properties on. A fixed KYC document extraction (steps known, low latency) lands on a workflow. An open-ended investigation of a complaint with many systems lands on a single agent. A 40-entity due-diligence sweep with separate permissions per part lands on multi-agent. Notice that "costly or irreversible mistakes" never changes the design; it adds gates to any of them.</p>
+        <div class="toggles" role="group" aria-label="Task properties" id="design-toggles"></div>
+        <div style="margin-top:14px" id="design-bars"></div>
+        <p class="verdict" id="s4-verdict" style="margin-top:12px"></p>
+        <p class="sim-note">Illustrative scoring, not a measured method: each property adds or subtracts a few points from each design, using the rules in the discussion above. The cost multipliers are the rough ratios Anthropic reported for chat versus agents versus multi-agent systems in one research product, not a law. Use it to structure an argument, not to settle one.</p>
+      </figure>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Guardrails are where agent capability meets bank control. These are the neighbouring topics.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M4.1 – M4.2 · Agent loop and tool design</span><span class="t"><a href="m4-the-agent-loop-reason-act.html">What the gate is gating</a></span><p>Tool design is the first guardrail: narrow tools with typed arguments are easier to scope and approve than a general "run SQL" or "run shell" tool.</p></div>
+        <div class="link-card"><span class="code">M4.3 – M4.4 · Memory and planning</span><span class="t"><a href="m4-memory-short-term-long-term.html">What persists across steps</a></span><p>Long-term memory can carry a poisoned instruction from one session to the next. A plan, once approved, is a natural unit for a gate.</p></div>
+        <div class="link-card"><span class="code">A3.1 – A3.2 · Prompt injection and defence by design</span><span class="t"><a href="a3-indirect-prompt-injection.html">Why prompts cannot be the control</a></span><p>Text from a document or web page can contain instructions. Design-level defences (capabilities, separating the reader from the actor) are the architectural form of the gate in this lesson.</p></div>
+        <div class="link-card"><span class="code">A3.3 – A3.4 · Tool poisoning and OWASP threats</span><span class="t"><a href="a3-mcp-tool-poisoning-and-malicious.html">Excessive agency, in detail</a></span><p>A malicious or compromised tool server is one more way past a gate that only watches the model.</p></div>
+        <div class="link-card"><span class="code">A2.3 – A2.4 · Long-running agents and autonomy levels</span><span class="t"><a href="a2-long-running-agents.html">Autonomy by task risk</a></span><p>The tiers here become autonomy levels there: how long an agent may run and how far it may range before it must check in.</p></div>
+        <div class="link-card"><span class="code">A15.3 · AI gateways and guardrails</span><span class="t"><a href="a15-ai-gateways-guardrails-and-token.html">Where guardrails run in the stack</a></span><p>A central gateway enforces input and output checks, budgets and logging uniformly across every agent the bank builds.</p></div>
+        <div class="link-card"><span class="code">G1.1 – G1.2 · Threat modelling, access control</span><span class="t"><a href="g1-threat-modelling-an-ai-system.html">Least privilege and logging</a></span><p>Scoped credentials, secrets handling and audit trails are the ground the gates stand on.</p></div>
+        <div class="link-card"><span class="code">M5.5 · Evaluating agents</span><span class="t"><a href="m5-evaluating-agents-trajectories-tool-use.html">Testing that the gate holds</a></span><p>Measure how often an agent attempts a gated action and whether any path reaches it unapproved. Adversarial runs belong in the test suite (see <a href="a4-simulation-testing-for-agents-tau.html">A4.5</a>).</p></div>
+        <div class="link-card"><span class="code">G3 · Model governance</span><span class="t"><a href="g3-ongoing-monitoring-and-periodic-review.html">Monitoring and review</a></span><p>Approval rates, override rates and sampled reviews are monitoring metrics for the oversight itself, which belongs in periodic review.</p></div>
+        <div class="link-card"><span class="code">A12 · Regulator expectations</span><span class="t"><a href="a12-cbuae-sama-and-sdaia-expectations.html">What supervisors expect</a></span><p>Accountability, human oversight and auditability are recurring supervisory themes. Check the specific current requirements rather than assuming.</p></div>
+        <div class="link-card"><span class="code">A1 · Know Your Agent</span><span class="t"><a href="a1-know-your-agent.html">Identity and delegated authority</a></span><p>Gates need to know who the agent acts for and what it is allowed to spend. That is the identity layer.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Customer service assistant.</strong> Reads account context freely; sending messages and changing details needs approval or strict templates; every action logged (<a href="b7-internal-copilots-for-staff.html">B7</a>).</li>
+          <li><strong>AML and KYC investigation support.</strong> An agent gathers evidence from several systems and drafts a recommendation. Closing or escalating an alert, or filing a report, remains a human decision with a named owner (<a href="b3-customer-due-diligence-and-risk.html">B3</a>).</li>
+          <li><strong>Fraud operations.</strong> Protective, reversible actions (temporary holds) run fast and are reviewed afterwards; irreversible ones wait for an analyst.</li>
+          <li><strong>Payments and treasury.</strong> Agents prepare and validate instructions; release follows the bank's existing maker-checker and limits. Most banks will keep the final payment step outside the agent.</li>
+          <li><strong>Internal engineering.</strong> Coding agents in a controlled environment: read freely, write to a branch, nothing reaches production without review (<a href="a15-governing-ai-coding-tools-in.html">A15.1</a>).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The architecture is settling: least privilege, tiered actions, deterministic enforcement, human approval for the hard-to-reverse. The live questions are how to avoid approval fatigue at scale, whether a model can be trusted to gate another model, and how many agents a task really needs.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with a small number of searches. Items marked "secondary" come from blog or vendor write-ups I could not trace to a primary source; verify before quoting.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2024</span><div><div class="t">Workflows versus agents, and "start simple"</div><p>Anthropic's guide separates workflows (predefined code paths) from agents (the model directs its own process), and advises using the simplest option, adding autonomy only where it measurably helps.</p><div class="src">Anthropic, Building effective agents, Dec 2024</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Excessive agency named as a top LLM risk</div><p>OWASP's 2025 list for LLM applications includes excessive agency: too much functionality, permission or autonomy given to the model. The recommended controls are minimal tools, minimal permissions, and human approval for high-impact actions.</p><div class="src">OWASP GenAI Security Project, LLM06:2025</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">What multi-agent costs</div><p>Anthropic's account of its multi-agent research system reports large gains on breadth-first research tasks, and token use of roughly four times chat for agents and fifteen times for multi-agent systems. It also says the approach suits tasks of high value with parallelisable parts, and less suits tightly coupled work such as most coding. Figures quoted from memory of that post; check it.</p><div class="src">Anthropic Engineering, How we built our multi-agent research system, Jun 2025</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Approval built into protocols and SDKs</div><p>The Model Context Protocol specification says there should always be a human able to deny tool invocations and that clients should show tool inputs before calling a server. OpenAI's Agents SDK documents approval interruptions: a run pauses when a tool needs approval, returns the pending requests, and can resume from saved state; it advises keeping approval state on the server and not accepting replacement calls from the client.</p><div class="src">MCP specification (tools, security); OpenAI Agents SDK, human-in-the-loop guide</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Oversight can degrade into a rubber stamp</div><p>Recent papers and commentary study approval fatigue and how permission prompts are designed and enforced. A secondary report says users approve most prompts in coding agents, with a figure of 93% attributed to Anthropic that I could not trace to a primary source. A secondary summary also cites a 2026 coding-agent study where humans caught risky actions only about 9–26% of the time. Treat both numbers as unverified; the direction matches long experience with alert fatigue.</p><div class="src">arXiv 2607.13718 (permissions for AI agents); arXiv 2608.23642 (agents and human oversight); both found by search, not reviewed in full</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Governance products for agents</div><p>Analyst and vendor material describes "agent management platforms" that inventory agents, scope their permissions and log actions. Early and vendor-led; useful as a checklist of what a control plane should do.</p><div class="src">Secondary: industry reports, 2026</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Least-privilege tools, allow-lists and scoped credentials</b></td><td>Agents get named tools, with the end user's rights, and nothing broader.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Human approval for irreversible or high-value actions</b></td><td>Maker-checker applied to agent-proposed actions; approval bound to exact arguments.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Fixed workflows with a model inside a step</b></td><td>Document extraction, classification, drafting. Most production "AI automation" in banks today.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Full audit trail of agent actions</b></td><td>Prompt, tool call, arguments, approver and result, kept for review.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Model-based risk scoring of agent actions</b></td><td>A classifier or second model decides which actions to send to a human or to auto-approve.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Single agents with narrow tool sets in internal use</b></td><td>Investigation support, internal copilots, coding agents under review.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Multi-agent systems in production decisions</b></td><td>Shown in research and developer tooling; in banks mostly experiments, with sensitive actions still held by one controlled component.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Capability-based and dual-model designs against injection</b></td><td>Strict separation between the model that reads untrusted text and the one that acts (<a href="a3-indirect-prompt-injection.html">A3.2</a>).</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Approval on every tool call</b></td><td>Tried early, often abandoned as reviewers click through. Still the default in some tools.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Treat the model as an untrusted proposer inside a trusted shell: narrow tools, deterministic checks, human approval where the action is hard to undo, and the smallest design that does the job.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These turn up in pilots and in design reviews. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">The rule lives in the prompt</div><p>"The assistant is instructed never to approve refunds above AED 500." The instruction is a hope, not a control.</p><div class="spot"><b>Spot it</b>Ask: if the model ignored this instruction, what would stop the action? If the answer is "nothing", there is no guardrail.</div></li>
+        <li><div class="t">A gate with a side door</div><p>Payments are gated, but a generic "call internal API" tool or a shell reaches the same endpoint.</p><div class="spot"><b>Spot it</b>List every tool and every system each can reach. Try to reach the gated action by every route, as a test.</div></li>
+        <li><div class="t">Approval of intent, not of the action</div><p>A person approves "process refund", and the arguments are filled in afterwards.</p><div class="spot"><b>Spot it</b>Check that the approval record contains the exact arguments and that execution fails if they differ.</div></li>
+        <li><div class="t">Rubber-stamp queues</div><p>Everything is gated, approval rate is 99.8%, median time is two seconds.</p><div class="spot"><b>Spot it</b>Pull approval rate, time per decision and edit/reject rate. Slip a few known-bad items into the queue and see whether they are caught.</div></li>
+        <li><div class="t">Over-privileged service account</div><p>The agent runs with broad rights "to avoid permission errors". A hijack inherits all of them.</p><div class="spot"><b>Spot it</b>Compare the agent's permissions with what its tasks need, and check whether the end user's identity is passed down.</div></li>
+        <li><div class="t">Self-approval and shared identities</div><p>The requester and the approver are the same person, or share a login.</p><div class="spot"><b>Spot it</b>Look for approvals where requester equals approver, and for approvals made by service accounts.</div></li>
+        <li><div class="t">A model judge as the only gate</div><p>A second LLM "reviews" the first one's actions and is trusted to block bad ones. Both can be fooled by the same text.</p><div class="spot"><b>Spot it</b>Ask what happens if the judge is wrong. Use a model judge to route to humans or to add friction, with a hard rule behind it for high-impact actions.</div></li>
+        <li><div class="t">Too much architecture</div><p>A multi-agent system with an orchestrator, critics and planners for a task that was four fixed steps.</p><div class="spot"><b>Spot it</b>Ask whether a workflow, with the model only inside steps, gives the same result on a test set. If so, use it. Compare cost and latency, not just accuracy.</div></li>
+        <li><div class="t">No kill switch, no log</div><p>When something goes wrong, nobody can stop the agent quickly or reconstruct what it did.</p><div class="spot"><b>Spot it</b>Ask who can disable it, in how many minutes, and where the record of every action is stored.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“We are not asking whether the assistant is smart enough to be trusted. We are limiting what it can do. It can read and draft freely, small reversible actions run with a log, and anything that moves money or contacts a customer waits for a named person to approve that exact action. These rules are built into the system, not written as instructions to the AI, so a clever request cannot talk its way past them. We keep the approvals few, so staff actually read them.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I tier tool calls by reversibility and blast radius. The model proposes; a deterministic layer enforces an allow-list, per-user scopes and, for tier-2 actions, an approval token bound to the exact arguments with no self-approval. The only path to a side effect goes through that layer. I'd start with a fixed workflow, move to a single agent only where the path can't be known in advance, and consider multiple agents only for parallel work or to separate untrusted-reader from actor permissions. I'd monitor approval rate, decision time and override rate, seed known-bad cases, and sample the free-running tier.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just tell the model not to do it?”</summary><div class="ans"><p>Because an instruction is something the model weighs, and it can be overridden by a user, a poisoned document or a long conversation. Even at a 2% failure rate per attempt, a determined user gets through in a few dozen tries. The control has to be code that checks the action itself, which the model cannot edit.</p></div></details>
+        <details class="reveal"><summary>“Can't we have a human approve everything to be safe?”</summary><div class="ans"><p>It feels safe and often isn't. With thousands of mostly harmless requests, people click through, so the real catch rate falls even as the approval count rises. Send humans only the actions that are hard to undo, show them exactly what will happen, measure their behaviour, and sample the rest afterwards.</p></div></details>
+        <details class="reveal"><summary>“Should this be a multi-agent system?”</summary><div class="ans"><p>Only if a simpler design fails a test. Multi-agent systems cost more (reported at around fifteen times the tokens of chat), are harder to test and widen the attack surface. They are justified for work that splits into independent parallel pieces, or when I want to separate an agent reading untrusted text from one with the power to act. Otherwise a workflow or a single agent with tight tools is easier to gate and explain.</p></div></details>
+        <details class="reveal"><summary>“Could another AI model be the approver?”</summary><div class="ans"><p>As a filter, yes: it can route routine items and flag risky ones, and that helps with volume. As the final authority for a high-impact action, I would not, because it can be fooled by the same text and cannot be held accountable. The hard limits stay in code, and a person approves what is hard to undo.</p></div></details>
+        <details class="reveal"><summary>“How do we know the guardrails work?”</summary><div class="ans"><p>Test them like any control. Attack scripts and injected documents in the test suite; a check that every route to a gated action fails without a valid approval; approval-queue metrics in production; seeded bad cases to see if reviewers catch them; and periodic review of the free-running tier. Report rates with intervals, not a single demo.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Name the two properties that decide whether an agent action needs a human, and give a bank action that is low on both.</summary><div class="ans"><p>Reversibility (can it be undone cheaply) and blast radius (how much damage if wrong or hijacked). Drafting a reply that is not sent, or reading the balance of the customer in the current authenticated session, is reversible and small.</p></div></details>
+        <details class="reveal"><summary>2. Why is freezing a card on a fraud signal usually "run and log" rather than "needs approval"?</summary><div class="ans"><p>It is protective and reversible: the customer can unfreeze it. Waiting for approval delays the very protection the action provides, so the harm of delay can exceed the harm of an occasional wrong freeze. Control it with logging, after-the-fact sampling and an easy release path.</p></div></details>
+        <details class="reveal"><summary>3. A prompt rule is beaten with probability 1% per attempt. Roughly how many independent attempts until the chance of at least one breach passes 50%?</summary><div class="ans"><p>Solve 1 − 0.99<sup>n</sup> = 0.5: n = ln 0.5 ÷ ln 0.99 ≈ 69. A code gate that covers every dangerous path has no such curve under this model, but a gate covering 90% of paths behaves like a prompt rule with one tenth the success chance (0.1% per attempt), so about 693 attempts.</p></div></details>
+        <details class="reveal"><summary>4. Why must an approval be bound to the exact arguments of the call?</summary><div class="ans"><p>Otherwise the agent, or an attacker steering it, can obtain approval for a harmless-looking request and then execute a different amount, beneficiary or target. Binding the token to a hash of the tool name and arguments makes any change invalidate it.</p></div></details>
+        <details class="reveal"><summary>5. Your approval queue shows 99.7% approved, median decision 1.8 seconds. Is the control working? What do you do?</summary><div class="ans"><p>Probably not. It looks like a rubber stamp. Check volume per reviewer, whether the reviewer sees the evidence, and test with seeded bad cases. Then shrink the queue by gating on risk instead of volume, improve what is displayed, and move low-risk items to logged-and-sampled.</p></div></details>
+        <details class="reveal"><summary>6. A ten-step agent has 95% success per step. What is the chance the whole run is right, and what does it imply for design?</summary><div class="ans"><p>0.95<sup>10</sup> ≈ 60% (assuming independence). Long free-form chains lose reliability quickly. Prefer fewer steps, fixed workflows where the path is known, checks between steps, and approvals at the points where an error would cost most.</p></div></details>
+        <details class="reveal"><summary>7. Give two legitimate reasons to use several agents instead of one.</summary><div class="ans"><p>Parallelism: the work splits into independent pieces (for example screening 40 related entities). And separation of permissions: one agent reads untrusted documents with no ability to act, another holds the tools to act but never sees raw untrusted text. Context size is a third. Convenience of "one agent per role" is not a reason.</p></div></details>
+        <details class="reveal"><summary>8. A colleague proposes an LLM judge to approve or block the agent's payments. What is your position?</summary><div class="ans"><p>Use it to rank and flag, not to be the last line. It shares blind spots with the agent and cannot be accountable. Payments keep deterministic limits and a person's approval for new beneficiaries and large amounts; the judge can reduce volume and add context for that person.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>Anthropic. <a href="https://www.anthropic.com/engineering/building-effective-agents">Building effective agents</a>. 2024. Workflows versus agents, and the case for simplicity.</li>
+        <li>Anthropic. <a href="https://www.anthropic.com/engineering/multi-agent-research-system">How we built our multi-agent research system</a>. June 2025. Token cost and when multi-agent helps (figures cited from memory).</li>
+        <li>OWASP GenAI Security Project. <a href="https://genai.owasp.org/llmrisk/llm062025-excessive-agency/">LLM06:2025 Excessive Agency</a>.</li>
+        <li>Model Context Protocol. <a href="https://modelcontextprotocol.io/specification/">Specification</a>, tools and security considerations: human in the loop for tool invocation.</li>
+        <li>OpenAI. <a href="https://openai.github.io/openai-agents-js/guides/human-in-the-loop/">Agents SDK: Human-in-the-loop</a>. Approval interruptions, pause and resume.</li>
+        <li><a href="https://arxiv.org/abs/2607.13718">How Agents Ask for Permission: User Permissions for AI Agents, from Interfaces to Enforcement</a>. arXiv 2607.13718, 2026 (found by search, not reviewed in full).</li>
+        <li><a href="https://arxiv.org/abs/2608.23642">AI Agents Push Humans Out of the Loop</a>. arXiv 2608.23642, 2026 (found by search, not reviewed in full).</li>
+        <li>European Union. <a href="https://artificialintelligenceact.eu/article/14/">AI Act, Article 14: Human oversight</a>. Check current application dates for high-risk systems.</li>
+        <li>N. Hardy. <a href="https://dl.acm.org/doi/10.1145/54289.871709">The Confused Deputy</a>. ACM SIGOPS Operating Systems Review, 1988. The original least-privilege failure that agents repeat.</li>
+        <li>L. Bainbridge. <a href="https://doi.org/10.1016/0005-1098(83)90046-8">Ironies of Automation</a>. Automatica, 1983. Why supervising a mostly-right machine is hard for humans.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in M4: evaluating agents (M5.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const Q = x => 1 - L.normCdf(x);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: tier sorter
+  // =====================================================================
+  const LV = ["Run freely", "Run and log", "Needs approval", "Not available"];
+  const ACTS = [
+    { t: "Read the balance of the customer in the current authenticated chat", c: "Read-only, one customer, already identified.", rec: 1, ok: [0, 1], why: "Read-only and scoped to the person in the session. Running it is fine; keep the audit log because it is still customer data." },
+    { t: "Draft a reply to a customer complaint (not sent)", c: "Text goes into a box for a staff member.", rec: 0, ok: [0, 1], why: "Nothing leaves the bank and nothing changes. Free to run. The human who sends it is the gate." },
+    { t: "Send that reply to the customer by email", c: "External message, cannot be recalled.", rec: 2, ok: [1, 2], why: "It cannot be unsent. Approve at first. Once the templates are narrow and tested, run-and-log with sampling can be defended; free-form text should stay gated." },
+    { t: "Temporarily block a card after a strong fraud signal", c: "Customer can unblock in the app or by phone.", rec: 1, ok: [1], why: "Protective and reversible; delay is the harm. Run it, log it, review a sample, and make release easy. Approval would add the minutes in which the fraud happens." },
+    { t: "Pay AED 250,000 to a beneficiary added today", c: "Irreversible money movement to a new account.", rec: 2, ok: [2, 3], why: "Large and hard to recall. Needs a named human, ideally under the existing maker-checker. Many banks will not let an agent initiate it at all, which is also defensible." },
+    { t: "Change a customer's registered phone number", c: "A classic account-takeover step.", rec: 2, ok: [2, 3], why: "Small action, big downstream effect: it redirects one-time codes. Needs approval plus step-up verification of the customer, not just the agent's say-so." },
+    { t: "Close an AML alert as a false positive", c: "Records a decision on possible financial crime.", rec: 2, ok: [2, 3], why: "A recommendation from the agent is helpful; the decision should sit with an accountable analyst. Check your bank's own policy on who may close alerts." },
+    { t: "Switch off a sanctions-screening rule that is causing noise", c: "Affects every screened name.", rec: 3, ok: [3], why: "Huge blast radius, not needed for the job. The tool should simply not exist for this agent. Rule changes follow the bank's change process, run by people." },
+    { t: "Run a read-only SQL query on the reporting replica", c: "No writes; replica only.", rec: 1, ok: [0, 1], why: "Safe by construction if the account is read-only and limited to the replica. Log queries; watch for bulk extraction of personal data." }
+  ];
+  const pick = ACTS.map(() => null);
+  const actsBox = $("acts");
+  ACTS.forEach((a, i) => {
+    const d = document.createElement("div"); d.className = "act";
+    d.innerHTML = '<div class="at">' + (i + 1) + ". " + a.t + '</div><div class="ac">' + a.c + '</div><div class="btns" role="group" aria-label="Control for action ' + (i + 1) + '">' +
+      LV.map((n, k) => '<button class="btn" type="button" data-i="' + i + '" data-k="' + k + '" aria-pressed="false">' + n + "</button>").join("") + '</div><div class="res" hidden></div>';
+    actsBox.appendChild(d);
+  });
+  actsBox.addEventListener("click", e => {
+    const b = e.target.closest("button[data-k]"); if (!b) return;
+    const i = +b.dataset.i, k = +b.dataset.k, a = ACTS[i]; pick[i] = k;
+    const card = b.closest(".act");
+    card.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(+x.dataset.k === k)));
+    let c, h;
+    if (k === a.rec) { c = "ok"; h = "<b>Matches.</b> "; }
+    else if (a.ok.includes(k)) { c = "ok"; h = "<b>Acceptable.</b> Preferred: " + LV[a.rec].toLowerCase() + ". "; }
+    else if (k < Math.min(...a.ok)) { c = "bad"; h = "<b>Too loose.</b> Preferred: " + LV[a.rec].toLowerCase() + ". "; }
+    else { c = "warn"; h = "<b>Too tight.</b> Preferred: " + LV[a.rec].toLowerCase() + ". "; }
+    const r = card.querySelector(".res"); r.hidden = false; r.className = "res " + c; r.innerHTML = h + a.why;
+    let ok = 0, lo = 0, ti = 0, n = 0;
+    pick.forEach((p, j) => { if (p === null) return; n++; const A = ACTS[j]; if (A.ok.includes(p)) ok++; else if (p < Math.min(...A.ok)) lo++; else ti++; });
+    $("st1-ok").textContent = ok; $("st1-loose").textContent = lo; $("st1-tight").textContent = ti; $("st1-n").textContent = n + " / " + ACTS.length;
+  });
+
+  // =====================================================================
+  // Simulation 2: prompt versus code
+  // =====================================================================
+  const S2 = { a: 1.3, p: -1.7, c: 100 };
+  const enfBox = $("enf-chart");
+  const breach = (p, n) => 1 - Math.pow(1 - p, n);
+  const halfN = p => p <= 0 ? Infinity : Math.log(0.5) / Math.log(1 - p);
+  const fmtN = v => !isFinite(v) ? "never" : v < 10 ? v.toFixed(1) : L.fmtInt(Math.round(v));
+  function renderEnf() {
+    const n = Math.pow(10, S2.a), p = Math.pow(10, S2.p), c = S2.c / 100, pc = p * (1 - c);
+    const W = Math.max(300, enfBox.clientWidth), H = 280, m = { l: 46, r: 12, t: 16, b: 44 };
+    const svg = mk(enfBox, W, H, "Chance of at least one breach against number of attempts");
+    const x = L.scale(0, 3, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+    });
+    [[0, "1"], [1, "10"], [2, "100"], [3, "1,000"]].forEach(([v, s]) => tx(svg, x(v), H - m.b + 16, s, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Attempts", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Chance of a breach", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const curve = pp => { const pts = []; for (let a = 0; a <= 3.0001; a += 0.03) pts.push([x(a), y(breach(pp, Math.pow(10, a)))]); return pts; };
+    L.svg("path", { d: L.path(curve(p)), class: "cv-bad" }, svg);
+    L.svg("path", { d: L.path(curve(pc)), class: "cv-good" }, svg);
+    L.svg("line", { x1: x(S2.a), x2: x(S2.a), y1: m.t, y2: H - m.b, class: "cv-ref" }, svg);
+    L.svg("circle", { cx: x(S2.a), cy: y(breach(p, n)), r: 5.5, class: "cv-now" }, svg);
+    L.svg("circle", { cx: x(S2.a), cy: y(breach(pc, n)), r: 5.5, class: "cv-now" }, svg);
+    const bp = breach(p, n), bc = breach(pc, n);
+    $("st2-prompt").textContent = pct(bp, bp < 0.1 ? 1 : 0); cls($("st2-pb"), bp > 0.5 ? "bad" : bp > 0.1 ? "warn" : "ok");
+    $("st2-prompt-s").textContent = "after " + fmtN(n) + " attempts";
+    $("st2-code").textContent = pct(bc, bc < 0.1 ? 1 : 0); cls($("st2-cb"), bc > 0.5 ? "bad" : bc > 0.1 ? "warn" : "ok");
+    $("st2-code-s").textContent = c >= 1 ? "every dangerous path covered" : S2.c + "% of paths covered";
+    $("st2-half").textContent = fmtN(halfN(p)) + " / " + fmtN(halfN(pc));
+    $("s2-verdict").innerHTML = c >= 1
+      ? "With full coverage, the gate takes the model out of the decision: no number of clever attempts changes the result in this model. Real systems still need the gate itself to be correct, and approvals not to be rubber-stamped."
+      : "A prompt rule gives <b>" + pct(bp, 0) + "</b> after " + fmtN(n) + " attempts. The gate at " + S2.c + "% coverage turns each attempt into a <b>" + (100 * pc).toFixed(2) + "%</b> chance instead of " + (100 * p).toFixed(2) + "%: better by a factor of " + (1 / (1 - c)).toFixed(1) + ", but the leak is still there. Raise coverage.";
+  }
+  L.bind("s-att", a => { const n = Math.pow(10, a); return fmtN(n); }, v => { S2.a = v; renderEnf(); });
+  L.bind("s-p", v => (100 * Math.pow(10, v)).toFixed(v < -2 ? 2 : 1) + "%", v => { S2.p = v; renderEnf(); });
+  L.bind("s-cov", v => v + "%", v => { S2.c = v; renderEnf(); });
+
+  // =====================================================================
+  // Simulation 3: approval fatigue
+  // =====================================================================
+  const S3 = { t: 0, v: 3.48, r: 4, ctx: true };
+  const BAD = 0.01, DMU = 2, R50 = 40, HRS = 8;
+  const fatBox = $("fat-chart");
+  function fat(t, N, R, ctx) {
+    const qb = Q(t - DMU), qg = Q(t);
+    const gated = N * ((1 - BAD) * qg + BAD * qb);
+    const rate = gated / (HRS * R);
+    const pmax = ctx ? 0.95 : 0.70;
+    const catchP = pmax / (1 + Math.pow(rate / R50, 2));
+    const missed = N * BAD * ((1 - qb) + qb * (1 - catchP));
+    return { gated, rate, catchP, missed, sec: rate > 0 ? 3600 / rate : Infinity };
+  }
+  function renderFat() {
+    const N = Math.pow(10, S3.v), R = S3.r;
+    const W = Math.max(300, fatBox.clientWidth), H = 280, m = { l: 46, r: 12, t: 16, b: 44 };
+    const svg = mk(fatBox, W, H, "Bad actions slipping through per day against the gate score");
+    const x = L.scale(-1, 3.5, m.l, W - m.r), top = N * BAD * 1.05, y = L.scale(0, top, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+      const v = top * f / 1.05;
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, v < 10 ? v.toFixed(1) : String(Math.round(v)), { "text-anchor": "end" });
+    });
+    [-1, 0, 1, 2, 3].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Gate score (higher sends fewer actions to people)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Bad actions through, per day", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(N * BAD), y2: y(N * BAD), class: "cv-ref" }, svg);
+    tx(svg, W - m.r - 4, y(N * BAD) + 14, "no gate", { "text-anchor": "end", class: "lbl-ink" });
+    const pts = []; let bestT = -1, bestM = Infinity;
+    for (let t = -1; t <= 3.5001; t += 0.05) { const f = fat(t, N, R, S3.ctx); pts.push([x(t), y(f.missed)]); if (f.missed < bestM) { bestM = f.missed; bestT = t; } }
+    L.svg("path", { d: L.path(pts), class: "cv-ink" }, svg);
+    L.svg("line", { x1: x(bestT), x2: x(bestT), y1: m.t, y2: H - m.b, class: "cv-opt" }, svg);
+    tx(svg, x(bestT) + (x(bestT) > W * 0.6 ? -5 : 5), m.t + 10, "best gate", { class: "lbl-acc", "text-anchor": x(bestT) > W * 0.6 ? "end" : "start" });
+    const e = fat(S3.t, N, R, S3.ctx);
+    L.svg("circle", { cx: x(S3.t), cy: y(e.missed), r: 6, class: "cv-now" }, svg);
+
+    $("st3-gated").textContent = L.fmtInt(e.gated); $("st3-gated-s").textContent = pct(e.gated / N, 1) + " of all actions";
+    $("st3-sec").textContent = isFinite(e.sec) ? (e.sec >= 60 ? (e.sec / 60).toFixed(1) + " min" : e.sec.toFixed(0) + " s") : "-";
+    cls($("st3-sec-b"), e.sec < 15 ? "bad" : e.sec < 40 ? "warn" : "ok");
+    $("st3-catch").textContent = pct(e.catchP, 0); cls($("st3-catch-b"), e.catchP < 0.5 ? "bad" : e.catchP < 0.8 ? "warn" : "ok");
+    $("st3-miss").textContent = e.missed.toFixed(1); $("st3-miss-s").textContent = "out of " + (N * BAD).toFixed(0) + " bad per day";
+    cls($("st3-miss-b"), e.missed > bestM * 1.5 ? "bad" : e.missed > bestM * 1.15 ? "warn" : "ok");
+    const bf = fat(bestT, N, R, S3.ctx);
+    $("s3-verdict").innerHTML = "At this gate, <b>" + L.fmtInt(e.gated) + "</b> actions a day reach <b>" + R + "</b> reviewers, about <b>" + (isFinite(e.sec) ? Math.round(e.sec) : 0) + " seconds</b> each, and <b>" + e.missed.toFixed(1) + "</b> bad actions a day get through. The best gate here is score <b>" + bestT.toFixed(2) + "</b>, sending " + L.fmtInt(bf.gated) + " actions and letting <b>" + bestM.toFixed(1) + "</b> through. " +
+      (S3.t < bestT - 0.15 ? "You are gating too much: people are swamped." : S3.t > bestT + 0.15 ? "You are gating too little: bad actions never reach anyone." : "You are close to the best setting.");
+  }
+  L.bind("s-gate", v => v.toFixed(2), v => { S3.t = v; renderFat(); });
+  L.bind("s-vol", v => L.fmtInt(Math.round(Math.pow(10, v) / 50) * 50), v => { S3.v = v; renderFat(); });
+  L.bind("s-rev", v => String(v), v => { S3.r = v; renderFat(); });
+  $("t-ctx").addEventListener("click", e => { S3.ctx = !S3.ctx; e.currentTarget.setAttribute("aria-pressed", String(S3.ctx)); renderFat(); });
+
+  // =====================================================================
+  // Simulation 4: design chooser
+  // =====================================================================
+  const PROPS = [
+    ["s", "The steps are known in advance"],
+    ["o", "Inputs are open-ended; the path can't be predicted"],
+    ["m", "Many tools or systems to choose between"],
+    ["p", "Work splits into independent parts that can run in parallel"],
+    ["x", "Parts need separate contexts or separate permissions"],
+    ["l", "Answer needed in a few seconds"],
+    ["c", "A wrong action is costly or irreversible"]
+  ];
+  const S4 = {};
+  const DES = [["Workflow", "model inside fixed steps", "1×"], ["Single agent", "model chooses the path", "about 4×"], ["Multi-agent", "orchestrator and workers", "about 15×"]];
+  const dBox = $("design-toggles");
+  PROPS.forEach(([k, label]) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "toggle"; b.setAttribute("aria-pressed", "false"); b.textContent = label;
+    b.addEventListener("click", () => { S4[k] = !S4[k]; b.setAttribute("aria-pressed", String(!!S4[k])); renderDesign(); });
+    dBox.appendChild(b);
+  });
+  function renderDesign() {
+    const g = k => S4[k] ? 1 : 0;
+    const s = g("s"), o = g("o"), m = g("m"), p = g("p"), x = g("x"), l = g("l"), c = g("c");
+    const sc = [3 * s + l - 2 * o - m, 3 * o + m - 2 * s - l + 1 - p - x, 3 * p + 3 * x + o - 2 - l];
+    const any = PROPS.some(([k]) => S4[k]);
+    const best = sc.indexOf(Math.max(...sc));
+    const lo = Math.min(...sc), hi = Math.max(...sc, lo + 1);
+    $("design-bars").innerHTML = DES.map((d, i) => '<div class="gbar' + (any && i === best ? " top" : "") + '"><span><b>' + d[0] + '</b></span><span class="tr"><span class="fl" style="display:block;width:' + (100 * (sc[i] - lo + 0.3) / (hi - lo + 0.3)).toFixed(0) + '%"></span></span><span class="n">' + (sc[i] > 0 ? "+" : "") + sc[i] + "</span></div>").join("");
+    if (!any) { $("s4-verdict").innerHTML = "Switch on the properties that describe the task."; return; }
+    const d = DES[best];
+    let h = "Lean towards a <b>" + d[0].toLowerCase() + "</b> (" + d[1] + "; token cost roughly " + d[2] + " a plain chat call, per one vendor report).";
+    if (best === 0) h += " Gate each step that writes, and test the whole path.";
+    if (best === 1) h += " Keep the tool set small and cap steps and spend per run.";
+    if (best === 2) h += " Check that a single agent genuinely fails first; give each worker only the permissions it needs.";
+    if (c) h += " Because mistakes are costly, <b>add approval gates on the write actions</b> whichever design you choose.";
+    if (l && best > 0) h += " The latency need pulls against this design; test the response time.";
+    $("s4-verdict").innerHTML = h;
+  }
+
+  function renderAll() { renderEnf(); renderFat(); renderDesign(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
