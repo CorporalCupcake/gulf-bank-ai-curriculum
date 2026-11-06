@@ -38,6 +38,16 @@ window.CATALOG = [
   {file: "f9-recommender-systems-and-ranking.html", module: "F9", title: "Recommenders and Document AI: Next-Best-Product, Ranking, and Reading Cheques and Scans", codes: ["F9.5","F9.6"], label: "F9.5 · F9.6", tier: "n", minutes: 45},
   {file: "f9-bandits-and-reinforcement-learning.html", module: "F9", title: "Learning by Trying, Listening to Signals, and the Word-Count Baseline", codes: ["F9.7","F9.8","F9.9"], label: "F9.7 – F9.9", tier: "n", minutes: 45},
   {file: "f10-reading-python-fluently.html", module: "F10", title: "Reading Python Fluently, and Catching Analyses That Are Hollow", codes: ["F10.1","F10.2"], label: "F10.1 · F10.2", tier: "d", minutes: 40, star: true},
+  {file: "f10-the-testing-mindset.html", module: "F10", title: "The Testing Mindset, and Being Able to Rebuild Any Number You Reported", codes: ["F10.3","F10.4"], label: "F10.3 · F10.4", tier: "d", minutes: 40},
+  {file: "f10-software-design-basics-modules-interfaces.html", module: "F10", title: "Code That Can Change, and Code That Can Scale: Design Judgement and Performance Intuition", codes: ["F10.5","F10.6"], label: "F10.5 · F10.6", tier: "n", minutes: 40},
+  {file: "f11-numpy-arrays-broadcasting-and-vectorisation.html", module: "F11", title: "NumPy and pandas: Thinking in Arrays and Tables", codes: ["F11.1","F11.2"], label: "F11.1 · F11.2", tier: "d", minutes: 45, star: true},
+  {file: "f11-time-and-dates-in-pandas.html", module: "F11", title: "Time in pandas and Pipelines in scikit-learn: Never Let the Future Leak", codes: ["F11.3","F11.4"], label: "F11.3 · F11.4", tier: "d", minutes: 40, star: true},
+  {file: "f11-plotting-with-matplotlib-and-seaborn.html", module: "F11", title: "From DataFrame to Honest Chart, and From Notebook to Code You Can Rerun", codes: ["F11.5","F11.6"], label: "F11.5 · F11.6", tier: "d", minutes: 35},
+  {file: "m1-tokenisation.html", module: "M1", title: "Tokens and the Transformer: How an LLM Reads, Thinks and Writes", codes: ["M1.1","M1.2"], label: "M1.1 · M1.2", tier: "d", minutes: 45, star: true},
+  {file: "m1-pretraining-then-post-training.html", module: "M1", title: "From Text Predictor to Assistant: Pretraining, Post-Training and Sampling", codes: ["M1.3","M1.4"], label: "M1.3 · M1.4", tier: "d", minutes: 40},
+  {file: "m1-context-windows-and-the-kv.html", module: "M1", title: "What a Model Can Read, Why It Makes Things Up, and Which Kind of Model Fits the Job", codes: ["M1.5","M1.6","M1.7"], label: "M1.5 – M1.7", tier: "d", minutes: 45, star: true},
+  {file: "m2-prompting-and-context-engineering.html", module: "M2", title: "Prompting and Context Engineering: Deciding What the Model Sees, and Getting Back Something a System Can Use", codes: ["M2.1","M2.2"], label: "M2.1 · M2.2", tier: "d", minutes: 40, star: true},
+  {file: "m2-prompting-versus-rag-versus-fine.html", module: "M2", title: "Prompting, RAG or Fine-Tuning? Choosing How to Adapt a Model, and Doing It Cheaply with LoRA", codes: ["M2.3","M2.4"], label: "M2.3 · M2.4", tier: "d", minutes: 42, star: true},
   {file: "a1-know-your-agent.html", module: "A1", title: "Know Your Agent: How AI Agents Get Permission to Pay", codes: ["A1.1","A1.2","A1.3","A1.4","A1.5"], label: "A1.1 – A1.5", tier: "n", star: true, fast: true, minutes: 40}
 ];
 
