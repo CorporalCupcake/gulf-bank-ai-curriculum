@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fraud Models in Production: Late Labels, Feedback Loops, Alert Fatigue and the Three-Way Decision</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .cv-ideal { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .cv-a { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-b { stroke: var(--neutral); stroke-width: 2.2; fill: none; }
+  .cv-w { stroke: var(--warn); stroke-width: 2.2; fill: none; }
+  .cv-r { stroke: var(--bad); stroke-width: 2.2; fill: none; }
+  .cv-ink { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .cv-rule { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-opt { stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .rb-ok { fill: var(--accent); fill-opacity: .8; }
+  .rb-bl { fill: var(--warn); fill-opacity: .8; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track B · Banking AI foundations</span>
+    <span>Module B1 · Fraud</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>B1.3 · B1.4 · B1.5</span>
+        <span class="pill d">Day one</span>
+        <span>About 42 minutes</span>
+      </div>
+      <h1>Fraud Models in Production: Late Labels, Feedback Loops, Alert Fatigue and the Three-Way Decision</h1>
+      <p class="dek">Why the truth about a transaction arrives weeks late, why a model that blocks fraud starves itself of evidence, why more alerts can mean less fraud stopped, and how to turn a risk score into approve, step up or decline with the cost arithmetic behind each cut.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A fraud model is not a prediction, it is a policy that acts on people and then learns from what it let through, so you must account for labels that mature slowly, outcomes you never observe, analysts who tire, and a decision with three outcomes whose cut-offs come from costs, not from the model.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Imagine a goalkeeper who is graded only on the shots that reach the net. Every shot he saves disappears from the record. Every shot that goes in is logged weeks later, when the league office finally files the paperwork. Meanwhile his coach keeps adding shooters to his drills in proportion to how many goals the record shows. After a year, the record says he is brilliant against left-footed shots (none are logged) and hopeless against volleys (the paperwork is slow), and the coach reorganises the team around that fiction.</p>
+        <p>A fraud model at a Gulf bank lives exactly there. It scores a card payment in a few milliseconds and acts. If it blocks, the outcome is never seen: we do not know if the customer would have complained. If it approves and the card was stolen, the cardholder notices days later, disputes, and a chargeback is filed weeks after that. Only then does the row get its label. The model that learns from this record is learning from a distorted, late and self-selected sample of its own past.</p>
+        <p>Three practical problems follow from that, and a fourth sits at the end of the pipe where a person has to act.</p>
+      </div>
+      <div class="prose">
+        <ul>
+          <li><strong>Labels arrive late (B1.3).</strong> What you know today about last week is incomplete, and the gap is not random. It is largest for the newest fraud, which is the fraud you most want to learn.</li>
+          <li><strong>Labels depend on what the model did (B1.3).</strong> Block a transaction and its outcome disappears. Retrain on what remains and the model forgets why it blocked. This is a feedback loop.</li>
+          <li><strong>People are the bottleneck (B1.4).</strong> An analyst can review perhaps a few dozen alerts an hour. Flood the queue and the ones who stay sharp are the ones you never needed; the others stop looking closely.</li>
+          <li><strong>The action is three-way (B1.5).</strong> Approve, ask for more proof, or decline. Each has a cost, and the right cut-off between them is an arithmetic result you can derive on a napkin.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-intro">
+        <div class="fig-head"><span class="fig-title">What the model sees, against what happened</span><span class="fig-tag">Concept sketch</span></div>
+        <div class="chart-wrap" id="intro-chart"></div>
+        <p class="sim-note">Illustration, not data. Each of four outcomes is shown with the time at which the model's training table learns it.</p>
+      </figure>
+
+      <div class="callout key"><span class="k">Hold onto this</span>Ask four questions of any fraud model. When does the label for yesterday's transaction become trustworthy? What happens to the data when the model says no? How many alerts can people really work well? Where, in money, does each cut-off sit? The rest of the lesson is how to answer them.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-delay">Delayed labels: how truth reaches the training table</h3>
+      <div class="prose">
+        <p>A card transaction gets its fraud label through one of several routes, each with its own clock:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Route</th><th>Typical lag (order of magnitude)</th><th>Who ends up labelled</th></tr></thead>
+          <tbody>
+            <tr><td><b>Analyst confirms an alert</b></td><td>Minutes to a day or two</td><td>Frauds the system already flagged. Fast, and biased towards what the model already catches.</td></tr>
+            <tr><td><b>Customer reports it</b> (app, call centre, statement)</td><td>Days; many customers notice only on a statement</td><td>Frauds the model missed and the customer noticed.</td></tr>
+            <tr><td><b>Dispute and chargeback process</b></td><td>Weeks to a few months, set by card-scheme rules and bank process</td><td>The formal, auditable label. Late and incomplete.</td></tr>
+            <tr><td><b>Never reported</b></td><td>Forever</td><td>Small frauds the customer never saw. These look like legitimate rows permanently.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Exact lags differ by bank, product and scheme, so measure your own: for each fraud eventually confirmed, plot the days from transaction to label. That distribution is the single most useful object in this topic. Call its cumulative form the <strong>maturity curve</strong>: the share of eventual fraud that already carries a label at age <i>a</i>. If chargebacks take a mean of 40 days, then a one-week-old cohort has only a small share of its fraud labelled, and a two-month-old cohort roughly three quarters.</p>
+        <p>The danger is subtle. The labels that arrive first are not a random slice. Frauds the model caught are confirmed by analysts within a day. Frauds it missed have to wait for the customer and the chargeback. So the mix of labelled fraud in a young cohort is <em>skewed towards the model's successes</em>, and a measured recall computed on young data looks too good. Let <i>r</i> be the model's true recall, <i>d</i><sub>c</sub> the quick confirmation delay for caught fraud and <i>τ</i> the slow delay for missed fraud. Assuming exponential delays, the recall you would measure at cohort age <i>a</i> is</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>r</mi><mtext>meas</mtext></msub><mo stretchy="false">(</mo><mi>a</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><mi>r</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><msup><mi>e</mi><mrow><mo>−</mo><mi>a</mi><mo>/</mo><msub><mi>d</mi><mi>c</mi></msub></mrow></msup><mo stretchy="false">)</mo></mrow><mrow><mi>r</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><msup><mi>e</mi><mrow><mo>−</mo><mi>a</mi><mo>/</mo><msub><mi>d</mi><mi>c</mi></msub></mrow></msup><mo stretchy="false">)</mo><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>r</mi><mo stretchy="false">)</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><msup><mi>e</mi><mrow><mo>−</mo><mi>a</mi><mo>/</mo><mi>τ</mi></mrow></msup><mo stretchy="false">)</mo></mrow></mfrac></math>
+        <p class="where">Numerator: caught frauds labelled by age <i>a</i>. Denominator: all frauds labelled by age <i>a</i>, caught or missed. As <i>a</i> grows both brackets tend to one and the ratio tends to <i>r</i>. Example: <i>r</i> = 80%, <i>d</i><sub>c</sub> = 2 days, <i>τ</i> = 40 days, <i>a</i> = 14 days gives 0.7993 ÷ (0.7993 + 0.0591) = <strong>93%</strong>. The model has not improved. The missed fraud simply has not been written down yet.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>In the other direction, if you count "no label yet" as "legitimate" for precision, young cohorts look <em>worse</em> than they are. Which way a metric errs depends on how it is built, so never read a young-cohort number without asking: <strong>how mature are these labels, and which frauds are still missing?</strong> This is censoring, the same structure as time to default in <a href="f2-survival-analysis.html">survival analysis (F2.8)</a>, and the same point-in-time discipline as <a href="f3-leakage-point-in-time.html">F3.1</a> applies to labels: a training set built today must record, for each row, only the labels that were knowable at the time you pretend to be.</p>
+      </div>
+
+      <figure class="figure" id="fig-mat">
+        <div class="fig-head"><span class="fig-title">The maturity curve and the recall that looks too good</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> keep true recall at 80% and watch the accent curve. A cohort two weeks old reports recall in the low 90s; wait and it settles at 80%. Lengthen the chargeback delay and the illusion lasts longer. Drag true recall down to 50%: the early picture looks rosier still. The grey curve is how much of the eventual fraud is labelled at all.</p>
+        <div class="chart-wrap" id="mat-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Recall you would measure at that age</span>
+          <span><i style="background:var(--neutral)"></i>Share of eventual fraud that is labelled</span>
+          <span><i style="background:var(--muted)"></i>True recall</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-r">True recall of the model <output for="s-r"></output></label><input type="range" id="s-r" min="0.5" max="0.95" step="0.01" value="0.8"></div>
+          <div class="ctl"><label for="s-tau">Mean chargeback delay for missed fraud <output for="s-tau"></output></label><input type="range" id="s-tau" min="10" max="90" step="1" value="40"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st1a-b"><div class="k">Measured recall at 14 days</div><div class="v" id="st1a"></div><div class="s" id="st1a-s"></div></div>
+          <div class="stat"><div class="k">Measured recall at 30 days</div><div class="v" id="st1b"></div><div class="s">labelled share <span id="st1b-s"></span></div></div>
+          <div class="stat"><div class="k">Measured recall at 60 days</div><div class="v" id="st1c"></div><div class="s">labelled share <span id="st1c-s"></span></div></div>
+          <div class="stat"><div class="k">Days until within 2 points of the truth</div><div class="v" id="st1d"></div><div class="s">wait at least this long before judging</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: exponential label delays, 2 days for fraud the model caught (analyst confirmation) and the chosen mean for fraud it missed (customer dispute). Real delays have long tails and weekday effects. The formula above is exact under those assumptions.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What teams do about it:</p>
+        <ul>
+          <li><strong>Embargo.</strong> Train and evaluate only on cohorts older than a chosen maturity point, say the age at which 90% of eventual fraud is labelled. You give up recency (the model is always a few weeks behind) and gain cleaner labels. The cost is a model that learns a new attack late; see <a href="f3-imbalanced-data.html#m-delay">F3.5</a> for the label-noise side of this trade.</li>
+          <li><strong>Evaluate by label age.</strong> Report recall for the cohort of March "as of 30 days" and "as of 90 days" side by side. A fall in the 30-day figure that is absent at 90 days is maturity, not decay.</li>
+          <li><strong>Use fast proxy signals.</strong> Analyst decisions, customer contact outcomes, OTP failures, card blocks, device-risk flags. They are noisy but young. A common design trains one component on fresh, noisy feedback and another on old, clean chargebacks, then blends. Dal Pozzolo et al. showed on three years of real card data that the two sources are worth keeping separate rather than pooled.</li>
+          <li><strong>Predict the missing labels.</strong> Treat the label of a young row as a partial observation and model its eventual probability from the maturity curve (the survival-analysis view). Recent work goes further and tries to detect model degradation before the labels arrive (Part 4).</li>
+          <li><strong>Watch for covariate drift as the early warning.</strong> The input mix (merchant categories, devices, geographies) shifts without waiting for labels. <a href="f7-drift-monitoring-psi-ks-and.html">F7.7</a> covers PSI and friends; they cannot see a change in the relationship between inputs and fraud, but they are quick.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-loop">Feedback loops: the model changes the data it will learn from</h3>
+      <div class="prose">
+        <p>Delay is a timing problem. A feedback loop is a <em>causal</em> one. The model's decisions determine which outcomes you ever observe. There are two common versions and they push in opposite directions.</p>
+        <ul>
+          <li><strong>Blocked means unobserved ("selective labels").</strong> If a payment is declined, you never learn whether it was fraud. Drop those rows from training and the model sees fewer and fewer examples of the pattern it blocks, and the fraud rate in that pattern among <em>approved</em> rows looks low. The retrained model relaxes. Fraud returns. It tightens again. The literature calls this the selective labels problem (Lakkaraju et al., 2017).</li>
+          <li><strong>Blocked means fraud (self-confirming labels).</strong> If instead every blocked transaction is stamped "fraud" in the training table, the model learns to reproduce its own past blocks, including its mistakes, and its apparent precision on those rows is 100% by construction. It can never discover that it has been wrongly blocking a customer segment, because nobody is allowed to be proved innocent.</li>
+          <li><strong>Rules and models feeding each other.</strong> Model B is trained on labels produced by analysts who only saw what Model A or the rules alerted. Its notion of fraud is a shadow of their notion of fraud. The same holds for any queue that is ordered by a score.</li>
+        </ul>
+        <p>Sculley and colleagues named this class of problem "hidden feedback loops" in their classic paper on technical debt in machine learning: a model that influences the data it will later be trained on, which makes the system hard to reason about from the training metrics alone.</p>
+      </div>
+
+      <figure class="figure" id="fig-loop">
+        <div class="fig-head"><span class="fig-title">Block, forget, relax, repeat</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> set exploration to 0%. The policy flips every round: block, then (with no evidence left) approve, then block. The average cost is far above the cheap steady policy. Now raise exploration. Nothing improves at 5% (still not enough evidence to resist the prior), then at about 10% the loop locks onto "block" and stays there. The price is the fraud you knowingly let through to keep learning.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-eps">Exploration: share of blocked-pattern traffic approved at random <output for="s-eps"></output></label><input type="range" id="s-eps" min="0" max="0.5" step="0.01" value="0"></div>
+        </div>
+        <div class="chart-wrap" id="loop-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--warn);opacity:.8"></i>Pattern blocked this round</span>
+          <span><i class="sq" style="background:var(--accent);opacity:.8"></i>Pattern approved this round</span>
+          <span><i style="background:var(--muted)"></i>Block line: estimated fraud rate 10%</span>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st2a-b"><div class="k">Average cost per round</div><div class="v" id="st2a"></div><div class="s">over 20 rounds</div></div>
+          <div class="stat"><div class="k">Best fixed policy (block all)</div><div class="v">AED 80,000</div><div class="s">if you could know the true rate</div></div>
+          <div class="stat" id="st2c-b"><div class="k">Times the policy flipped</div><div class="v" id="st2c"></div><div class="s">in 20 rounds</div></div>
+          <div class="stat"><div class="k">Fraud knowingly let through for learning</div><div class="v" id="st2d"></div><div class="s">per round while blocked</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Toy model, exact expected values. One transaction pattern, 2,000 per round, true fraud rate 20% if approved. Each blocked transaction costs AED 40; each approved fraud costs AED 400. The model estimates the pattern's fraud rate from approved rows of the latest round only, shrunk towards a pooled 0.5% with a weight of 200 pseudo-transactions, and blocks when the estimate exceeds 10% (the break-even). Real systems pool more data and use richer models, but the failure mode is the same.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The ways out are all forms of deliberately getting information you would not otherwise have:</p>
+        <ul>
+          <li><strong>Random holdout or exploration.</strong> Let a small random share of otherwise-blocked traffic through, or step it up rather than decline, within a risk limit the business has signed off. It costs real money and must be approved as such, usually capped by amount. It is the only unbiased estimate of what the blocked traffic would have done. This is the same exploration idea as in <a href="f9-bandits-and-reinforcement-learning.html">bandits (F9.7)</a>.</li>
+          <li><strong>Randomised thresholds.</strong> Jitter the cut-off slightly so that nearby scores get both treatments; it gives you counterfactual information near the boundary and allows inverse-propensity weighting (Swaminathan and Joachims, 2015).</li>
+          <li><strong>Step-up as a probe.</strong> A challenge the customer passes or fails gives an outcome without a loss, which is why the three-way decision is also a data-collection tool.</li>
+          <li><strong>Causal care in training.</strong> Treat the decision as a treatment and the training set as observational data with a known assignment mechanism (<a href="f9-causal-inference.html">F9.3</a>, <a href="f2-confounding-simpson-selection.html">F2.6</a>). Keep decision logs with the score, the policy version and the propensity, or you cannot correct later.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-fatigue">Alert fatigue: a human sets the real ceiling</h3>
+      <div class="prose">
+        <p>A fraud model's output is only useful if someone acts on it. In many banks, for the alerts that are not auto-decided, that someone is an analyst with a queue. Two things limit the system: <strong>capacity</strong> (how many alerts the team can open per day) and <strong>attention</strong> (how likely an analyst is to recognise a genuine fraud when most alerts in front of them are false). Industry commentary and vendor surveys consistently describe false-positive shares among alerts of 90% or more in transaction monitoring, and burnout among analysts; those are surveys by vendors and trade groups, not controlled studies, so treat the exact figures with care (Part 4). The mechanism is what matters.</p>
+        <p>Precision (the share of alerts that are real) is therefore not a vanity metric. It is the fraction of the analyst's day that is useful, and, by the effect we are about to simulate, it also changes how well the useful part is done. Two mechanisms apply when volume rises beyond what people can handle:</p>
+        <ul>
+          <li><strong>Unreviewed alerts.</strong> If alerts beyond capacity are ignored or auto-released, the frauds among them are lost. If the queue is first-come, first-served, the ones lost are essentially random: fraud you could have caught sits behind noise.</li>
+          <li><strong>Degraded review.</strong> Analysts who see mostly noise spend less time per alert, skim, and miss real cases. The evidence for this in banking is mostly anecdotal and vendor-reported; the broader human-factors literature on alarm fatigue (clinical monitoring, security operations) supports the shape. I model it below as an assumption, clearly labelled.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-target">Precision targeting: spend scarce attention where the money is</h3>
+      <div class="prose">
+        <p>If you can only handle <i>C</i> alerts a day, the best thing you can do is to send the <i>C</i> highest-risk ones, ordered by expected loss (probability times amount), not first-come first-served. That is <strong>precision at k</strong>: of the top <i>k</i> alerts, how many are real? It is the metric that tells the fraud operations head what the queue will feel like. It is derived from the same ranking as AUC but answers a different question, and it connects to the thresholds of <a href="f7-precision-recall-thresholds-calibration.html">F7</a>.</p>
+        <p>Beyond ordering, there are ways to raise precision without losing much recall:</p>
+        <ul>
+          <li><strong>Segment thresholds.</strong> Different cut-offs by product, channel or customer segment, because base rates differ. A single global threshold is rarely optimal.</li>
+          <li><strong>Auto-clear the obvious.</strong> Use a second, cheap model or rule to dismiss alerts that match patterns analysts always release (the customer's regular merchant, a known recurring payment), with sampling to check the dismissals are safe.</li>
+          <li><strong>Case grouping.</strong> Ten alerts on one compromised card are one job, not ten. Group by card, device or beneficiary.</li>
+          <li><strong>Better evidence in the alert.</strong> Reason codes (<a href="f8-global-versus-local-explanations.html">F8</a>), recent history and device match, so each review takes seconds, not minutes.</li>
+          <li><strong>Feedback from analysts</strong> as labels, with a random audit sample to defend against the selective-labels loop above.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-fat">
+        <div class="fig-head"><span class="fig-title">More alerts, less fraud stopped</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> with capacity 300 a day, slide the alert volume up from 200. Fraud stopped rises, peaks near capacity, then falls: the queue fills with noise and attention drops. Now press <b>Rank the queue by score</b>: the fall flattens, because the analysts still see the riskiest 300. Then cut capacity and watch the peak move.</p>
+        <div class="btns" role="group" aria-label="Queue discipline">
+          <button class="btn" type="button" id="b-prio" aria-pressed="false">Rank the queue by score</button>
+        </div>
+        <div class="chart-wrap" id="fat-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Fraud stopped (with fatigue)</span>
+          <span><i style="background:var(--muted)"></i>If analysts stayed fully sharp</span>
+          <span><i style="background:var(--warn)"></i>Review capacity</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-vol">Alerts generated per 100,000 transactions <output for="s-vol"></output></label><input type="range" id="s-vol" min="2" max="3.7" step="0.02" value="2.6"></div>
+          <div class="ctl"><label for="s-cap">Alerts analysts can review per day <output for="s-cap"></output></label><input type="range" id="s-cap" min="100" max="1000" step="25" value="300"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Precision of what analysts review</div><div class="v" id="st3a"></div><div class="s" id="st3a-s"></div></div>
+          <div class="stat"><div class="k">Fraud stopped per 100,000</div><div class="v" id="st3b"></div><div class="s" id="st3b-s"></div></div>
+          <div class="stat" id="st3c-b"><div class="k">Attention (chance a real case is recognised)</div><div class="v" id="st3c"></div><div class="s">assumption, see note</div></div>
+          <div class="stat" id="st3d-b"><div class="k">Net benefit per 100,000</div><div class="v" id="st3d"></div><div class="s">AED 400 per fraud stopped, AED 40 per review</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: 100,000 transactions, 0.5% fraud (500), the same normal-score model as <a href="f3-imbalanced-data.html">F3.5</a> (fraud scores 2.5 standard deviations higher, so AUC about 0.96). Alert volume sets the cut-off. The attention curve is my assumption, not a measured law: recognition = 0.55 + 0.40 &times; &radic;(min(1, precision / 25%)), so 95% when at least a quarter of alerts are real, about 73% at 5% precision. Unranked queues review a random <i>C</i> of the alerts. Exact expected values given those assumptions.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Notice what the simulation does not assume: any change to the model. The loss comes from <em>where the threshold sits relative to what people can do</em>. That is why alert volume should be set from capacity and cost, jointly, and revisited when staffing changes. It is also why the question to ask on any new model is not "does AUC go up?" but "what does it do to precision at the volume we can handle?"</p>
+      </div>
+
+      <h3 class="sub" id="m-decision">Approve, step up, decline: three actions, two thresholds</h3>
+      <div class="prose">
+        <p>Most real-time systems do not choose between "allow" and "block". They have a middle option: <strong>step-up authentication</strong>, such as a challenge in the banking app, a one-time code, a biometric or a call-back. It costs the customer a little friction, it stops many fraudsters, and it gives the bank an outcome. So the decision is a three-way fork, and each branch has an expected cost given the model's calibrated fraud probability <i>p</i> and the transaction amount <i>L</i>:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtable columnalign="left">
+          <mtr><mtd><mtext>approve: </mtext><mi>p</mi><mi>L</mi></mtd></mtr>
+          <mtr><mtd><mtext>step up: </mtext><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>p</mi><mo stretchy="false">)</mo><msub><mi>c</mi><mi>s</mi></msub><mo>+</mo><mi>p</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>s</mi><mo stretchy="false">)</mo><mi>L</mi></mtd></mtr>
+          <mtr><mtd><mtext>decline: </mtext><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>p</mi><mo stretchy="false">)</mo><msub><mi>c</mi><mi>d</mi></msub></mtd></mtr>
+        </mtable></math>
+        <p class="where"><i>s</i> is the share of fraud a step-up stops (fraudsters fail the challenge; social-engineered victims who hand over the code do not, so <i>s</i> is well below 1 for scams). <i>c</i><sub>s</sub> is the cost of challenging a genuine customer: friction, drop-off, support calls. <i>c</i><sub>d</sub> is the cost of wrongly declining a genuine customer, much bigger: embarrassment, a call to the contact centre, a blocked card, sometimes a lost relationship. Solve each pair for equality and you get two thresholds on probability:</p>
+        <math display="block"><msub><mi>p</mi><mn>1</mn></msub><mo>=</mo><mfrac><msub><mi>c</mi><mi>s</mi></msub><mrow><mi>s</mi><mi>L</mi><mo>+</mo><msub><mi>c</mi><mi>s</mi></msub></mrow></mfrac><mo>,</mo><mspace width="1.5em"></mspace><msub><mi>p</mi><mn>2</mn></msub><mo>=</mo><mfrac><mrow><msub><mi>c</mi><mi>d</mi></msub><mo>−</mo><msub><mi>c</mi><mi>s</mi></msub></mrow><mrow><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>s</mi><mo stretchy="false">)</mo><mi>L</mi><mo>+</mo><msub><mi>c</mi><mi>d</mi></msub><mo>−</mo><msub><mi>c</mi><mi>s</mi></msub></mrow></mfrac></math>
+        <p class="where">Approve below <i>p</i><sub>1</sub>, step up between, decline above <i>p</i><sub>2</sub>. Example: <i>L</i> = AED 1,500, <i>s</i> = 80%, <i>c</i><sub>s</sub> = AED 8, <i>c</i><sub>d</sub> = AED 120. Then <i>p</i><sub>1</sub> = 8 ÷ (1,200 + 8) = <strong>0.66%</strong> and <i>p</i><sub>2</sub> = 112 ÷ (300 + 112) = <strong>27%</strong>. A transaction only a little more likely than average to be fraud (0.5% is the base rate) already merits a challenge; you decline only above one in four.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Three consequences worth remembering. First, the thresholds <strong>depend on the amount</strong>: <i>p</i><sub>1</sub> falls as <i>L</i> rises, so a AED 15,000 transfer is stepped up at a far lower risk than a AED 40 coffee. A single score cut-off for all amounts leaves money on the table. Second, <strong>everything assumes calibrated probabilities</strong>. If the model was trained on resampled data, correct it first (<a href="f3-imbalanced-data.html#m-resample">F3.5</a>). Third, the formula assumes you can estimate <i>s</i>, which is itself a measurement problem: it must come from experiments, not from the vendor's brochure, and it shifts when fraudsters learn the challenge (deepfaked calls, remote-access scams; see <a href="a9-scams-on-instant-payment-rails.html">A9</a>).</p>
+      </div>
+
+      <figure class="figure" id="fig-dec">
+        <div class="fig-head"><span class="fig-title">Three actions, three cost lines</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> lines show the expected cost of each action as fraud probability rises (horizontal axis is logarithmic). The best action is whichever line is lowest. Raise the amount and the approve line steepens: the first threshold slides left. Make step-up weak (low effectiveness) and the middle zone shrinks. Then look at the table for what the three-way rule saves over a plain approve-or-decline rule.</p>
+        <div class="chart-wrap" id="dec-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Approve</span>
+          <span><i style="background:var(--warn)"></i>Step up</span>
+          <span><i style="background:var(--accent)"></i>Decline</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-L">Transaction amount <output for="s-L"></output></label><input type="range" id="s-L" min="1.3" max="4.3" step="0.05" value="3.18"></div>
+          <div class="ctl"><label for="s-s">Share of fraud a step-up stops <output for="s-s"></output></label><input type="range" id="s-s" min="0.2" max="0.99" step="0.01" value="0.8"></div>
+          <div class="ctl"><label for="s-cd">Cost of wrongly declining a genuine customer <output for="s-cd"></output></label><input type="range" id="s-cd" min="30" max="400" step="5" value="120"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Approve below</div><div class="v" id="st4a"></div><div class="s" id="st4a-s"></div></div>
+          <div class="stat"><div class="k">Decline above</div><div class="v" id="st4b"></div><div class="s" id="st4b-s"></div></div>
+          <div class="stat"><div class="k">Cost per 100,000, three-way rule</div><div class="v" id="st4c"></div><div class="s" id="st4c-s"></div></div>
+          <div class="stat" id="st4d-b"><div class="k">Cost per 100,000, approve-or-decline only</div><div class="v" id="st4d"></div><div class="s" id="st4d-s"></div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: every transaction has the chosen amount; 0.5% are fraud; scores are normal with the fraud mean 2.5 standard deviations above legitimate (AUC about 0.96), and the model is perfectly calibrated. Step-up costs AED 8 per genuine customer challenged. Thresholds come from the formulas above. The approve-or-decline rule uses its own best single cut. Exact expected values; the real amount distribution would make thresholds vary per transaction.</p>
+      </figure>
+
+      <h3 class="sub" id="m-latency">Milliseconds: what the budget does to the design</h3>
+      <div class="prose">
+        <p>An authorisation decision has a hard clock. Card-network and payment-switch timeouts leave the issuer a small window (commonly quoted in the tens to low hundreds of milliseconds for the model call; check your own SLA and scheme rules, since I am not quoting a specific number as fact). If your score does not return in time, the system applies a <strong>fallback</strong>: approve, decline, or a simple rule, depending on risk appetite. That fallback is part of the fraud policy, and its failures show up as sudden losses or sudden declines, not as AUC changes. Four design consequences:</p>
+        <ul>
+          <li><strong>Features are split by freshness.</strong> Slow, rich features (a customer's 90-day profile) are precomputed and fetched from a low-latency store; fast ones (the last three transactions, the device seen a minute ago) are computed on the stream. The two must match what training saw, or you get silent skew (<a href="p1-feature-stores-and-online-offline.html">P1</a>).</li>
+          <li><strong>Model size is a business decision.</strong> A gradient-boosted ensemble scores in around a millisecond on a CPU; a large neural network may need a GPU and a careful batch strategy. Latency tails (the slowest 1% of calls), not averages, decide the fallback rate. See <a href="p2-deployment-patterns-batch-real-time.html">P2</a>.</li>
+          <li><strong>Layers.</strong> A fast rules layer handles hard blocks (sanctioned beneficiary, known compromised card), the model scores the rest, and a slower asynchronous process later reviews cases after the fact. Rules and models share a policy, they do not compete (<a href="b2-transaction-monitoring-rules-versus-ml.html">B2</a>).</li>
+          <li><strong>Everything is logged for later.</strong> The score, the features at decision time, the action, the policy version and, if randomised, the propensity. Without them neither delayed labels nor feedback correction nor audit is possible. The full end-to-end design is in <a href="p5-designing-a-real-time-fraud.html">P5</a>.</li>
+        </ul>
+        <p>Step-up also depends on the local authentication landscape. Gulf regulators have been pushing banks towards stronger, app-based authentication and away from SMS codes for some flows; I have not verified the current CBUAE or SAMA requirements and dates, so confirm with your compliance team before writing them into a design.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson is the operating layer on top of the fraud-detection lesson and the statistics beneath it.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">B1.1–B1.2 · Card and payment fraud detection</span><span class="t"><a href="b1-transaction-and-card-fraud-detection.html">What the model is and the features it uses</a></span><p>This lesson takes that model and puts it into a decision process with clocks, people and costs.</p></div>
+        <div class="link-card"><span class="code">F3.5 · Imbalanced data</span><span class="t"><a href="f3-imbalanced-data.html">Rarity, thresholds and label noise</a></span><p>Base-rate arithmetic, probability correction after resampling, and the embargo idea in detail. The three-way thresholds here need those calibrated probabilities.</p></div>
+        <div class="link-card"><span class="code">F7.1–F7.4 · Precision, recall, calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Precision at k and cost curves</a></span><p>The metrics for alert queues, and how to check that the probability means what it says before deriving cut-offs.</p></div>
+        <div class="link-card"><span class="code">F2.6 · Selection bias</span><span class="t"><a href="f2-confounding-simpson-selection.html">Labels exist where someone looked</a></span><p>The selective-labels problem is the same bias under another name. Randomisation is the cure.</p></div>
+        <div class="link-card"><span class="code">F2.8 · Survival analysis</span><span class="t"><a href="f2-survival-analysis.html">Censoring and maturity curves</a></span><p>Young cohorts are censored. The maturity curve is a survival function for labels.</p></div>
+        <div class="link-card"><span class="code">F3.1 · Point-in-time correctness</span><span class="t"><a href="f3-leakage-point-in-time.html">Know what was knowable then</a></span><p>Rebuilding training data means reconstructing the labels as they stood at each date, not only the features.</p></div>
+        <div class="link-card"><span class="code">F4.5 · Temporal validation</span><span class="t"><a href="f4-cross-validation-including-temporal-splits.html">Split by time, with an embargo</a></span><p>The right validation design for a live, drifting, label-delayed system.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift monitoring</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">The label-free early warning</a></span><p>When labels are weeks away, input drift and score drift are what you have today.</p></div>
+        <div class="link-card"><span class="code">F9.3 · F9.7 · Causal inference and bandits</span><span class="t"><a href="f9-causal-inference.html">Decisions as treatments</a></span><p>Exploration, propensities and counterfactual evaluation turn a feedback loop into a controlled one.</p></div>
+        <div class="link-card"><span class="code">P5 · Real-time fraud design</span><span class="t"><a href="p5-designing-a-real-time-fraud.html">The system around the score</a></span><p>Latency, features, fallbacks, logging and monitoring, end to end.</p></div>
+        <div class="link-card"><span class="code">G3 · Model risk and monitoring</span><span class="t"><a href="g3-ongoing-monitoring-and-periodic-review.html">Evidence for validators</a></span><p>Performance by label age, exploration records and threshold rationale are what an ongoing-monitoring plan should contain.</p></div>
+        <div class="link-card"><span class="code">A9 · Scams and device intelligence</span><span class="t"><a href="a9-scams-on-instant-payment-rails.html">Where step-up fails</a></span><p>Authorised push-payment scams defeat challenges because the victim passes them. The effectiveness <i>s</i> collapses there.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Card-not-present and e-commerce fraud.</strong> Chargeback delays, 3-D Secure style challenges and the three-way fork are daily reality.</li>
+          <li><strong>Instant payments and transfers.</strong> No chargeback route at all for authorised scams, so labels come from customer reports and recovery cases, and a decline is the only protection. The step-up share <i>s</i> is smaller.</li>
+          <li><strong>AML alert queues.</strong> Same fatigue mechanism and same selective labels (only investigated cases get a verdict), with regulatory pressure to explain every cut-off (<a href="b2-transaction-monitoring-rules-versus-ml.html">B2</a>).</li>
+          <li><strong>Credit and collections.</strong> Delayed outcomes are the rule (90 days past due), and rejected applicants never reveal whether they would have repaid, the same selective labels problem called reject inference.</li>
+          <li><strong>Call centre and customer experience.</strong> A wrongly declined customer lands in a queue; <i>c</i><sub>d</sub> is partly a contact-centre cost you can measure.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The problems are well known; what is newer is detecting trouble before labels arrive, treating decisions as experiments, and using models to cut alert volume. Evidence about alert fatigue itself is thin and largely from vendors.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two light searches; items below are ones I could confirm, others are marked as recalled from memory.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2014–15</span><div><div class="t">Hidden feedback loops as technical debt</div><p>Sculley and colleagues warned that systems whose outputs shape their future training data are hard to analyse and hard to monitor. (From memory, widely cited.)</p><div class="src">Sculley et al., NeurIPS 2015 (and 2014 workshop)</div></div></li>
+        <li><span class="yr">2015</span><div><div class="t">Feedback versus delayed supervision in card fraud</div><p>Dal Pozzolo, Boracchi, Caelen, Alippi and Bontempi framed fraud streams as two label sources, quick investigator feedback on alerts and late labels on the rest, and showed that training separate classifiers and aggregating them works better than pooling.</p><div class="src">IJCNN 2015; extended in IEEE TNNLS 2018</div></div></li>
+        <li><span class="yr">2015</span><div><div class="t">Counterfactual learning from logged decisions</div><p>Swaminathan and Joachims gave a principled way to learn a policy from logs of a different policy, using propensities and variance control. The logic behind randomised thresholds. (From memory.)</p><div class="src">Swaminathan &amp; Joachims, ICML 2015</div></div></li>
+        <li><span class="yr">2017</span><div><div class="t">The selective labels problem named and studied</div><p>Lakkaraju et al. showed how evaluating a decision rule is biased when outcomes are observed only for those the earlier decision-maker approved, and proposed contraction-based evaluation. (From memory; the setting was bail decisions, the logic is identical for card blocks.)</p><div class="src">Lakkaraju et al., KDD 2017</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">Runaway feedback loops</div><p>Ensign et al. formalised how a model that allocates attention from its own past observations can amplify an initial imbalance. Predictive policing was the example; the same dynamics describe attention allocation to alerts.</p><div class="src">Ensign et al., FAT* 2018</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">Performative prediction</div><p>A framework for predictions that change the thing predicted. Fraud is the textbook case: when you block a pattern, fraudsters move.</p><div class="src">Perdomo et al., ICML 2020</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Detecting degradation before labels arrive</div><p>A paper at ECML-PKDD 2025 targets the exact gap where fraud labels come one to six months after predictions. It trains a meta-model to predict the production model's errors and reports gains over statistical and drift-detection baselines on two proprietary payment-network datasets. I confirmed the abstract, not the full text.</p><div class="src">Sethi et al., ECML-PKDD 2025</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Governing decisions made on delayed labels</div><p>A preprint on delayed-label governance and evidence sufficiency, tested on a public fraud dataset among other domains, argues that drift in the label relationship can be invisible to input monitoring. Preprint; I read only the search summary.</p><div class="src">arXiv 2604.15740 (preprint)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>On alert fatigue, the numbers circulating are mostly from vendors. A financial-crime vendor survey reported that roughly 37% of respondents had false-positive rates above 50% and about one in five did not track the rate at all. Other widely repeated claims (90–99% of transaction-monitoring alerts are false; most analyst time goes to legitimate cases; heavy burnout) come second-hand from trade surveys and blogs and I could not trace them to primary studies. Use them as direction, not as evidence, and measure your own queue.</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Label-maturity embargo and evaluation by label age</b></td><td>Training and headline metrics use cohorts old enough; recent months reported with a maturity caveat.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Score-ranked analyst queues with capacity-driven thresholds</b></td><td>Top-k by expected loss, volume set from staffing.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Risk-based step-up authentication</b></td><td>Challenge only when risk is above a threshold, often amount-aware.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Dual-source training: fresh feedback plus mature labels</b></td><td>Separate or weighted components for quick and late labels.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Random exploration and holdout in production</b></td><td>A small, capped, risk-approved sample of otherwise-blocked traffic is let through or stepped up.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Meta-models that predict degradation before labels</b></td><td>A second model estimates where the first is likely wrong.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Fatigue modelled in operations planning</b></td><td>Teams track review time and agreement rates over a shift; formal models are rare.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Treat the fraud model as a policy: keep decision logs, set thresholds from costs and capacity, buy a little randomisation so you can still learn, and always say how mature the labels behind a number are.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each failure comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Judging a young cohort as if it were mature</div><p>"Recall this month is 94%, up from 80%." Or the opposite: "recall collapsed".</p><div class="spot"><b>Spot it</b>Ask for the metric at equal label age across months. Plot labelled fraud counts by week of transaction; the last weeks slope down.</div></li>
+        <li><div class="t">Blocked transactions dropped, or stamped as fraud</div><p>Either choice distorts the next model; neither is neutral.</p><div class="spot"><b>Spot it</b>Ask how blocked and declined rows are labelled in the training table, and whether any of them were ever allowed through at random.</div></li>
+        <li><div class="t">A model that quietly learns the rules</div><p>It scores high where rules alerted because the labels came from those alerts. Overlap with old rules is near 100%, with no new fraud found.</p><div class="spot"><b>Spot it</b>Measure the share of confirmed fraud found <em>only</em> by the model. If it is tiny, the model is a rule mirror.</div></li>
+        <li><div class="t">Oscillating performance after each retrain</div><p>Fraud drops, then rebounds, then drops, in step with the retraining cadence.</p><div class="spot"><b>Spot it</b>Overlay retrain dates on the fraud-loss chart. Look for the loop in Simulation 2.</div></li>
+        <li><div class="t">Alert volume set to look busy</div><p>A cautious threshold produces thousands of alerts and the team's catch rate falls.</p><div class="spot"><b>Spot it</b>Plot fraud stopped per analyst-hour against daily volume. If it bends down above some volume, you are past the peak of Simulation 3.</div></li>
+        <li><div class="t">One global threshold</div><p>The same 0.8 cut for AED 30 and AED 30,000 payments, for card-present and online, for new and old customers.</p><div class="spot"><b>Spot it</b>Compute the break-even threshold per amount band with the Part 2 formula. If they differ by an order of magnitude, one cut-off is wrong for most of them.</div></li>
+        <li><div class="t">Uncalibrated scores fed into cost thresholds</div><p>The 0.66% and 27% cut-offs of the example only work if "0.27" really means 27%.</p><div class="spot"><b>Spot it</b>Reliability plot on a recent, representative, mature sample, especially after any resampling or weights.</div></li>
+        <li><div class="t">Believing the step-up effectiveness number</div><p>A vendor says challenges stop 98% of fraud. Social-engineered customers pass them.</p><div class="spot"><b>Spot it</b>Ask how <i>s</i> was measured, on which fraud types, and whether it was split by scam versus account takeover.</div></li>
+        <li><div class="t">No fallback policy for timeouts</div><p>The model service is slow for ten minutes; the default is "approve".</p><div class="spot"><b>Spot it</b>Ask what happens at timeout, how often it occurred last quarter, and who approved that default.</div></li>
+        <li><div class="t">Unfair friction</div><p>Declines and challenges fall more on some nationalities, languages, devices or branches than risk justifies.</p><div class="spot"><b>Spot it</b>Compare step-up and decline rates, and their later overturned share, across groups (<a href="g2-fairness-definitions-and-their-trade.html">G2</a>).</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To a head of fraud · 30 seconds</span>
+          <blockquote>“Two things limit us besides the model: how fast we find out what was really fraud, and how many alerts your team can work well. Chargebacks take weeks, so any figure for the last month is provisional; I'd report recall at fixed label ages. And past a certain volume more alerts catch less fraud, because the queue fills with noise. I'd set volume from your capacity and what a missed fraud costs, and use challenges for the middle band, so we only decline when we are quite sure.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a model validator or technical interviewer</span>
+          <blockquote>“The system is a policy, not a predictor. Labels are delayed and selectively observed, so I'd keep decision logs with score, policy version and propensity, run a small capped random holdout on blocked traffic, evaluate by label age with an embargo, and calibrate before deriving thresholds. Approve, step-up and decline cut-offs follow from the cost matrix and are amount-dependent. I'd monitor input and score drift as the early warning and compare to mature performance when it arrives.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Recall jumped from 80% to 93% last fortnight. Great news?”</summary><div class="ans"><p>Probably not. Frauds the model caught are confirmed in days; frauds it missed take weeks to be disputed. A two-week-old cohort therefore over-represents the model's successes. Compare equal label age with earlier cohorts, and revisit after 60 or 90 days.</p></div></details>
+        <details class="reveal"><summary>“Why not just retrain daily on everything?”</summary><div class="ans"><p>Daily data is the most immature and the most self-selected. You would teach the model that recent patterns are rarely fraud (labels missing) and that blocked patterns vanish (no outcomes). Retrain often if you must, but with an embargo or label-age handling, fresh feedback as a separate component, and a randomised sample so the blocked region is still visible.</p></div></details>
+        <details class="reveal"><summary>“Isn't letting known-risky transactions through on purpose reckless?”</summary><div class="ans"><p>It is a cost, so it should be capped, sized and signed off like any risk limit: small amounts, a tiny share, bounded loss per day. The alternative is blindness. In the toy case, 10% exploration cost about AED 8,000 per round and avoided oscillation worth tens of thousands. Another route is to step up rather than approve, which produces outcomes without the loss.</p></div></details>
+        <details class="reveal"><summary>“Can we cut false alerts by raising the threshold?”</summary><div class="ans"><p>Yes, and you lose fraud. The question is the exchange rate. At each volume compute fraud stopped and net money with realistic attention. If the team is over capacity, a higher threshold plus ranking can stop more fraud, not less. If it is under capacity, raising the threshold only loses catches.</p></div></details>
+        <details class="reveal"><summary>“Why three actions? Decline is simple.”</summary><div class="ans"><p>Declining a genuine customer costs much more than challenging one, and many suspicious transactions are only moderately likely to be fraud. A challenge converts uncertainty into information at a small friction cost. In my worked example it begins at 0.66% probability and declines begin at 27%, so most of the risky mass is handled by the cheap middle action.</p></div></details>
+        <details class="reveal"><summary>“How do you know the model works if you can't see what it blocked?”</summary><div class="ans"><p>Not from blocked rows alone. Use the random holdout for an unbiased estimate, a counterfactual evaluator with logged propensities, challenge outcomes, customer complaints about declines, and long-run fraud losses per million transactions against a control. And be honest that part of the answer is an assumption.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. True recall is 70%, caught fraud is confirmed in 2 days on average, missed fraud in 30. What recall would you measure on a cohort 10 days old?</summary><div class="ans"><p>Caught labelled: 0.7 × (1 − e<sup>−5</sup>) = 0.7 × 0.9933 = 0.6953. Missed labelled: 0.3 × (1 − e<sup>−1/3</sup>) = 0.3 × 0.2835 = 0.0850. Measured = 0.6953 ÷ 0.7803 ≈ <strong>89%</strong>, nineteen points above the truth.</p></div></details>
+        <details class="reveal"><summary>2. A team stamps every blocked transaction "fraud" and retrains. What goes wrong, and how is it different from dropping blocked rows?</summary><div class="ans"><p>The model learns to repeat its own blocks, with perfect apparent precision on those rows, and can never discover false positives. Dropping them does the reverse: the blocked pattern looks rare or safe among approved rows and the model relaxes. Both come from not knowing the counterfactual; random exploration or step-up outcomes supply it.</p></div></details>
+        <details class="reveal"><summary>3. Compute the approve and decline thresholds for L = AED 600, s = 90%, c<sub>s</sub> = AED 5, c<sub>d</sub> = AED 80.</summary><div class="ans"><p>p<sub>1</sub> = 5 ÷ (0.9 × 600 + 5) = 5 ÷ 545 ≈ <strong>0.92%</strong>. p<sub>2</sub> = (80 − 5) ÷ (0.1 × 600 + 80 − 5) = 75 ÷ 135 ≈ <strong>56%</strong>. Step up between those.</p></div></details>
+        <details class="reveal"><summary>4. The amount doubles and nothing else changes. Which way does the approve threshold move, and the decline threshold?</summary><div class="ans"><p>p<sub>1</sub> falls (a larger loss makes even small probabilities worth a challenge). p<sub>2</sub> also falls, because the residual loss on stepped-up fraud grows, so declines start earlier. That is why a single score cut-off for all amounts is wrong.</p></div></details>
+        <details class="reveal"><summary>5. Alert volume doubles from 300 to 600 with capacity 300, queue not ranked. Why might fraud stopped go down?</summary><div class="ans"><p>Analysts still review 300, but now a random 300 of the 600. Roughly half the real fraud in the queue goes unreviewed, and the extra alerts are mostly false, so precision (and attention) falls. Ranking by score, or raising the threshold back, repairs it.</p></div></details>
+        <details class="reveal"><summary>6. Your fraud rate looks stable but confirmed fraud found only by the model is shrinking. What is a likely cause?</summary><div class="ans"><p>The labels are increasingly generated by alerts the model itself produces, so the training and evaluation data tilt towards what it already finds. Add a random review sample of unflagged traffic, and measure model-only detections against it.</p></div></details>
+        <details class="reveal"><summary>7. Why are delayed labels a survival-analysis problem?</summary><div class="ans"><p>For a young cohort, a missing fraud label means "not yet" rather than "no". That is right-censoring. The maturity curve is the label-arrival distribution, and survival methods use it to turn partial information into estimates of the eventual rate instead of treating missing as negative.</p></div></details>
+        <details class="reveal"><summary>8. A model's calibration is off because it was trained on undersampled data. How does this affect step-up thresholds?</summary><div class="ans"><p>Probabilities are inflated, so the model would challenge or decline far too many transactions at the cost-derived thresholds. Correct the probabilities (prior correction or recalibration on an untouched mature sample) before deriving or applying p<sub>1</sub> and p<sub>2</sub>.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>A. Dal Pozzolo, G. Boracchi, O. Caelen, C. Alippi, G. Bontempi. <a href="https://boracchi.faculty.polimi.it/docs/2015_04_Credit_Card_Fraud_Detection_DalPozzolo_Boracchi_Caelen_Alippi_Bontempi.pdf">Credit Card Fraud Detection and Concept-Drift Adaptation with Delayed Supervised Information</a>. IJCNN, 2015.</li>
+        <li>A. Dal Pozzolo, G. Boracchi, O. Caelen, C. Alippi, G. Bontempi. <a href="https://boracchi.faculty.polimi.it/docs/2017_FraudsTNNLS.pdf">Credit Card Fraud Detection: A Realistic Modeling and a Novel Learning Strategy</a>. IEEE TNNLS, 2018.</li>
+        <li>H. Lakkaraju, J. Kleinberg, J. Leskovec, J. Ludwig, S. Mullainathan. <a href="https://doi.org/10.1145/3097983.3098066">The Selective Labels Problem: Evaluating Algorithmic Predictions in the Presence of Unobservables</a>. KDD, 2017.</li>
+        <li>D. Sculley et al. <a href="https://papers.nips.cc/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html">Hidden Technical Debt in Machine Learning Systems</a>. NeurIPS, 2015.</li>
+        <li>A. Swaminathan, T. Joachims. <a href="https://arxiv.org/abs/1502.02362">Counterfactual Risk Minimization</a>. ICML, 2015.</li>
+        <li>D. Ensign et al. <a href="https://arxiv.org/abs/1706.09847">Runaway Feedback Loops in Predictive Policing</a>. FAT*, 2018.</li>
+        <li>J. Perdomo, T. Zrnic, C. Mendler-Dünner, M. Hardt. <a href="https://arxiv.org/abs/2002.06673">Performative Prediction</a>. ICML, 2020.</li>
+        <li>Sethi et al. <a href="https://mlanthology.org/ecmlpkdd/2025/sethi2025ecmlpkdd-proactive">Proactive Detection of Model Degradation in Financial Fraud Prediction with Delayed Labels</a>. ECML-PKDD, 2025.</li>
+        <li><a href="https://arxiv.org/pdf/2604.15740">Delayed-label governance and evidence sufficiency</a> (title as indexed; check the page). arXiv 2604.15740, 2026 (preprint).</li>
+        <li>A. Dal Pozzolo, O. Caelen, R. Johnson, G. Bontempi. <a href="https://doi.org/10.1109/SSCI.2015.33">Calibrating Probability with Undersampling for Unbalanced Classification</a>. IEEE SSCI, 2015.</li>
+        <li>SymphonyAI. <a href="https://www.symphonyai.com/glossary/false-positive">False positive (glossary and FinCrime Frontier survey figures)</a>. Vendor material; treat as indicative.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in B1: see the fraud-detection lesson (B1.1–B1.2) and the real-time design in P5</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const MU = 2.5, N = 100000, LOGIT = L.logit, SIG = L.sigmoid;
+  const Q = x => 1 - L.normCdf(x);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  const aed = v => "AED " + L.fmtInt(Math.round(v));
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // ---------- intro sketch ----------
+  function renderIntro() {
+    const box = $("intro-chart");
+    const W = Math.max(300, box.clientWidth), H = 190, m = { l: 150, r: 14, t: 12, b: 30 };
+    const svg = mk(box, W, H, "When the training table learns each outcome");
+    const X = L.scale(0, 90, m.l, W - m.r);
+    [0, 30, 60, 90].forEach(d => {
+      L.svg("line", { x1: X(d), x2: X(d), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(d), H - m.b + 16, d + " d", { "text-anchor": "middle" });
+    });
+    const rows = [["Approved, genuine", 0, "never reported", "bar-0"], ["Fraud, model alerted", 2, "analyst confirms", "rb-ok"], ["Fraud, model missed", 45, "chargeback", "rb-bl"], ["Blocked or declined", null, "outcome unknown", ""]];
+    const bh = 24, gap = (H - m.t - m.b - 4 * bh) / 5;
+    rows.forEach(([n, d, note, c], i) => {
+      const y = m.t + gap * (i + 1) + bh * i;
+      tx(svg, m.l - 8, y + bh / 2 + 4, n, { "text-anchor": "end", class: "lbl-ink" });
+      if (d === null) {
+        L.svg("line", { x1: X(0), x2: X(90), y1: y + bh / 2, y2: y + bh / 2, class: "cv-ideal" }, svg);
+        tx(svg, X(45), y + bh / 2 - 6, note + ", ever", { "text-anchor": "middle", class: "lbl-warn" });
+      } else if (d === 0) {
+        L.svg("rect", { x: X(0), y, width: 4, height: bh, rx: 2, class: c }, svg);
+        tx(svg, X(0) + 10, y + bh / 2 + 4, "labelled legitimate by default (a few frauds hide here)", { class: "lbl-ink" });
+      } else {
+        L.svg("rect", { x: X(d), y: y + 4, width: 14, height: bh - 8, rx: 3, class: c }, svg);
+        tx(svg, X(d) + 20, y + bh / 2 + 4, note + " (day ~" + d + ")", { class: "lbl-ink" });
+      }
+    });
+  }
+
+  // ---------- Simulation 1: maturity ----------
+  const S1 = { r: 0.8, tau: 40 }, DC = 2;
+  const meas = (a, r, tau) => { const c = r * (1 - Math.exp(-a / DC)), m = (1 - r) * (1 - Math.exp(-a / tau)); return c / (c + m); };
+  const labShare = (a, r, tau) => r * (1 - Math.exp(-a / DC)) + (1 - r) * (1 - Math.exp(-a / tau));
+  const matBox = $("mat-chart");
+  function renderMat() {
+    const W = Math.max(300, matBox.clientWidth), H = 270, m = { l: 46, r: 12, t: 14, b: 40 };
+    const svg = mk(matBox, W, H, "Measured recall and labelled share against cohort age");
+    const x = L.scale(0, 120, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" }); });
+    [0, 30, 60, 90, 120].forEach(d => tx(svg, x(d), H - m.b + 16, d, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Age of the cohort, days since the transactions", { "text-anchor": "middle" });
+    L.svg("line", { x1: x(0), x2: x(120), y1: y(S1.r), y2: y(S1.r), class: "cv-ideal" }, svg);
+    const a = [], b = [];
+    for (let d = 0.25; d <= 120; d += 0.5) { a.push([x(d), y(meas(d, S1.r, S1.tau))]); b.push([x(d), y(labShare(d, S1.r, S1.tau))]); }
+    L.svg("path", { d: L.path(b), class: "cv-b" }, svg);
+    L.svg("path", { d: L.path(a), class: "cv-a" }, svg);
+    const m14 = meas(14, S1.r, S1.tau), m30 = meas(30, S1.r, S1.tau), m60 = meas(60, S1.r, S1.tau);
+    $("st1a").textContent = pct(m14, 0); $("st1a-s").textContent = "labelled share " + pct(labShare(14, S1.r, S1.tau), 0); cls($("st1a-b"), m14 - S1.r > 0.05 ? "bad" : "ok");
+    $("st1b").textContent = pct(m30, 0); $("st1b-s").textContent = pct(labShare(30, S1.r, S1.tau), 0);
+    $("st1c").textContent = pct(m60, 0); $("st1c-s").textContent = pct(labShare(60, S1.r, S1.tau), 0);
+    let d2 = 1; while (d2 < 1000 && meas(d2, S1.r, S1.tau) - S1.r > 0.02) d2 += 1;
+    $("st1d").textContent = d2 + " days";
+    $("s1-verdict").innerHTML = "At 14 days the cohort <b>looks " + (100 * (m14 - S1.r)).toFixed(0) + " points better</b> than it is (" + pct(m14, 0) + " against a true " + pct(S1.r, 0) + "), with only " + pct(labShare(14, S1.r, S1.tau), 0) + " of its eventual fraud labelled. The missing frauds are the ones the model missed.";
+  }
+  L.bind("s-r", v => pct(v, 0), v => { S1.r = v; renderMat(); });
+  L.bind("s-tau", v => v + " days", v => { S1.tau = v; renderMat(); });
+
+  // ---------- Simulation 2: feedback loop ----------
+  const S2 = { e: 0 };
+  const loopBox = $("loop-chart");
+  function runLoop(eps) {
+    const NA = 2000, fA = 0.2, K = 200, POOL = 0.005, R = 20, out = [];
+    let blocked = false, est = null, cost = 0, flips = 0;
+    for (let t = 0; t < R; t++) {
+      const approvedShare = blocked ? eps : 1;
+      const c = approvedShare * NA * fA * 400 + (1 - approvedShare) * NA * 40;
+      cost += c;
+      out.push({ blocked, est, c });
+      const n = approvedShare * NA;
+      est = (n * fA + K * POOL) / (n + K);
+      const nb = est > 0.1;
+      if (nb !== blocked && t > 0) flips++;
+      blocked = nb;
+    }
+    return { out, avg: cost / R, flips };
+  }
+  function renderLoop() {
+    const r = runLoop(S2.e);
+    const W = Math.max(300, loopBox.clientWidth), H = 230, m = { l: 46, r: 10, t: 14, b: 40 };
+    const svg = mk(loopBox, W, H, "Estimated fraud rate for the pattern, round by round");
+    const x = L.scale(0, 20, m.l, W - m.r), y = L.scale(0, 0.2, H - m.b, m.t);
+    [0, 0.05, 0.1, 0.15, 0.2].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100).toFixed(0) + "%", { "text-anchor": "end" }); });
+    const bw = (x(20) - x(0)) / 20;
+    r.out.forEach((o, i) => {
+      const h = o.est === null ? 0 : y(0) - y(Math.min(o.est, 0.2));
+      if (o.est !== null) L.svg("rect", { x: x(i) + 2, y: y(0) - h, width: Math.max(2, bw - 4), height: h, rx: 2, class: o.blocked ? "rb-bl" : "rb-ok" }, svg);
+      else L.svg("rect", { x: x(i) + 2, y: y(0) - 3, width: Math.max(2, bw - 4), height: 3, class: "rb-ok" }, svg);
+    });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(0.1), y2: y(0.1), class: "cv-rule" }, svg);
+    tx(svg, W - m.r - 4, y(0.1) - 5, "block above 10%", { class: "lbl-warn", "text-anchor": "end" });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Round (estimate used to set that round's policy)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Estimated fraud rate", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    $("st2a").textContent = aed(r.avg); cls($("st2a-b"), r.avg > 100000 ? "bad" : r.avg > 90000 ? "warn" : "ok");
+    $("st2c").textContent = r.flips; cls($("st2c-b"), r.flips > 4 ? "bad" : "ok");
+    $("st2d").textContent = aed(S2.e * 2000 * 0.2 * 400);
+    const stable = r.flips <= 1;
+    $("s2-verdict").innerHTML = stable
+      ? "With <b>" + pct(S2.e, 0) + "</b> exploration the loop settles on blocking. Each round costs " + aed(S2.e * 160000 + (1 - S2.e) * 80000) + ", " + aed(S2.e * 160000 + (1 - S2.e) * 80000 - 80000) + " above the unreachable ideal: the price of still learning."
+      : "At <b>" + pct(S2.e, 0) + "</b> exploration there are too few approved rows to outweigh the low pooled prior, so the estimate falls below 10%, the pattern is approved, fraud floods back, and the cycle repeats. Average cost <b>" + aed(r.avg) + "</b> against AED 80,000 for the settled policy.";
+  }
+  L.bind("s-eps", v => pct(v, 0), v => { S2.e = v; renderLoop(); });
+
+  // ---------- Simulation 3: fatigue ----------
+  const S3 = { v: 2.6, c: 300, prio: false };
+  const PI = 0.005, fatBox = $("fat-chart");
+  const A = t => N * (PI * Q(t - MU) + (1 - PI) * Q(t));
+  const tpAt = t => N * PI * Q(t - MU);
+  function tOf(V) { let lo = -4, hi = 9; for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (A(mid) > V) lo = mid; else hi = mid; } return (lo + hi) / 2; }
+  const qOf = p => 0.55 + 0.40 * Math.sqrt(Math.min(1, p / 0.25));
+  function fat(V, C, prio) {
+    const t = tOf(V), tp = tpAt(t);
+    let rev, tpr;
+    if (V <= C) { rev = V; tpr = tp; }
+    else if (prio) { rev = C; tpr = tpAt(tOf(C)); }
+    else { rev = C; tpr = tp * C / V; }
+    const prec = tpr / rev, q = qOf(prec), stopped = tpr * q;
+    return { rev, prec, q, stopped, sharp: tpr * 0.95, net: 400 * stopped - 40 * rev, tp };
+  }
+  function renderFat() {
+    const V = Math.pow(10, S3.v);
+    const W = Math.max(300, fatBox.clientWidth), H = 270, m = { l: 46, r: 12, t: 16, b: 44 };
+    const svg = mk(fatBox, W, H, "Fraud stopped against alert volume");
+    const x = L.scale(2, 3.7, m.l, W - m.r), y = L.scale(0, 500, H - m.b, m.t);
+    [0, 100, 200, 300, 400, 500].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v, { "text-anchor": "end" }); });
+    [[2, "100"], [2.477, "300"], [3, "1,000"], [3.477, "3,000"]].forEach(([v, s]) => tx(svg, x(v), H - m.b + 16, s, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Alerts generated per 100,000 (log scale)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Frauds stopped", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: x(Math.log10(S3.c)), x2: x(Math.log10(S3.c)), y1: m.t, y2: H - m.b, class: "cv-rule" }, svg);
+    tx(svg, x(Math.log10(S3.c)) + 5, m.t + 10, "capacity", { class: "lbl-warn" });
+    const a = [], b = [];
+    for (let lv = 2; lv <= 3.7001; lv += 0.02) { const f = fat(Math.pow(10, lv), S3.c, S3.prio); a.push([x(lv), y(f.stopped)]); b.push([x(lv), y(f.sharp)]); }
+    L.svg("path", { d: L.path(b), class: "cv-ideal" }, svg);
+    L.svg("path", { d: L.path(a), class: "cv-a" }, svg);
+    const f = fat(V, S3.c, S3.prio);
+    L.svg("circle", { cx: x(S3.v), cy: y(f.stopped), r: 6, class: "cv-now" }, svg);
+    $("st3a").textContent = pct(f.prec, 0); $("st3a-s").textContent = "reviewing " + L.fmtInt(Math.round(f.rev)) + " of " + L.fmtInt(Math.round(V));
+    $("st3b").textContent = f.stopped.toFixed(0); $("st3b-s").textContent = "of " + (N * PI) + " frauds; sharp analysts would stop " + f.sharp.toFixed(0);
+    $("st3c").textContent = pct(f.q, 0); cls($("st3c-b"), f.q < 0.75 ? "bad" : f.q < 0.9 ? "warn" : "ok");
+    $("st3d").textContent = aed(f.net); cls($("st3d-b"), "");
+    const lvlBest = (() => { let bv = 0, bs = -1; for (let lv = 2; lv <= 3.7; lv += 0.02) { const g = fat(Math.pow(10, lv), S3.c, S3.prio); if (g.stopped > bs) { bs = g.stopped; bv = Math.pow(10, lv); } } return [bv, bs]; })();
+    $("s3-verdict").innerHTML = V <= S3.c
+      ? "Under capacity: every alert is reviewed, so more alerts means more fraud stopped, at the price of precision."
+      : "Over capacity by " + pct(V / S3.c - 1, 0) + ". " + (S3.prio ? "The queue is ranked, so analysts still see the riskiest " + S3.c + "." : "A random " + pct(S3.c / V, 0) + " of alerts is reviewed, and most of what they see is noise.") + " The best volume at this capacity is about <b>" + L.fmtInt(Math.round(lvlBest[0])) + "</b> alerts, stopping " + lvlBest[1].toFixed(0) + " frauds.";
+  }
+  L.bind("s-vol", v => L.fmtInt(Math.round(Math.pow(10, v))), v => { S3.v = v; renderFat(); });
+  L.bind("s-cap", v => v + " a day", v => { S3.c = v; renderFat(); });
+  $("b-prio").addEventListener("click", e => { S3.prio = !S3.prio; e.currentTarget.setAttribute("aria-pressed", String(S3.prio)); renderFat(); });
+
+  // ---------- Simulation 4: three-way decision ----------
+  const S4 = { l: 3.18, s: 0.8, cd: 120 }, CS = 8, decBox = $("dec-chart");
+  const tOfP = p => (LOGIT(p) - LOGIT(PI) + MU * MU / 2) / MU;
+  function renderDec() {
+    const Lm = Math.pow(10, S4.l), s = S4.s, cd = S4.cd;
+    const p1 = CS / (s * Lm + CS), p2 = Math.max(p1, (cd - CS) / ((1 - s) * Lm + cd - CS));
+    const W = Math.max(300, decBox.clientWidth), H = 290, m = { l: 50, r: 12, t: 16, b: 44 };
+    const svg = mk(decBox, W, H, "Expected cost of each action against fraud probability");
+    const lo = -3, hi = Math.log10(0.5), ymax = 150;
+    const x = L.scale(lo, hi, m.l, W - m.r), y = L.scale(0, ymax, H - m.b, m.t);
+    [0, 50, 100, 150].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v, { "text-anchor": "end" }); });
+    [[-3, "0.1%"], [-2, "1%"], [-1, "10%"], [Math.log10(0.5), "50%"]].forEach(([v, s2]) => tx(svg, x(v), H - m.b + 16, s2, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Probability the transaction is fraud (log scale)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Expected cost, AED", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const lines = [[p => p * Lm, "cv-r"], [p => (1 - p) * CS + p * (1 - s) * Lm, "cv-w"], [p => (1 - p) * cd, "cv-a"]];
+    lines.forEach(([f, c]) => {
+      const pts = [];
+      for (let lp = lo; lp <= hi + 1e-9; lp += 0.02) pts.push([x(lp), y(Math.min(f(Math.pow(10, lp)), ymax))]);
+      L.svg("path", { d: L.path(pts), class: c }, svg);
+    });
+    [[p1, "approve | step up"], [p2, "step up | decline"]].forEach(([p, lb], i) => {
+      const lp = L.clamp(Math.log10(p), lo, hi);
+      L.svg("line", { x1: x(lp), x2: x(lp), y1: m.t, y2: H - m.b, class: "cv-opt" }, svg);
+      tx(svg, x(lp) + (i ? -4 : 4), m.t + 10 + i * 13, (p * 100 < 10 ? (p * 100).toFixed(2) : (p * 100).toFixed(0)) + "%", { class: "lbl-acc", "text-anchor": i ? "end" : "start" });
+    });
+    // population
+    const t1 = tOfP(p1), t2 = tOfP(p2), leg = N * (1 - PI), fr = N * PI;
+    const apL = leg * (1 - Q(t1)), stL = leg * (Q(t1) - Q(t2)), dcL = leg * Q(t2);
+    const apF = fr * (1 - Q(t1 - MU)), stF = fr * (Q(t1 - MU) - Q(t2 - MU));
+    const three = apF * Lm + stF * (1 - s) * Lm + (stL + (leg * 0)) * CS + dcL * cd;
+    let best = 1e18, bt = 0;
+    for (let t = -2; t <= 6; t += 0.01) { const c = fr * (1 - Q(t - MU)) * Lm + leg * Q(t) * cd; if (c < best) { best = c; bt = t; } }
+    $("st4a").textContent = (p1 * 100 < 10 ? (p1 * 100).toFixed(2) : (p1 * 100).toFixed(0)) + "%"; $("st4a-s").textContent = "for a " + aed(Lm) + " payment";
+    $("st4b").textContent = pct(p2, 0); $("st4b-s").textContent = "decline above";
+    $("st4c").textContent = aed(three); $("st4c-s").textContent = L.fmtInt(Math.round(stL + stF)) + " stepped up, " + L.fmtInt(Math.round(dcL)) + " genuine declined";
+    $("st4d").textContent = aed(best); $("st4d-s").textContent = "best single cut at score " + bt.toFixed(2);
+    cls($("st4d-b"), best > three * 1.05 ? "warn" : "ok");
+    $("s4-verdict").innerHTML = "Three-way rule saves <b>" + aed(best - three) + "</b> per 100,000 (" + pct((best - three) / best, 0) + ") against the best approve-or-decline rule. Of 100,000 transactions, about " + L.fmtInt(Math.round(apL + apF)) + " are approved outright, " + L.fmtInt(Math.round(stL + stF)) + " stepped up and " + L.fmtInt(Math.round(N - apL - apF - stL - stF)) + " declined.";
+  }
+  L.bind("s-L", v => aed(Math.pow(10, v)), v => { S4.l = v; renderDec(); });
+  L.bind("s-s", v => pct(v, 0), v => { S4.s = v; renderDec(); });
+  L.bind("s-cd", v => "AED " + v, v => { S4.cd = v; renderDec(); });
+
+  function renderAll() { renderIntro(); renderMat(); renderLoop(); renderFat(); renderDec(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

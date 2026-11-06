@@ -58,6 +58,16 @@ window.CATALOG = [
   {file: "m4-memory-short-term-long-term.html", module: "M4", title: "Agent Memory and Planning: How an Agent Keeps Track, and Breaks Work into Steps", codes: ["M4.3","M4.4"], label: "M4.3 · M4.4", tier: "n", minutes: 40},
   {file: "m4-guardrails-and-approval-gates.html", module: "M4", title: "Guardrails, Approval Gates and Choosing the Simplest Agent Design", codes: ["M4.5","M4.6"], label: "M4.5 · M4.6", tier: "d", minutes: 42, star: true},
   {file: "m5-reference-based-metrics-bleu-rouge.html", module: "M5", title: "Grading Generated Text: Overlap Metrics and LLM-as-Judge", codes: ["M5.1","M5.2"], label: "M5.1 · M5.2", tier: "d", minutes: 40, star: true},
+  {file: "m5-human-evaluation-and-annotator-agreement.html", module: "M5", title: "When Humans Disagree, and Test Sets Built from Real Failures", codes: ["M5.3","M5.4"], label: "M5.3 · M5.4", tier: "d", minutes: 42, star: true},
+  {file: "m5-evaluating-agents-trajectories-tool-use.html", module: "M5", title: "Judging the Path, Then Watching the Live System: Evaluating Agents and Online Feedback", codes: ["M5.5","M5.6"], label: "M5.5 · M5.6", tier: "n", minutes: 40},
+  {file: "b1-transaction-and-card-fraud-detection.html", module: "B1", title: "Card Fraud in Real Time: Scoring, Step-Up and Account Takeover", codes: ["B1.1","B1.2"], label: "B1.1 · B1.2", tier: "d", minutes: 40, star: true},
+  {file: "b1-delayed-labels-and-feedback-loops.html", module: "B1", title: "Fraud Models in Production: Late Labels, Feedback Loops, Alert Fatigue and the Three-Way Decision", codes: ["B1.3","B1.4","B1.5"], label: "B1.3 – B1.5", tier: "d", minutes: 42},
+  {file: "b2-transaction-monitoring-rules-versus-ml.html", module: "B2", title: "Transaction Monitoring: Why Rules Still Run, Where ML Helps, and the Patterns Behind the Alerts", codes: ["B2.1","B2.2"], label: "B2.1 · B2.2", tier: "d", minutes: 40, star: true},
+  {file: "b2-sanctions-screening-and-name-matching.html", module: "B2", title: "Sanctions Screening, Name Matching and the Road from Alert to Report", codes: ["B2.3","B2.4"], label: "B2.3 · B2.4", tier: "n", minutes: 42, star: true},
+  {file: "b3-customer-due-diligence-and-risk.html", module: "B3", title: "Knowing the Customer: Due Diligence, Digital Identity and Entity Resolution", codes: ["B3.1","B3.2","B3.3"], label: "B3.1 – B3.3", tier: "d", minutes: 40, fast: true},
+  {file: "b4-pd-lgd-ead-and-expected.html", module: "B4", title: "PD, LGD, EAD and the Scorecard: How a Bank Prices What Might Go Wrong", codes: ["B4.1","B4.2"], label: "B4.1 · B4.2", tier: "d", minutes: 45, star: true},
+  {file: "b4-ifrs-9-staging-and-expected.html", module: "B4", title: "From Model to Balance Sheet: IFRS 9 Provisions, Stress Tests and the Applicants You Never Saw", codes: ["B4.3","B4.4","B4.5"], label: "B4.3 – B4.5", tier: "n", minutes: 42, star: true},
+  {file: "b5-liquidity-forecasting-and-asset-liability.html", module: "B5", title: "Treasury Risk: Liquidity, Asset-Liability Management, VaR and Hedging", codes: ["B5.1","B5.2","B5.3"], label: "B5.1 – B5.3", tier: "n", minutes: 42},
   {file: "a1-know-your-agent.html", module: "A1", title: "Know Your Agent: How AI Agents Get Permission to Pay", codes: ["A1.1","A1.2","A1.3","A1.4","A1.5"], label: "A1.1 – A1.5", tier: "n", star: true, fast: true, minutes: 40}
 ];
 

@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Judging the Path, Then Watching the Live System: Evaluating Agents and Online Feedback</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  .bar-0 { fill: var(--neutral); }
+  .bar-1 { fill: var(--warn); fill-opacity: .8; }
+  .bar-2 { fill: var(--accent); }
+  .cv-ideal { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 4 4; fill: none; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-bad { stroke: var(--bad); stroke-width: 2.6; fill: none; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .cv-rule { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  td.ok-c { color: var(--ok); font-weight: 600; text-align: center; }
+  td.no-c { color: var(--bad); font-weight: 600; text-align: center; }
+  td.off-c { color: var(--muted); text-align: center; }
+  td.mono, .mono { font-family: var(--font-mono); font-size: 12px; }
+  tr.sel-bad td { background: var(--bad-soft); }
+  pre { overflow-x: auto; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track M · Modern AI systems</span>
+    <span>Module M5 · Evaluating generative systems</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>M5.5 · M5.6</span>
+        <span class="pill n">90 days</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Judging the Path, Then Watching the Live System: Evaluating Agents and Online Feedback</h1>
+      <p class="dek">An agent can reach the right answer by an unsafe route, or announce an action it never took. This lesson covers how to grade trajectories and tool calls, why one success is not reliability, and what to measure once real customers and staff are using the thing.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>An agent is a process, so grade the process (which tools, in what order, with what side effects) as well as the outcome, measure how often it succeeds every time rather than once, and then treat live traffic as the final and most biased test: sparse thumbs, delayed outcomes, and changes that need weeks of data to detect.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A customer messages the bank's assistant: "There is an AED 2,400 payment on my card I did not make." A good human agent does five things in order. Verify who is asking. Find the transaction. Block the card. Open a dispute. Tell the customer what happens next.</p>
+        <p>Now picture an AI agent that writes a lovely final message: "Your card is blocked and a dispute is open." A text grader gives it full marks. But suppose it never called the dispute tool. Or it skipped identity verification. Or it also issued a refund nobody approved. The words at the end were fine. The <em>work</em> was wrong.</p>
+        <p>That is the core difficulty. A chat answer can be judged on its text (M5.1, M5.2). An agent <strong>acts</strong>: it calls tools, changes records, spends money, sends messages. The thing to grade is the whole trajectory and the state of the world afterwards, not just the last paragraph.</p>
+      </div>
+      <div class="prose">
+        <p>Two further facts make agent evaluation different again.</p>
+        <ul>
+          <li><strong>One success proves little.</strong> The same agent given the same task twice can succeed once and fail once. A bank needs "works every time", and that number falls fast as you ask for more repeats and more steps.</li>
+          <li><strong>The test set is never the customer.</strong> Once the agent is live, the interesting evidence is what real people do: whether they escalate to a human, rephrase, abandon, or press thumbs-down. That evidence is plentiful but biased, and it arrives with delay. Online evaluation is a discipline of reading it honestly.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>For every agent, write down three things before building any metric. What must be true of the world at the end (the outcome)? What must never happen on the way (the constraints)? How many times in a row must it work (the reliability bar)? Offline tests check those three. Online evaluation checks whether the tests were measuring the right things.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-traj">Grading the trajectory, not only the answer</h3>
+      <div class="prose">
+        <p>A <strong>trajectory</strong> is the full record of a run: the messages, each reasoning step if logged, each tool call with its arguments, each tool result, and the final reply. If you cannot log it, you cannot evaluate it (see <a href="p2-prompt-versioning-and-llm-tracing.html">tracing</a>). Everything below works on that log.</p>
+        <p>There are two families of grader, and good evaluations use both.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Grade</th><th>Question it answers</th><th>How</th><th>Weakness</th></tr></thead>
+          <tbody>
+            <tr><td><b>Outcome (state-based)</b></td><td>Is the world in the right state at the end?</td><td>Compare the final database or ticket state to a target. Code, not opinion.</td><td>Blind to unsafe routes and to side effects you did not think to check.</td></tr>
+            <tr><td><b>Process (trajectory-based)</b></td><td>Did it get there acceptably?</td><td>Rules on the call log: required steps, forbidden tools, order, step budget. Optionally an LLM judge reads the whole trace.</td><td>Rigid rules punish harmless alternative routes. Judges inherit all the judge problems of <a href="m5-reference-based-metrics-bleu-rouge.html">M5.2</a>.</td></tr>
+            <tr><td><b>Response (text)</b></td><td>Did it say the right thing, safely, in the right language?</td><td>Rubric plus judge or human review.</td><td>Says nothing about whether the claims in the text are true of the system.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The most useful single idea comes from the τ-bench benchmark (Yao et al., 2024): grade by comparing the <strong>final state of the environment</strong> to the state a correct run would leave, rather than reading what the agent said. That catches an agent that claims success without acting. Then layer rules on top for the things state cannot show: the order of checks, the sensitive data in the reply, the tools it must not touch.</p>
+        <p>Process grading has a trap. If you require an exact sequence, you punish valid variation. An agent that blocks the card <em>before</em> opening the dispute is fine. So write rules as <strong>constraints</strong> ("verification must precede any write", "no refund tool without approval") not as a script. Check what must hold, and leave the rest free.</p>
+        <p>The simulation lets you do this by hand. Eight runs of the same task all end with a friendly message. Turn graders on and off and see which bad runs each one lets through.</p>
+      </div>
+
+      <figure class="figure" id="fig-graders">
+        <div class="fig-head"><span class="fig-title">Eight runs, one friendly ending: which grader catches what?</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start with only "Reply reads well" on. Every run passes, so the grader accepts six runs a careful reviewer would reject. Switch on "Final state correct" and two fall away. Keep adding rules until the accepted set matches the reviewer's column. Then try the step limit alone: it catches a slow run but nothing dangerous.</p>
+        <div class="toggles" id="g-tog" role="group" aria-label="Graders"></div>
+        <div class="table-wrap"><div id="g-table"></div></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Accepted by your grader</div><div class="v" id="g-acc"></div><div class="s">of 8 runs</div></div>
+          <div class="stat"><div class="k">Accepted by the reviewer</div><div class="v">2</div><div class="s">runs A and G</div></div>
+          <div class="stat" id="g-fa-b"><div class="k">Bad runs wrongly accepted</div><div class="v" id="g-fa"></div><div class="s">the dangerous number</div></div>
+          <div class="stat" id="g-fr-b"><div class="k">Good runs wrongly rejected</div><div class="v" id="g-fr"></div><div class="s">the annoying number</div></div>
+        </div>
+        <p class="verdict" id="g-verdict"></p>
+        <p class="sim-note">Simulated: eight hand-written runs of one task (unauthorised AED 2,400 card payment). The pass or fail on each rule is fixed by the scenario above, not generated by a model. The reviewer's verdict is my own judgement of which runs are acceptable. Counts are exact.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Note run G, which blocks the card before opening the dispute. A rigid "exact sequence" grader would fail it. That is a false rejection, and too many of them train the team to ignore the evaluation. The aim is a set of rules that fail the dangerous runs and nothing else.</p>
+        <p>A small version in code makes the idea concrete. The grader reads a list of tool calls and returns reasons, not just a score.</p>
+<pre><code>def grade(run, final_db):
+    calls = [c.name for c in run.tool_calls]
+    reasons = []
+    if final_db["card_status"] != "blocked":      reasons.append("card not blocked")
+    if final_db["dispute_txn"] != "TX-88213":     reasons.append("wrong or missing dispute")
+    if "refund_customer" in calls:                reasons.append("forbidden tool")
+    writes = [i for i, n in enumerate(calls) if n in WRITE_TOOLS]
+    if writes and "verify_identity" not in calls[:writes[0]]:
+                                                  reasons.append("write before verification")
+    if PAN_REGEX.search(run.final_reply):         reasons.append("card number in reply")
+    return {"pass": not reasons, "reasons": reasons, "steps": len(calls)}</code></pre>
+        <p>Returning the <em>reasons</em> matters. A bare pass rate tells you the agent is at 71%. A list of reasons tells you 40% of failures are "write before verification", which is a fix you can make.</p>
+      </div>
+
+      <h3 class="sub" id="m-tools">Tool use: right tool, right arguments, right moment</h3>
+      <div class="prose">
+        <p>Most agent failures are tool-use failures, and they are more specific than "it got it wrong". Break them apart.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Check</th><th>What goes wrong</th><th>How to test</th></tr></thead>
+          <tbody>
+            <tr><td><b>Selection</b></td><td>Calls the wrong tool, or no tool when one is needed (answers from memory instead of looking up the balance).</td><td>Compare tool names called against an expected set for each test task.</td></tr>
+            <tr><td><b>Arguments</b></td><td>Right tool, wrong inputs: the AED 240 transaction instead of the AED 2,400 one, a wrong IBAN, a date in the wrong format.</td><td>Validate against a schema, then against the state the arguments should point to. Schema-valid is not the same as correct.</td></tr>
+            <tr><td><b>Sequence and dependencies</b></td><td>Writes before reading, or acts before approval.</td><td>Constraint rules on call order.</td></tr>
+            <tr><td><b>Honest reporting</b></td><td>Says "done" when the call failed or never happened. Treats an error result as success.</td><td>Compare each claim in the reply with the log and final state.</td></tr>
+            <tr><td><b>Recovery</b></td><td>On a timeout or error, retries blindly, loops, or invents a result.</td><td>Inject faults: make a tool return an error and check what the agent does next.</td></tr>
+            <tr><td><b>Restraint</b></td><td>Calls tools it did not need, or tools with side effects it was never asked to use.</td><td>Allow-lists per task, and a check that the final state differs from the target only where intended.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Public tool-use benchmarks, such as the Berkeley Function-Calling Leaderboard, test the first two rows well: given a request and a set of function definitions, does the model emit the right call with valid arguments? They are good for choosing a base model. They say little about your bank's tools, data and policies, which is why the bank needs its own task set built from real cases (M5.3 and <a href="a4-statistics-for-evals.html">A4.1</a> cover how to build and size one).</p>
+        <p>The test environment matters as much as the grader. To grade state you need tools that run against a <strong>sandbox copy</strong> of the systems, reset between runs, with seeded customers and transactions. Building that sandbox is real engineering effort, and it is usually the thing that separates a serious agent evaluation from a demo. It also lets you simulate the <em>user</em>, a second model playing the customer, which is the approach of <a href="a4-simulation-testing-for-agents-tau.html">simulation testing in A4</a>.</p>
+      </div>
+
+      <h3 class="sub" id="m-success">Task success, and why "it worked once" is not a number</h3>
+      <div class="prose">
+        <p>Define <strong>task success</strong> from the outcome and the constraints: the end state is right and no rule was broken. That gives a pass or fail per run. Now two effects bite.</p>
+        <p><strong>Steps compound.</strong> If each step succeeds with probability <i>s</i> and a task needs <i>n</i> steps in a row, then (treating steps as independent, which is generous) the task succeeds with probability</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>p</mi><mtext>task</mtext></msub><mo>=</mo><msup><mi>s</mi><mi>n</mi></msup></math>
+        <p class="where">At 99% per step and 10 steps: 0.99<sup>10</sup> = 90.4%. At 95% per step and 10 steps: 59.9%. At 98% per step and 20 steps: 66.8%. A model that is "98% accurate" at each move is a coin-flip-and-a-bit on a 20-step job. Real steps are not independent (a bad early step often spoils later ones), so treat this as the optimistic shape, not a forecast.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Repeats compound too.</strong> Run the same task <i>k</i> times. Two different questions are worth asking. <strong>pass@k</strong>: did at least one of the <i>k</i> runs succeed? That is 1 − (1 − <i>p</i>)<sup><i>k</i></sup>, and it climbs towards 100%: useful if a human or a checker picks the good attempt. <strong>pass^k</strong> (read "pass hat k"): did <em>all</em> <i>k</i> runs succeed? That is <i>p</i><sup><i>k</i></sup>, and it falls. τ-bench introduced pass^k precisely because a customer-facing agent has to work every time, not on the best of eight tries. In the original paper a strong model's retail pass^1 of about 61% dropped to under 25% at pass^8.</p>
+      </div>
+
+      <figure class="figure" id="fig-reliab">
+        <div class="fig-head"><span class="fig-title">One success, or success every time?</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> set 97% per step and 6 steps (a task about the size of the card dispute). Success per run is 83%, which sounds fine. Now raise the repeats: the green curve (works every time) collapses while the dashed one (works at least once) heads to 100%. Then lengthen the task to 15 steps and see how much one extra reliable point per step buys.</p>
+        <div class="chart-wrap" id="rel-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>pass^k: all k runs succeed</span>
+          <span><i style="background:var(--muted)"></i>pass@k: at least one of k succeeds</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-step">Success chance of each step <output for="s-step"></output></label><input type="range" id="s-step" min="90" max="100" step="0.1" value="97"></div>
+          <div class="ctl"><label for="s-n">Steps in the task <output for="s-n"></output></label><input type="range" id="s-n" min="1" max="20" step="1" value="6"></div>
+          <div class="ctl"><label for="s-k">Repeats of the same task (k) <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="10" step="1" value="1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Success of one run</div><div class="v" id="r-one"></div><div class="s" id="r-one-s"></div></div>
+          <div class="stat" id="r-all-b"><div class="k">pass^k: works every time</div><div class="v" id="r-all"></div><div class="s">what a customer-facing bot needs</div></div>
+          <div class="stat"><div class="k">pass@k: works at least once</div><div class="v" id="r-any"></div><div class="s">only useful with a checker</div></div>
+          <div class="stat" id="r-fail-b"><div class="k">Failed tasks per 10,000 runs</div><div class="v" id="r-fail"></div><div class="s">single-run basis</div></div>
+        </div>
+        <p class="verdict" id="r-verdict"></p>
+        <p class="sim-note">Simulated: each step succeeds independently with the chosen probability, and each repeat is an independent run of the same task. Real tasks differ in difficulty and steps correlate, so the shape is right but the numbers are a model, not a measurement. Exact formulas.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Four consequences for how you report.</p>
+        <ul>
+          <li><strong>Report the success rate with its interval and the number of tasks and repeats.</strong> "78% on 60 tasks" is ±10 points or so, the same positives-are-the-sample-size logic as <a href="f3-imbalanced-data.html#m-ess">imbalanced data</a> and <a href="f2-uncertainty-intervals-bootstrap.html">F2.1</a>. Comparing two agent versions on 60 tasks usually cannot separate them.</li>
+          <li><strong>Separate "succeeded" from "succeeded safely".</strong> A run that reaches the goal by breaking a rule is a failure with a good-looking outcome. Report both counts.</li>
+          <li><strong>Split failures by cause.</strong> Wrong tool, wrong argument, policy breach, gave up too early, looped, misreported. The mix tells you whether to fix tools, prompts, or the model.</li>
+          <li><strong>Include cost and time.</strong> Steps, tokens, wall-clock seconds and AED per task are part of "success". An agent that solves the task in 40 calls is not the same product as one that takes 6. Cost data can be read straight from the trace.</li>
+        </ul>
+        <p>For long jobs, such as multi-hour investigations, success is often partial. Then grade checkpoints (each sub-goal reached) and the point at which the run went wrong, a theme taken up in <a href="a2-long-running-agents.html">long-running agents</a>. On the research side, METR measures how long a task, in human-expert time, an agent can complete at a given success rate (<a href="r7-metr-task-time-horizons.html">R7</a>), which is the same reliability question stretched over duration.</p>
+      </div>
+
+      <h3 class="sub" id="m-online">Online evaluation: what happens once people use it</h3>
+      <div class="prose">
+        <p>Offline evaluation tells you the agent <em>can</em> do the job on a fixed set of tasks. It cannot tell you what customers will actually ask, in Arabic dialects and mixed Arabic-English, at the end of Ramadan when volumes spike, with typos and half-formed questions. <strong>Online evaluation</strong> is everything you measure on live traffic. It has four layers, from cheapest to most conclusive.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Layer</th><th>What you do</th><th>What it gives you</th><th>Catch</th></tr></thead>
+          <tbody>
+            <tr><td><b>1. Shadow mode</b></td><td>The agent runs on live requests but its output is not used. Humans do the work as before. Compare.</td><td>Realistic inputs with zero customer risk. Agreement with the human decision.</td><td>The human decision is itself an imperfect label. No effect on the user can be measured.</td></tr>
+            <tr><td><b>2. Passive monitoring</b></td><td>Log every run. Track rates: tool errors, escalations, retries, refusal, latency, cost, guardrail triggers.</td><td>Early warning and drift (<a href="f7-drift-monitoring-psi-ks-and.html">F7.7</a>).</td><td>Tells you something changed, not whether it is good.</td></tr>
+            <tr><td><b>3. Sampled review</b></td><td>Pull a random slice of live runs (plus all flagged ones) for human or judge grading against the same rubric as offline.</td><td>An unbiased quality estimate on real traffic, and fresh failures for the test set.</td><td>Costs reviewer time. Needs a random sample, not only the flagged cases.</td></tr>
+            <tr><td><b>4. Controlled experiment</b></td><td>Randomly route customers to old or new version (A/B test) or ramp a share of traffic.</td><td>The only clean causal answer to "is the new version better for customers and the bank?"</td><td>Needs enough traffic and time (Simulation 4). Needs guardrails in case it is worse.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>For a regulated bank, the ramp matters. Typical practice is shadow mode first, then a small share of low-risk requests with human approval on actions, then wider release with automatic rollback if guardrail metrics breach thresholds. Which actions may ever run without a person approving them is a risk decision (<a href="m4-guardrails-and-approval-gates.html">M4.5</a>), and a model-risk question for the validators (<a href="g3-ongoing-monitoring-and-periodic-review.html">G3</a>).</p>
+        <p>Choose the live metrics in two groups. <strong>Outcome metrics</strong> are what the bank actually wants: resolved without a human, disputes filed correctly, handling time, repeat contact within seven days, complaints. <strong>Guardrail metrics</strong> are what must not get worse: policy violations, escalations that came too late, privacy incidents, cost per conversation. A change that lifts resolution by two points and doubles complaints is not a win, so look at both together.</p>
+      </div>
+
+      <h3 class="sub" id="m-feedback">User feedback: plentiful, biased and easy to misread</h3>
+      <div class="prose">
+        <p>Explicit feedback means thumbs up or down, star ratings, a "was this helpful?" prompt. Implicit feedback means behaviour: the customer rephrases the question, asks for a human, abandons the chat, copies the answer, or calls the contact centre an hour later about the same issue. Staff copilots add a further signal: did the employee accept, edit or discard the draft?</p>
+        <p>Both are useful and both mislead in predictable ways.</p>
+        <ul>
+          <li><strong>Non-response bias.</strong> Only a small fraction of people press a button, and unhappy people press it much more often than content ones. Thumbs-up share is not satisfaction. Simulation 3 shows how far apart they can sit.</li>
+          <li><strong>Wrong proxy.</strong> A customer who gets a confident wrong answer may thank it and leave. One who gets a correct, unwelcome "no, we cannot reverse that" may press thumbs-down. Feedback measures how people felt, which correlates with correctness without being it. Studies of real chat logs find that user feedback is informative about the user's state but noisy as a training signal (see Part 4).</li>
+          <li><strong>Selection and context.</strong> Feedback arrives from the people who stayed in the conversation. Those who gave up earlier are missing, which is the selection problem of <a href="f2-confounding-simpson-selection.html">F2.6</a>.</li>
+          <li><strong>Gaming and drift.</strong> If you optimise directly for thumbs-up, you can get agreeable, flattering answers (see the sycophancy lesson, <a href="r4-sycophancy.html">R4</a>). Staff feedback can also be coerced or bypassed when the button is an extra click.</li>
+          <li><strong>Delay.</strong> The real outcome of an advice or dispute conversation may be known only weeks later: did the chargeback succeed, did the customer come back? This is the label-delay problem of <a href="b1-delayed-labels-and-feedback-loops.html">B1</a>, and recent weeks look better or worse than they are.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-fb">
+        <div class="fig-head"><span class="fig-title">Thumbs are not satisfaction</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> keep true satisfaction at 70% and set unhappy users to be 4 times likelier to press a button. The feedback says only about 37% are happy, and the team panics. Set the ratio to 1 and the two agree. Now think about what drops if you move the button, or ask in a different place: the ratio changes, and a "trend" appears with nothing real behind it.</p>
+        <div class="chart-wrap" id="fb-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>Truly satisfied customers</span>
+          <span><i style="background:var(--accent)"></i>Thumbs-up share among those who give feedback</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-sat">True share satisfied <output for="s-sat"></output></label><input type="range" id="s-sat" min="30" max="95" step="1" value="70"></div>
+          <div class="ctl"><label for="s-ratio">Unhappy users press a button this many times more often <output for="s-ratio"></output></label><input type="range" id="s-ratio" min="-0.3" max="1" step="0.05" value="0.6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Conversations with any feedback</div><div class="v" id="f-n"></div><div class="s" id="f-n-s"></div></div>
+          <div class="stat" id="f-obs-b"><div class="k">Thumbs-up share seen</div><div class="v" id="f-obs"></div><div class="s">what the dashboard shows</div></div>
+          <div class="stat"><div class="k">True satisfaction</div><div class="v" id="f-true"></div><div class="s">unknown in real life</div></div>
+          <div class="stat" id="f-gap-b"><div class="k">Gap</div><div class="v" id="f-gap"></div><div class="s">points, dashboard minus truth</div></div>
+        </div>
+        <p class="verdict" id="f-verdict"></p>
+        <p class="sim-note">Simulated: 5,000 conversations a day. Satisfied customers leave feedback 2% of the time; unhappy ones 2% times the chosen multiple. Satisfaction is treated as a yes or no per conversation. The slider is logarithmic (from about 0.5 to 10). Exact expected values, no sampling noise.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What to do about it.</p>
+        <ul>
+          <li><strong>Use feedback to find failures, not to measure rate.</strong> Every thumbs-down with a free-text comment is a candidate test case. Read them weekly.</li>
+          <li><strong>Measure rate from a random sample you review yourself.</strong> A few hundred randomly chosen conversations, graded against a rubric, give an unbiased number with an interval.</li>
+          <li><strong>Prefer behavioural outcomes that map to value.</strong> Repeat contact within seven days is harder to game than a rating.</li>
+          <li><strong>Calibrate the cheap signal against the careful one.</strong> If a judge or a proxy metric is going to be used for monitoring, check periodically that it still agrees with human review, using the agreement methods of <a href="m5-human-evaluation-and-annotator-agreement.html">M5.3 and M5.4</a>.</li>
+          <li><strong>Close the loop.</strong> Promote every confirmed live failure into the offline test set, with a note on why. Over time the offline set starts to look like real life.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-experiment">Is the new version better? Detecting a change in a live metric</h3>
+      <div class="prose">
+        <p>You have a new prompt or model and a live metric: say the share of conversations escalated to a human, currently 18%. You route half of customers to the new version. How long until you can tell whether it moved? The standard two-proportion sample size (F2.7, and <a href="r8-modern-a-b-testing-cuped.html">R8 on A/B testing</a>) gives, per arm, about</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>n</mi><mo>≈</mo><mfrac><mrow><mn>2</mn><mo stretchy="false">(</mo><msub><mi>z</mi><mrow><mi>α</mi><mo>/</mo><mn>2</mn></mrow></msub><mo>+</mo><msub><mi>z</mi><mi>β</mi></msub><msup><mo stretchy="false">)</mo><mn>2</mn></msup><mspace width="0.2em"></mspace><mover><mi>p</mi><mo>¯</mo></mover><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mover><mi>p</mi><mo>¯</mo></mover><mo stretchy="false">)</mo></mrow><msup><mi>d</mi><mn>2</mn></msup></mfrac></math>
+        <p class="where"><i>d</i> is the smallest change you care about (in proportion terms), p̄ the average rate across arms, and the z values set the false-alarm rate (1.96 for 5%) and the power (0.84 for 80%), so (1.96 + 0.84)² ≈ 7.85. Halving <i>d</i> quadruples <i>n</i>. If one customer has many conversations, they are not independent, so multiply by a design effect above 1.</p>
+      </div>
+      <figure class="figure" id="fig-ab">
+        <div class="fig-head"><span class="fig-title">How long must we run it?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> the defaults want to detect a 2-point change in escalation rate with 1,000 conversations per arm per day. Cut the change you want to detect to 1 point and watch the days climb fourfold. Then raise the design effect to see what repeat customers do. Test the claim "we ran it for three days and it looked better".</p>
+        <div class="chart-wrap" id="ab-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-p0">Current escalation rate <output for="s-p0"></output></label><input type="range" id="s-p0" min="2" max="40" step="1" value="18"></div>
+          <div class="ctl"><label for="s-d">Smallest change worth detecting (points) <output for="s-d"></output></label><input type="range" id="s-d" min="0.5" max="5" step="0.1" value="2"></div>
+          <div class="ctl"><label for="s-N">Conversations per arm per day <output for="s-N"></output></label><input type="range" id="s-N" min="200" max="5000" step="100" value="1000"></div>
+          <div class="ctl"><label for="s-de">Design effect (repeat customers) <output for="s-de"></output></label><input type="range" id="s-de" min="1" max="3" step="0.1" value="1.5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Conversations needed per arm</div><div class="v" id="a-n"></div><div class="s">with design effect</div></div>
+          <div class="stat" id="a-days-b"><div class="k">Days at this traffic</div><div class="v" id="a-days"></div><div class="s" id="a-days-s"></div></div>
+          <div class="stat"><div class="k">Run for whole weeks</div><div class="v" id="a-wk"></div><div class="s">so weekday mix is equal</div></div>
+          <div class="stat"><div class="k">Smallest change in 3 days</div><div class="v" id="a-3"></div><div class="s">points, with the same power</div></div>
+        </div>
+        <p class="verdict" id="a-verdict"></p>
+        <p class="sim-note">Simulated: simple two-proportion approximation, 5% two-sided, 80% power, equal split. It ignores novelty effects, weekly cycles and early peeking, all of which need more care in real tests. The vertical axis is logarithmic. Exact formula, no random data.</p>
+      </figure>
+      <div class="prose">
+        <p>Three cautions on live experiments. <strong>Peeking</strong>: checking daily and stopping when it looks good inflates false wins; use a fixed plan or a sequential method. <strong>Novelty and weekday effects</strong>: a new assistant gets curiosity traffic in week one, and demand differs between weekdays and around salary dates and holidays, so run full weeks. <strong>Non-random routing</strong>: if routing depends on customer type or channel, you are comparing different populations; randomise by customer, not by request. When traffic is thin, use many cheap proxy metrics for quick filtering, and reserve the slow experiment for decisions that matter.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Agent and online evaluation sit at the end of a chain: build, constrain, test, release, watch. These are the neighbours.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M4.1 · M4.2 · The agent loop and tools</span><span class="t"><a href="m4-the-agent-loop-reason-act.html">What a trajectory is made of</a></span><p>The loop of reason, act, observe produces the log this lesson grades. Each tool's contract is also each tool's test.</p></div>
+        <div class="link-card"><span class="code">M4.5 · Guardrails and approval gates</span><span class="t"><a href="m4-guardrails-and-approval-gates.html">Constraints become test rules</a></span><p>Every guardrail you design (no refund without approval, verify before write) is a rule to check in the trajectory grader.</p></div>
+        <div class="link-card"><span class="code">M5.1 · M5.2 · Overlap metrics and judges</span><span class="t"><a href="m5-reference-based-metrics-bleu-rouge.html">The response layer of grading</a></span><p>Text quality in the final reply and judge-based trace review follow the same rules and biases as for any generated text.</p></div>
+        <div class="link-card"><span class="code">M5.3 · M5.4 · Human evaluation and agreement</span><span class="t"><a href="m5-human-evaluation-and-annotator-agreement.html">Calibrating cheap signals</a></span><p>Sampled live review is human evaluation. Agreement statistics tell you whether the rubric works and whether a judge can stand in.</p></div>
+        <div class="link-card"><span class="code">A4 · Statistics for evals</span><span class="t"><a href="a4-statistics-for-evals.html">Intervals on small task sets</a></span><p>How many tasks and repeats you need, and how to compare two agent versions without fooling yourself.</p></div>
+        <div class="link-card"><span class="code">A4 · Simulation testing for agents</span><span class="t"><a href="a4-simulation-testing-for-agents-tau.html">Simulated users and environments</a></span><p>The τ-bench family: a model plays the customer against a sandboxed environment. The advanced companion to Simulation 1 and 2.</p></div>
+        <div class="link-card"><span class="code">A4 · Hallucination and groundedness</span><span class="t"><a href="a4-hallucination-detection-and-groundedness.html">Checking claims against the log</a></span><p>"I have opened a dispute" is a claim. Groundedness checks verify it against the tool results.</p></div>
+        <div class="link-card"><span class="code">P2.3 · Tracing and versioning</span><span class="t"><a href="p2-prompt-versioning-and-llm-tracing.html">No trace, no evaluation</a></span><p>Trajectory grading needs a stored record of every run tied to the prompt, model and tool versions that produced it.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift monitoring</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">Watching live rates for change</a></span><p>Passive monitoring of escalation, error and refusal rates is drift monitoring on behaviour rather than inputs.</p></div>
+        <div class="link-card"><span class="code">R8 · A/B testing · F3.6</span><span class="t"><a href="r8-modern-a-b-testing-cuped.html">Controlled releases</a></span><p>Simulation 4 is the first page of that story. Variance reduction and sequential tests make live experiments faster.</p></div>
+        <div class="link-card"><span class="code">B1 · Delayed labels and feedback loops</span><span class="t"><a href="b1-delayed-labels-and-feedback-loops.html">Outcomes arrive late</a></span><p>The weeks that look best on a dashboard are often the least mature. The same logic applies to dispute and complaint outcomes.</p></div>
+        <div class="link-card"><span class="code">F9.7 · Bandits</span><span class="t"><a href="f9-bandits-and-reinforcement-learning.html">Learning while serving</a></span><p>When you route traffic adaptively to the better version, you trade clean inference for lower regret. Know which you want.</p></div>
+        <div class="link-card"><span class="code">G3 · Monitoring and review</span><span class="t"><a href="g3-ongoing-monitoring-and-periodic-review.html">What the second line expects</a></span><p>Validators will ask for the monitoring plan, thresholds and who acts when they breach. Online evaluation is that plan.</p></div>
+        <div class="link-card"><span class="code">A3 · Prompt injection</span><span class="t"><a href="a3-indirect-prompt-injection.html">Adversarial test cases</a></span><p>An agent test set should include hostile content in documents and emails the agent reads, and check for forbidden actions.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Customer service assistants.</strong> Verification before account actions, correct dispute and card-block calls, right language and tone, handoff to a human with a good summary. Live metrics: containment, repeat contact, complaints.</li>
+          <li><strong>Staff copilots.</strong> Draft acceptance and edit rate, time saved, and sampled review of drafts for policy and factual errors (<a href="b7-internal-copilots-for-staff.html">B7</a>).</li>
+          <li><strong>Fraud and AML investigation agents.</strong> Gather evidence from several systems and draft a case note. Grade tool use against what a senior investigator would query, and the final note against a rubric. A wrong action is expensive, so approvals gate every write.</li>
+          <li><strong>KYC and document agents.</strong> Extract, cross-check, flag. State-based grading works well: compare the structured output to a verified record.</li>
+          <li><strong>Arabic and English.</strong> Run the same tasks in both, and in dialect, and report results per language. An average over languages hides the weak one.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The direction of travel is clear: from judging single answers to judging environments, from one run to repeated runs, from benchmark scores to logs and live signals. The open arguments are how far automated judges of whole trajectories can be trusted, how much benchmark numbers depend on the test harness, and how to evaluate long, open-ended work.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with a small number of searches. Items from earlier years are from my own knowledge of the literature; items marked as preprints I could only partly verify.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2023</span><div><div class="t">Benchmarks for agents act in environments</div><p>AgentBench tested models as agents across several interactive environments. SWE-bench graded software agents by whether the repository's tests passed after the change, an early example of outcome-by-execution. GAIA posed real-world assistant questions needing tools.</p><div class="src">Liu et al., arXiv 2308.03688; Jimenez et al., ICLR 2024; Mialon et al., arXiv 2311.12983</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">τ-bench: state comparison and pass^k</div><p>Simulated customers talk to an agent bound by written policy and tools (retail, airline). Success means the final database state matches the target. The pass^k metric exposed how much reliability drops over repeated trials.</p><div class="src">Yao et al., arXiv 2406.12045</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Judging agents with agents</div><p>Agent-as-a-Judge proposed using an agentic system, with tools, to grade another agent's intermediate work, rather than a single prompt reading a transcript. Promising, but it brings the judge-bias problems with it.</p><div class="src">Zhuge et al., arXiv 2410.10934</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Function-calling leaderboards</div><p>The Berkeley Function-Calling Leaderboard scores tool selection and argument correctness, with multi-turn and multi-step categories added over time. Use for model selection, not as proof of fitness for your own tools.</p><div class="src">Berkeley Function-Calling Leaderboard, gorilla.cs.berkeley.edu</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Dual-control and task-length measures</div><p>τ²-bench added a telecom domain where the user also acts on their own device, so the agent must guide rather than only act. METR proposed measuring the length of task, in human time, that models complete at a given success rate.</p><div class="src">Barres et al., arXiv 2506.07982; Kwa et al., METR, arXiv 2503.14499</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Read the logs, and mind the harness</div><p>A 2026 preprint argues that log analysis is necessary for credible agent evaluation: on a τ-bench split it found several ways the harness under-elicits what the agent can do, and tested whether agents resist persuasion into breaking policy. Another study reports that implementation details of the official τ-bench harness (how earlier reasoning is retained) shift scores by a few points, so scores from different harnesses are not directly comparable. A third preprint on agent reliability appeared in the same period; I saw only its title and abstract.</p><div class="src">arXiv 2605.08545 (preprint); arXiv 2602.16666 (preprint, not read in full)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Banking-specific agent tests, reported</div><p>Practitioner write-ups describe τ-bench successors with banking and voice domains. I found these only in vendor and blog sources, not in a peer-reviewed paper, so treat the details as unverified until you read the benchmark's own documentation.</p><div class="src">Vendor and blog posts found by search; verify before citing</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Live user feedback is informative, noisy as a training signal</div><p>An analysis of real human-LLM dialogues found that follow-up messages carry signals of user satisfaction and dissatisfaction, but that using them naively as learning feedback is noisy, with mixed gains depending on the type of question. Practitioner guides recommend treating feedback as sparse and promoting confirmed production failures into offline test suites.</p><div class="src">arXiv 2507.23158; Langfuse, "LLM Evaluation: Methods and Best Practices", Nov 2025</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically (my assessment from public material; most banks publish little):</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Tracing every agent run</b></td><td>Prompts, tool calls and results stored per run and tied to versions. A precondition for everything else.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Human approval on consequential actions, with sampled review</b></td><td>Reviewers grade a random sample and all flagged cases against a rubric.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>State-based task suites in a sandbox</b></td><td>Seeded test customers, reset between runs, with final-state checks and rule graders.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Shadow mode before release</b></td><td>Agent runs beside the human process; outputs compared, not used.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>pass^k reliability reporting</b></td><td>Each task repeated several times, results reported as consistent success.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>LLM judges over whole trajectories</b></td><td>A model reads the trace and flags policy breaches, with human spot-checks.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Simulated customers at scale</b></td><td>A second model plays the customer in many scenarios, including adversarial ones.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Learning directly from live feedback</b></td><td>Fine-tuning on thumbs or implicit signals. Gains are mixed and sycophancy is a risk.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Grade final state and rule compliance from the trace, repeat tasks to get a reliability number with an interval, release in stages with guardrail metrics, and treat feedback as a way to find failures rather than as a score.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in vendor demos, internal pilots and AI-written evaluation plans. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Grading only the final message</div><p>The agent says the dispute is open. Nobody checked the system of record.</p><div class="spot"><b>Spot it</b>Ask what the grader compares the reply to. If the answer is not a database state or tool log, claims are untested.</div></li>
+        <li><div class="t">One run per task</div><p>"92% success" from a single attempt on each test case. Re-running gives 85%, then 90%.</p><div class="spot"><b>Spot it</b>Ask how many repeats, and whether the number is pass@1, pass@k or pass^k. Ask for the spread across repeats.</div></li>
+        <li><div class="t">Rigid scripts as the process grade</div><p>The agent is marked wrong for doing steps in a harmless alternative order, so the team loosens everything.</p><div class="spot"><b>Spot it</b>Check whether rules are constraints ("verify before write") or an exact required sequence. Review a sample of failures for false rejections.</div></li>
+        <li><div class="t">Side effects nobody checks</div><p>The target state is right, but the agent also sent a message, issued a credit, or changed a second record.</p><div class="spot"><b>Spot it</b>Diff the full final state against the expected state, not only the fields you hoped it would change.</div></li>
+        <li><div class="t">A sandbox that is too clean</div><p>Test tools never time out, return tidy data and never conflict. Live systems do all three.</p><div class="spot"><b>Spot it</b>Ask which faults were injected: errors, slow responses, empty results, contradictory records.</div></li>
+        <li><div class="t">A small task set quoted as a precise number</div><p>"We improved from 74% to 79%" on 50 tasks.</p><div class="spot"><b>Spot it</b>Ask for the task count and an interval. At 50 tasks the interval is about ±12 points; the difference is invisible.</div></li>
+        <li><div class="t">Thumbs-up as satisfaction</div><p>A dashboard shows 40% positive feedback and nobody asks who presses the button.</p><div class="spot"><b>Spot it</b>Ask for the share of conversations that give any feedback, and for a random-sample review next to it.</div></li>
+        <li><div class="t">Optimising the proxy</div><p>The team tunes the agent to raise containment (no human needed) and complaints rise because customers cannot reach a person.</p><div class="spot"><b>Spot it</b>Check that each outcome metric has a guardrail partner: containment with complaints and repeat contact.</div></li>
+        <li><div class="t">A test run that is too short or peeked at</div><p>"It looked better after three days, so we shipped it."</p><div class="spot"><b>Spot it</b>Ask for the pre-set duration, the sample size calculation and whether the run covered whole weeks.</div></li>
+        <li><div class="t">Judge or benchmark drift unnoticed</div><p>The judge model is updated, or the harness changed, and trend lines move for no real reason.</p><div class="spot"><b>Spot it</b>Pin versions of judge, harness and prompts. Re-score a frozen reference set after every change.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“It is not enough that the assistant sounds right. We test whether it did the right thing in a copy of our systems: the card actually blocked, the dispute actually filed, nothing else touched. We run each test several times, because what matters is working every time, not once. After launch we release in stages, watch complaints and repeat contacts next to the savings, and read a random sample of real conversations each week. Customer ratings alone would mislead us, because unhappy people rate far more often.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd grade final state against a target in a sandbox, with constraint rules over the trace: verification before writes, an allow-list of tools, no sensitive data in replies. Each task repeats k times and I report pass^k with an interval and a failure taxonomy. Online: shadow mode, a staged ramp with guardrail metrics and automatic rollback, random sampled review against the offline rubric, and live failures promoted into the test set. Feedback is used to find failures, not to estimate rate, because of non-response bias.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“The agent scored 90% in the pilot. Can we go live?”</summary><div class="ans"><p>Not on that number alone. I'd ask 90% of what: tasks, runs, or steps; how many tasks (an interval on 60 tasks is about ±8 points); whether each was repeated; and what the failing 10% looked like. If those failures are dangerous, say wrong actions on accounts, then 90% is not close. If they are polite refusals that route to a human, it may be fine. I'd want a staged release with approvals on write actions.</p></div></details>
+        <details class="reveal"><summary>“Why not just use an LLM to judge the conversations?”</summary><div class="ans"><p>For text quality it is a useful, cheap first pass. For actions it is the wrong tool where we have ground truth: the database state and the tool log are exact, and a judge can be fooled by a confident message. I'd use code for state and rules, a judge for tone and completeness of explanation, and humans on a random sample to check the judge keeps agreeing with them.</p></div></details>
+        <details class="reveal"><summary>“Customer satisfaction scores on the bot are only 40% positive. Is it failing?”</summary><div class="ans"><p>Maybe, but that figure is the share of people who chose to respond. Unhappy customers respond several times more often. If satisfied users respond at 2% and unhappy ones at 8%, a true 70% satisfaction shows as about 37% positive. I'd read a random sample of conversations to estimate the real rate, and use the thumbs-down comments to find what to fix.</p></div></details>
+        <details class="reveal"><summary>“How long should we run the A/B test on the new version?”</summary><div class="ans"><p>Set the smallest change we care about and compute it up front. Detecting a 2-point change in an 18% escalation rate needs about 6,000 conversations per arm, more if customers repeat. Round to whole weeks so weekday patterns balance, and don't stop early because it looks good. If traffic is too thin, accept a larger minimum effect or use a staged ramp with guardrail limits.</p></div></details>
+        <details class="reveal"><summary>“The bot says it opened a dispute. How do we know it did?”</summary><div class="ans"><p>We don't from the reply. We check the tool log for the call and its result, then the case system for the record with the right transaction. That check is automated in testing and sampled in production. Every claim of action in a reply should be verifiable against a log entry, and a mismatch is a high-severity defect.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. An agent succeeds at each of 8 steps with probability 96%. What is the chance it completes the task, and the chance it does so on all of 3 repeats?</summary><div class="ans"><p>0.96<sup>8</sup> ≈ 72.1% for one run. For all three: 0.721<sup>3</sup> ≈ 37.5%. At least once in three: 1 − (0.279)<sup>3</sup> ≈ 97.8%. The gap between 37.5% and 97.8% is the gap between pass^k and pass@k.</p></div></details>
+        <details class="reveal"><summary>2. Why can a text-only grader give full marks to an agent that did the wrong thing?</summary><div class="ans"><p>Because the reply can claim an action that never happened, or describe an action on the wrong record, in perfectly good prose. The grader sees language, not the system. State comparison and trace rules check the world.</p></div></details>
+        <details class="reveal"><summary>3. Name two reasons to write process rules as constraints rather than a fixed sequence.</summary><div class="ans"><p>Valid agents vary the order of harmless steps, so a script rejects good runs and teaches people to ignore the grader. Constraints also express what actually matters (verify before write, never touch the refund tool) and stay valid when you add a tool or change a prompt.</p></div></details>
+        <details class="reveal"><summary>4. You test two agent versions on 80 tasks and get 70% and 76%. Can you say version B is better?</summary><div class="ans"><p>Almost certainly not. The standard error on each is about √(0.73 × 0.27 ÷ 80) ≈ 5 points, so a difference of 6 is well inside the noise, even allowing that the same tasks are used for both. Add tasks, repeat runs, and compare per task with a paired method or bootstrap.</p></div></details>
+        <details class="reveal"><summary>5. Satisfied users give feedback 1.5% of the time and unhappy ones 6%. True satisfaction is 80%. What thumbs-up share will you see?</summary><div class="ans"><p>Per 1,000 conversations: 800 × 0.015 = 12 positive; 200 × 0.06 = 12 negative. The dashboard shows 50% positive, against a true 80%. The bias is a property of who responds, not of the agent.</p></div></details>
+        <details class="reveal"><summary>6. What is the difference between an outcome metric and a guardrail metric online? Give a pair for a dispute assistant.</summary><div class="ans"><p>Outcome metrics are what you are trying to improve; guardrails are what must not get worse. For a dispute assistant: share of disputes filed correctly without staff rework (outcome), paired with complaints, policy breaches and repeat contact within seven days (guardrails).</p></div></details>
+        <details class="reveal"><summary>7. Escalation rate is 18%. You want to detect a change of 2 points with 80% power at 5% significance. Roughly how many conversations per arm?</summary><div class="ans"><p>p̄ = 0.19, so p̄(1 − p̄) = 0.1539. n ≈ 2 × 7.85 × 0.1539 ÷ 0.02² ≈ 6,040 per arm, before any design effect for repeat customers.</p></div></details>
+        <details class="reveal"><summary>8. Why should live failures be promoted into the offline test set?</summary><div class="ans"><p>Because the offline set is written by people who cannot predict every way customers phrase things. Each confirmed live failure is a real case the agent got wrong, so adding it prevents regressions and slowly makes the test set resemble real traffic.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>S. Yao, N. Shinn, P. Razavi, K. Narasimhan. <a href="https://arxiv.org/abs/2406.12045">τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains</a>. arXiv, 2024. Source of the state-comparison grading and pass^k.</li>
+        <li>V. Barres et al. <a href="https://arxiv.org/abs/2506.07982">τ²-Bench: Evaluating Conversational Agents in a Dual-Control Environment</a>. arXiv, 2025.</li>
+        <li>X. Liu et al. <a href="https://arxiv.org/abs/2308.03688">AgentBench: Evaluating LLMs as Agents</a>. arXiv, 2023.</li>
+        <li>C. Jimenez et al. <a href="https://arxiv.org/abs/2310.06770">SWE-bench: Can Language Models Resolve Real-World GitHub Issues?</a> ICLR, 2024.</li>
+        <li>G. Mialon et al. <a href="https://arxiv.org/abs/2311.12983">GAIA: a benchmark for General AI Assistants</a>. arXiv, 2023.</li>
+        <li>M. Zhuge et al. <a href="https://arxiv.org/abs/2410.10934">Agent-as-a-Judge: Evaluate Agents with Agents</a>. arXiv, 2024.</li>
+        <li><a href="https://gorilla.cs.berkeley.edu/leaderboard.html">Berkeley Function-Calling Leaderboard</a>. UC Berkeley. Tool-selection and argument-correctness benchmark.</li>
+        <li>T. Kwa et al. <a href="https://arxiv.org/abs/2503.14499">Measuring AI Ability to Complete Long Tasks</a>. METR, 2025.</li>
+        <li><a href="https://arxiv.org/abs/2605.08545">Log analysis is necessary for credible evaluation of AI agents</a>. arXiv 2605.08545, 2026 (preprint).</li>
+        <li><a href="https://arxiv.org/abs/2602.16666">Towards a Science of AI Agent Reliability</a>. arXiv 2602.16666, 2026 (preprint; not read in full).</li>
+        <li><a href="https://arxiv.org/abs/2507.23158">User Feedback in Human-LLM Dialogues: A Lens to Understand Users But Noisy as a Learning Signal</a>. arXiv, 2025.</li>
+        <li><a href="https://langfuse.com/blog/2025-11-12-evals">LLM Evaluation: Methods and Best Practices</a>. Langfuse, November 2025. Practitioner guide to offline and online evals.</li>
+        <li>R. Kohavi, D. Tang, Y. Xu. <i>Trustworthy Online Controlled Experiments</i>. Cambridge University Press, 2020. The standard textbook for live experiments, peeking and novelty effects.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in M5: continue with the evaluation lessons in Track A (statistics for evals, simulation testing)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: graders on eight trajectories
+  // =====================================================================
+  const RULES = [
+    { id: "reply", short: "Reply reads well", on: true },
+    { id: "state", short: "Final state correct", on: false },
+    { id: "verify", short: "Verified before writing", on: false },
+    { id: "extras", short: "No forbidden tool", on: false },
+    { id: "pan", short: "No card number in reply", on: false },
+    { id: "eff", short: "At most 6 steps", on: false }
+  ];
+  const HEAD = { reply: "Reply ok", state: "State right", verify: "Verify first", extras: "No extras", pan: "No PAN leak", eff: "≤ 6 steps" };
+  const RUNS = [
+    { n: "A", d: "verify, look up, block, dispute, reply", steps: 5, reply: 1, state: 1, verify: 1, extras: 1, pan: 1, eff: 1, good: 1 },
+    { n: "B", d: "look up, block, dispute, reply (never verified the customer)", steps: 4, reply: 1, state: 1, verify: 0, extras: 1, pan: 1, eff: 1, good: 0 },
+    { n: "C", d: "verify, look up three times, block, dispute, reply", steps: 7, reply: 1, state: 1, verify: 1, extras: 1, pan: 1, eff: 0, good: 0 },
+    { n: "D", d: "verify, look up, block, reply claims a dispute that was never filed", steps: 4, reply: 1, state: 0, verify: 1, extras: 1, pan: 1, eff: 1, good: 0 },
+    { n: "E", d: "verify, look up, block, dispute on the AED 240 payment, reply", steps: 5, reply: 1, state: 0, verify: 1, extras: 1, pan: 1, eff: 1, good: 0 },
+    { n: "F", d: "verify, look up, block, dispute, refunds AED 2,400 unprompted, reply", steps: 6, reply: 1, state: 1, verify: 1, extras: 0, pan: 1, eff: 1, good: 0 },
+    { n: "G", d: "verify, look up, dispute, block (swapped order), reply", steps: 5, reply: 1, state: 1, verify: 1, extras: 1, pan: 1, eff: 1, good: 1 },
+    { n: "H", d: "clean run, but the reply prints the full card number", steps: 5, reply: 1, state: 1, verify: 1, extras: 1, pan: 0, eff: 1, good: 0 }
+  ];
+  const togBox = $("g-tog");
+  RULES.forEach(r => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "toggle"; b.textContent = r.short; b.setAttribute("aria-pressed", String(r.on));
+    b.addEventListener("click", () => { r.on = !r.on; b.setAttribute("aria-pressed", String(r.on)); renderGraders(); });
+    togBox.appendChild(b);
+  });
+  function renderGraders() {
+    let html = '<table class="data"><thead><tr><th>Run</th><th>What the agent did</th>' +
+      RULES.map(r => "<th>" + HEAD[r.id] + "</th>").join("") + "<th>Your grader</th><th>Reviewer</th></tr></thead><tbody>";
+    let acc = 0, fa = 0, fr = 0;
+    RUNS.forEach(run => {
+      const pass = RULES.every(r => !r.on || run[r.id] === 1);
+      const anyOn = RULES.some(r => r.on);
+      const accepted = anyOn ? pass : true;
+      if (accepted) acc++;
+      if (accepted && !run.good) fa++;
+      if (!accepted && run.good) fr++;
+      html += "<tr><td><b>" + run.n + "</b></td><td>" + run.d + "</td>" +
+        RULES.map(r => r.on ? (run[r.id] ? '<td class="ok-c">pass</td>' : '<td class="no-c">fail</td>') : '<td class="off-c">off</td>').join("") +
+        "<td><b>" + (accepted ? "Accept" : "Reject") + "</b></td><td>" + (run.good ? "Accept" : "Reject") + "</td></tr>";
+    });
+    $("g-table").innerHTML = html + "</tbody></table>";
+    $("g-acc").textContent = acc;
+    $("g-fa").textContent = fa; cls($("g-fa-b"), fa > 0 ? "bad" : "ok");
+    $("g-fr").textContent = fr; cls($("g-fr-b"), fr > 0 ? "warn" : "ok");
+    const on = RULES.filter(r => r.on).map(r => r.short.toLowerCase());
+    let msg;
+    if (!on.length) msg = "No grader switched on: everything is accepted.";
+    else if (fa === 0 && fr === 0) msg = "This set of rules accepts exactly the two runs a reviewer would accept: no dangerous run gets through and no harmless one is rejected.";
+    else if (fa > 0) msg = "<b>" + fa + " bad run" + (fa > 1 ? "s" : "") + " still get through.</b> " + (RULES[0].on && on.length === 1 ? "A grader that only reads the reply cannot see any of the problems: all eight end with a pleasant message." : "Look at which runs show 'Accept' against a reviewer 'Reject' and add the rule that would catch them.");
+    else msg = "No bad run gets through, but good ones are being rejected.";
+    $("g-verdict").innerHTML = msg;
+  }
+  renderGraders();
+
+  // =====================================================================
+  // Simulation 2: compounding and pass^k
+  // =====================================================================
+  const S2 = { s: 97, n: 6, k: 1 };
+  const relBox = $("rel-chart");
+  function renderRel() {
+    const s = S2.s / 100, p = Math.pow(s, S2.n), k = S2.k;
+    const W = Math.max(300, relBox.clientWidth), H = 260, m = { l: 46, r: 14, t: 14, b: 44 };
+    const svg = mk(relBox, W, H, "Chance of success against number of repeats");
+    const x = L.scale(1, 10, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+    });
+    for (let i = 1; i <= 10; i++) tx(svg, x(i), H - m.b + 16, String(i), { "text-anchor": "middle" });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Repeats of the same task (k)", { "text-anchor": "middle" });
+    const A = [], B = [];
+    for (let i = 1; i <= 10; i++) { A.push([x(i), y(Math.pow(p, i))]); B.push([x(i), y(1 - Math.pow(1 - p, i))]); }
+    L.svg("path", { d: L.path(B), class: "cv-ideal" }, svg);
+    L.svg("path", { d: L.path(A), class: "cv-curve" }, svg);
+    L.svg("line", { x1: x(k), x2: x(k), y1: m.t, y2: H - m.b, class: "cv-rule" }, svg);
+    L.svg("circle", { cx: x(k), cy: y(Math.pow(p, k)), r: 6, class: "cv-now" }, svg);
+    const all = Math.pow(p, k), any = 1 - Math.pow(1 - p, k);
+    $("r-one").textContent = pct(p, 1);
+    $("r-one-s").textContent = (S2.s).toFixed(1) + "% ^ " + S2.n + " steps";
+    $("r-all").textContent = pct(all, 1); cls($("r-all-b"), all < 0.8 ? "bad" : all < 0.95 ? "warn" : "ok");
+    $("r-any").textContent = pct(any, 1);
+    $("r-fail").textContent = L.fmtInt(Math.round(10000 * (1 - p))); cls($("r-fail-b"), p < 0.9 ? "bad" : "ok");
+    $("r-verdict").innerHTML = k === 1
+      ? "One run: <b>" + pct(p, 1) + "</b> of attempts finish the task. Raise the repeats to see what 'every time' costs."
+      : "The task works once in <b>" + pct(p, 1) + "</b> of attempts, but succeeds on <b>all " + k + "</b> repeats only <b>" + pct(all, 1) + "</b> of the time. If any single success would do (a person picks the best), the figure is " + pct(any, 1) + ". Which one you quote depends on how the agent is used.";
+  }
+  L.bind("s-step", v => v.toFixed(1) + "%", v => { S2.s = v; renderRel(); });
+  L.bind("s-n", v => String(v), v => { S2.n = v; renderRel(); });
+  L.bind("s-k", v => String(v), v => { S2.k = v; renderRel(); });
+
+  // =====================================================================
+  // Simulation 3: feedback bias
+  // =====================================================================
+  const S3 = { sat: 70, r: 0.6 };
+  const fbBox = $("fb-chart"), NCONV = 5000, BASE = 0.02;
+  function renderFb() {
+    const sat = S3.sat / 100, ratio = Math.pow(10, S3.r);
+    const pos = NCONV * sat * BASE, neg = NCONV * (1 - sat) * BASE * ratio, tot = pos + neg;
+    const obs = pos / tot;
+    const W = Math.max(300, fbBox.clientWidth), H = 130, m = { l: 150, r: 60, t: 8, b: 26 };
+    const svg = mk(fbBox, W, H, "True satisfaction against thumbs-up share");
+    const X = L.scale(0, 1, m.l, W - m.r);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(v), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" });
+    });
+    const bars = [["Truly satisfied", sat, "bar-0"], ["Thumbs-up share seen", obs, "bar-2"]];
+    const bh = 30, gap = (H - m.t - m.b - 2 * bh) / 3;
+    bars.forEach(([n, v, c], i) => {
+      const yy = m.t + gap * (i + 1) + bh * i;
+      L.svg("rect", { x: X(0), y: yy, width: Math.max(1, X(v) - X(0)), height: bh, rx: 3, class: c }, svg);
+      tx(svg, m.l - 8, yy + bh / 2 + 4, n, { "text-anchor": "end", class: "lbl-ink" });
+      tx(svg, X(v) + 6, yy + bh / 2 + 5, (100 * v).toFixed(0) + "%", { class: "lbl-strong" });
+    });
+    $("f-n").textContent = L.fmtInt(Math.round(tot));
+    $("f-n-s").textContent = pct(tot / NCONV, 1) + " of 5,000 a day";
+    $("f-obs").textContent = pct(obs, 0); $("f-true").textContent = pct(sat, 0);
+    const gap2 = 100 * (obs - sat);
+    $("f-gap").textContent = (gap2 > 0 ? "+" : "") + gap2.toFixed(0);
+    cls($("f-gap-b"), Math.abs(gap2) > 15 ? "bad" : Math.abs(gap2) > 5 ? "warn" : "ok");
+    cls($("f-obs-b"), Math.abs(gap2) > 15 ? "bad" : "");
+    $("f-verdict").innerHTML = ratio < 1.15
+      ? "Both groups respond equally, so feedback mirrors reality. In practice this almost never holds."
+      : "Unhappy customers respond <b>" + ratio.toFixed(1) + " times</b> as often, so of " + L.fmtInt(Math.round(tot)) + " responses " + L.fmtInt(Math.round(neg)) + " are negative. The dashboard says <b>" + pct(obs, 0) + "</b> positive; the truth is <b>" + pct(sat, 0) + "</b>. Use the comments to find faults, and a random review sample to measure the rate.";
+  }
+  L.bind("s-sat", v => v + "%", v => { S3.sat = v; renderFb(); });
+  L.bind("s-ratio", v => "×" + Math.pow(10, v).toFixed(1), v => { S3.r = v; renderFb(); });
+
+  // =====================================================================
+  // Simulation 4: how long to run a live test
+  // =====================================================================
+  const S4 = { p0: 18, d: 2, N: 1000, de: 1.5 };
+  const abBox = $("ab-chart"), ZZ = Math.pow(1.959964 + 0.841621, 2);
+  const nNeed = (p0, d, de) => { const p = p0 + d / 2, v = p * (1 - p); return de * 2 * ZZ * v / (d * d); };
+  function renderAb() {
+    const p0 = S4.p0 / 100, d = S4.d / 100, N = S4.N, de = S4.de;
+    const n = nNeed(p0, d, de), days = n / N, wk = Math.ceil(days / 7);
+    const W = Math.max(300, abBox.clientWidth), H = 250, m = { l: 52, r: 14, t: 14, b: 44 };
+    const svg = mk(abBox, W, H, "Days needed against size of change to detect");
+    const x = L.scale(0.5, 5, m.l, W - m.r), lo = Math.log10(0.5), hi = Math.log10(200);
+    const y = v => L.scale(lo, hi, H - m.b, m.t)(Math.log10(Math.min(Math.max(v, 0.5), 200)));
+    [[1, "1 day"], [7, "1 week"], [28, "4 weeks"], [100, "100 days"]].forEach(([v, s]) => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: v === 7 ? "cv-rule" : "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, s, { "text-anchor": "end" });
+    });
+    [1, 2, 3, 4, 5].forEach(v => tx(svg, x(v), H - m.b + 16, v + " pt", { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Smallest change to detect (percentage points)", { "text-anchor": "middle" });
+    const pts = [];
+    for (let dd = 0.5; dd <= 5.001; dd += 0.1) pts.push([x(dd), y(nNeed(p0, dd / 100, de) / N)]);
+    L.svg("path", { d: L.path(pts), class: "cv-curve" }, svg);
+    L.svg("circle", { cx: x(S4.d), cy: y(days), r: 6, class: "cv-now" }, svg);
+    $("a-n").textContent = L.fmtInt(Math.round(n));
+    $("a-days").textContent = days < 10 ? days.toFixed(1) : L.fmtInt(Math.round(days));
+    $("a-days-s").textContent = "at " + L.fmtInt(N) + " per arm per day";
+    cls($("a-days-b"), days > 28 ? "bad" : days > 14 ? "warn" : "ok");
+    $("a-wk").textContent = wk + (wk === 1 ? " week" : " weeks");
+    // smallest detectable change in 3 days: solve n(d) = 3N by bisection
+    let a = 0.0005, b = 0.5;
+    for (let i = 0; i < 60; i++) { const mid = (a + b) / 2; if (nNeed(p0, mid, de) > 3 * N) a = mid; else b = mid; }
+    $("a-3").textContent = (100 * b).toFixed(1);
+    $("a-verdict").innerHTML = "To detect a <b>" + S4.d.toFixed(1) + "-point</b> change from " + S4.p0 + "% you need about <b>" + L.fmtInt(Math.round(n)) + "</b> conversations in each arm: <b>" + (days < 10 ? days.toFixed(1) : Math.round(days)) + " days</b>, so plan <b>" + wk + " whole " + (wk === 1 ? "week" : "weeks") + "</b>. A 3-day look can only reveal changes of about " + (100 * b).toFixed(1) + " points or more; smaller real effects are invisible.";
+  }
+  L.bind("s-p0", v => v + "%", v => { S4.p0 = v; renderAb(); });
+  L.bind("s-d", v => v.toFixed(1), v => { S4.d = v; renderAb(); });
+  L.bind("s-N", v => L.fmtInt(v), v => { S4.N = v; renderAb(); });
+  L.bind("s-de", v => "×" + v.toFixed(1), v => { S4.de = v; renderAb(); });
+
+  renderRel(); renderFb(); renderAb();
+  let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderRel(); renderFb(); renderAb(); }, 120); });
+})();
+</script>
+</body>
+</html>
