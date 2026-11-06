@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Writing Without Left-to-Right: Diffusion Language Models, Bytes and Multi-Token Prediction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-curve.off { stroke: var(--bad); }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .cv-ref { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+
+  .lane { display: grid; gap: 6px; margin: 8px 0 14px; }
+  .lane .cap { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .toks { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tok { padding: 3px 7px; border-radius: 5px; background: var(--sunk); font-family: var(--font-mono); font-size: 12.5px; border: 1px solid var(--line); min-width: 22px; text-align: center; color: var(--muted); }
+  .tok.on { background: var(--surface); color: var(--ink); border-color: var(--muted); }
+  .tok.new { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .tok.m { letter-spacing: -1px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 3px; direction: ltr; }
+  .chip { display: inline-flex; flex-direction: column; align-items: center; padding: 2px 5px; border-radius: 4px; border: 1px solid var(--line); background: var(--sunk); min-width: 26px; }
+  .chip .c { font-size: 15px; line-height: 1.3; color: var(--ink); min-height: 1.3em; }
+  .chip .b { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+  .chip.b2 { background: var(--warn-soft); }
+  .chip.b3 { background: var(--bad-soft); }
+  .chip.edge { border-left: 3px solid var(--accent); }
+  .txt-in { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 16px; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track R · Research frontier: AI, ML and data science</span>
+    <span>Module R1 · Architectures beyond the standard transformer</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>R1.3 · R1.4</span>
+        <span class="pill e">Edge</span>
+        <span>About 35 minutes</span>
+      </div>
+      <h1>Writing Without Left-to-Right: Diffusion Language Models, Bytes and Multi-Token Prediction</h1>
+      <p class="dek">Three attempts to loosen the one-token-at-a-time rule: refine a whole draft in parallel, read raw bytes instead of a fixed vocabulary, or guess several tokens per forward pass. What each buys, what each costs, and what is real as of late 2026.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A standard LLM writes one token per pass, left to right, from a fixed vocabulary; diffusion models, byte-level models and multi-token prediction all try to get more output per pass or drop the tokenizer, and each pays for it in coherence, compute per pass or engineering complexity, so today they matter mainly as speed tricks and as a signal of where inference cost is heading.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Every chat model you have used works the same way. It reads the text so far, produces one probability table over its vocabulary, picks one token, appends it, and repeats. Fifty tokens of answer means fifty passes through the network, strictly in order. The model cannot go back and rewrite the third word once it has written the tenth, and it cannot write the end before the beginning.</p>
+        <p>That design is called <strong>autoregressive</strong>, and it has two costs. <strong>Speed:</strong> the passes are sequential, so a long answer takes a long time even on a fast chip, and a GPU spends much of that time waiting on memory rather than computing. <strong>Rigidity:</strong> the model commits as it goes. Two further oddities come from the input side: text is first chopped into <strong>tokens</strong> by a fixed tokenizer (M1.1), which treats Arabic, numbers and typos unevenly.</p>
+        <p>This lesson covers three ways of relaxing those rules.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Idea</th><th>What changes</th><th>The promise</th><th>The price</th></tr></thead>
+          <tbody>
+            <tr><td><b>Diffusion language model</b></td><td>Start with a fully masked answer and fill in many positions per pass, over a few refinement rounds.</td><td>Fewer passes for the same length. Can edit anywhere.</td><td>Tokens decided together can contradict each other. Each pass is heavier.</td></tr>
+            <tr><td><b>Tokenizer-free (byte-level) model</b></td><td>Read raw bytes, grouped into patches by the model itself, not by a fixed vocabulary.</td><td>No tokenizer bias, robust to typos and scripts, one model for every language.</td><td>Sequences become several times longer unless the architecture compensates.</td></tr>
+            <tr><td><b>Multi-token prediction</b></td><td>Train extra output heads that guess tokens two, three, four steps ahead.</td><td>Richer training signal, and a built-in draft for faster decoding.</td><td>Extra heads, and the later guesses are less reliable.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="figure" id="fig-race">
+        <div class="fig-head"><span class="fig-title">One sentence, two ways of writing it</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> press <b>Play</b>. The top lane writes one token per pass. The bottom lane starts fully masked and reveals its most confident tokens first, several per pass. Then cut the number of refinement passes to 3 and see how much faster it finishes, and think about what it gave up (Simulation 2).</p>
+        <div class="btns" role="group" aria-label="Playback">
+          <button class="btn" type="button" id="b-play">Play</button>
+          <button class="btn" type="button" id="b-reset">Reset</button>
+        </div>
+        <div class="lane"><div class="cap">Autoregressive: one token per pass, left to right</div><div class="toks" id="lane-ar"></div></div>
+        <div class="lane"><div class="cap">Diffusion (masked): a fixed number of passes, most confident positions first</div><div class="toks" id="lane-df"></div></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-t">Pass number so far <output for="s-t"></output></label><input type="range" id="s-t" min="0" max="19" step="1" value="0"></div>
+          <div class="ctl"><label for="s-T">Diffusion refinement passes in total <output for="s-T"></output></label><input type="range" id="s-T" min="2" max="19" step="1" value="5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Autoregressive passes needed</div><div class="v">19</div><div class="s">one per token</div></div>
+          <div class="stat"><div class="k">Diffusion passes needed</div><div class="v" id="st1-T"></div><div class="s" id="st1-T-s"></div></div>
+          <div class="stat" id="st1-sp-b"><div class="k">Ideal speed-up in passes</div><div class="v" id="st1-sp"></div><div class="s">before the cost of heavier passes</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: a 19-token sentence. The "confidence" of each token is a hand-assigned number (punctuation and function words high, numbers and rare words low), standing in for what a real model's output probabilities would give. Real systems pick positions from the model's own probabilities. Pass counts are exact; wall-clock time is not modelled.</p>
+      </figure>
+
+      <div class="callout key"><span class="k">Hold onto this</span>Speed in an LLM is mostly counted in <em>sequential passes</em>, not in arithmetic. Anything that lets one pass settle several tokens at once, or lets a pass be checked rather than recomputed, cuts latency. The three ideas here are three different routes to the same goal, and each hits the same wall: tokens are not independent, so deciding them together risks incoherence.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-diffusion">Diffusion language models: filling in a masked draft</h3>
+      <div class="prose">
+        <p>Image diffusion models start from pure noise and remove it step by step. Text is made of discrete tokens, and you cannot add a little Gaussian noise to the word "transfer". The workable text version replaces noise with <strong>masking</strong>. The forward (noising) process takes a real sentence and hides each token independently with probability <i>t</i>, where <i>t</i> runs from 0 (nothing hidden) to 1 (everything is a <code>[MASK]</code>). The model is trained to undo it: given a partly masked sentence, predict the hidden tokens.</p>
+        <p>This is the family called <strong>masked diffusion</strong> (discrete diffusion). LLaDA, the first large open model of this kind, trains it like this: sample <i>t</i> at random for each training sentence, mask that fraction of tokens, and score the model only on predicting the masked ones. The loss is a weighted cross-entropy, and it is a valid bound on the likelihood of the text, which is why people consider it a principled language model and not a trick (Nie et al., 2025; Sahoo et al., 2024).</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>ℒ</mi><mo>=</mo><mo>−</mo><msub><mi mathvariant="double-struck">E</mi><mrow><mi>t</mi><mo>,</mo><mi>x</mi><mo>,</mo><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><mo stretchy="false">[</mo><mfrac><mn>1</mn><mi>t</mi></mfrac><munder><mo>∑</mo><mrow><mi>i</mi><mo>:</mo><msub><mi>x</mi><mi>t</mi></msub><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mo>=</mo><mtext>MASK</mtext></mrow></munder><mi>log</mi><msub><mi>p</mi><mi>θ</mi></msub><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mo>∣</mo><msub><mi>x</mi><mi>t</mi></msub><mo stretchy="false">)</mo><mo stretchy="false">]</mo></math>
+        <p class="where">Take a real text <i>x</i>, hide a random share <i>t</i> of its tokens to get <i>x<sub>t</sub></i>, and ask the model to recover the hidden ones. The 1/<i>t</i> weight keeps lightly masked and heavily masked examples balanced. Compare with the ordinary language-model loss of F1.6: there the model sees only the left context; here it sees <em>all</em> unmasked tokens on both sides.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Generation</strong> runs the process backwards. Begin with a block of, say, 256 <code>[MASK]</code> tokens after your prompt. At each of <i>T</i> steps, the model predicts a token for every masked position at once. You keep only some of those predictions, usually the most confident, leave the rest masked, and go again. Some systems also <em>re-mask</em> tokens they had committed to if later steps look inconsistent. After <i>T</i> steps, nothing is masked. If <i>T</i> is much smaller than the length, you needed far fewer sequential passes than an autoregressive model.</p>
+        <p>Three consequences follow from the design, and they explain almost every claim you will read.</p>
+        <ul>
+          <li><strong>Bidirectional context.</strong> A masked position sees tokens to its left and right. This is why LLaDA handles tasks where order is awkward: the authors reported it beat GPT-4o on a reversal task (completing a poem line given the next line), the so-called reversal curse that trips up left-to-right models (Nie et al., 2025).</li>
+          <li><strong>No simple KV cache.</strong> An autoregressive model reuses the stored keys and values of past tokens (M1.3). In a diffusion model every pass can change the whole sequence, so the cache is not straightforward. Each pass costs more than one autoregressive step. Research on approximate caching and on <em>block diffusion</em>, which writes blocks left to right but fills each block in parallel, narrows the gap (Arriola et al., 2025).</li>
+          <li><strong>Quality-speed dial.</strong> More steps give better text, fewer steps give faster text. That is a knob autoregressive models do not have. It is also how you should read any speed headline: at what number of steps, and what quality?</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-parallel">The wall: tokens decided together are not independent</h3>
+      <div class="prose">
+        <p>Here is the central difficulty. When the model fills two masked positions in the same pass, it computes a probability for each position separately, then samples them separately. It does not condition the second on what the first turned out to be. If the two tokens depend on each other, they can clash.</p>
+        <p>Take a question where the answer is either "New York" or "Los Angeles", equally likely. Position 1 is "New" half the time and "Los" half the time. Position 2 is "York" half the time and "Angeles" half the time. Sample both independently and you get "New Angeles" or "Los York" half the time. An autoregressive model never has this problem, because the second word is chosen <em>after</em> the first is fixed.</p>
+        <p>In general, if <i>m</i> equally likely phrasings exist and you fix <i>k</i> positions in one pass, independent sampling produces a coherent phrase with probability <i>m</i><sup>1−<i>k</i></sup>. Only one of the <i>m</i><sup><i>k</i></sup> combinations per phrasing is consistent: <i>m</i> good ones out of <i>m</i><sup><i>k</i></sup>.</p>
+      </div>
+
+      <figure class="figure" id="fig-par">
+        <div class="fig-head"><span class="fig-title">How many tokens can you safely fix per pass?</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> start at 4 tokens per pass with 3 alternatives and 30% of chunks being tightly coupled (names, amounts, code syntax). The speed-up looks great, but the chance the whole 64-token answer has no clash falls fast. Set coupling to 0% and the problem vanishes: that is why diffusion works well on loose text and struggles on rigid text.</p>
+        <div class="chart-wrap" id="par-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Chance the whole answer has no clash, by tokens per pass</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-k">Tokens fixed per pass <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="8" step="1" value="4"></div>
+          <div class="ctl"><label for="s-m">Equally likely phrasings in a coupled chunk <output for="s-m"></output></label><input type="range" id="s-m" min="2" max="10" step="1" value="3"></div>
+          <div class="ctl"><label for="s-d">Share of chunks that are tightly coupled <output for="s-d"></output></label><input type="range" id="s-d" min="0" max="1" step="0.05" value="0.3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Passes for a 64-token answer</div><div class="v" id="st2-p"></div><div class="s" id="st2-p-s"></div></div>
+          <div class="stat" id="st2-c-b"><div class="k">One chunk is coherent</div><div class="v" id="st2-c"></div><div class="s">coupled chunks only: m^(1−k)</div></div>
+          <div class="stat" id="st2-a-b"><div class="k">Whole answer has no clash</div><div class="v" id="st2-a"></div><div class="s">across all chunks</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated and deliberately stylised: a 64-token answer is split into chunks of k tokens fixed together. A share d of chunks are coupled (m equally likely phrasings, positions sampled independently, so a chunk is coherent with probability m^(1−k)); the rest are independent and always fine. Real models do not use a fixed k. They fix only tokens whose probability is high, which is exactly the trick that avoids the clash. Exact arithmetic on this toy model.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Practical decoders therefore choose how many tokens to fix adaptively: commit a position when the model is very sure of it (a confidence threshold), keep uncertain ones masked for later rounds, and sometimes re-mask. Easy stretches, like boilerplate text, go in huge chunks. A bank reference number or an amount, where one wrong digit is a different fact, gets settled slowly. This is also why diffusion models look best on code and templated text, and why reported speeds depend so much on the task.</p>
+      </div>
+
+      <h3 class="sub" id="m-landscape">Who is building them</h3>
+      <div class="prose">
+        <p>Three names recur, and they are different kinds of thing.</p>
+        <ul>
+          <li><strong>LLaDA</strong> (Renmin University and Ant Group researchers): an 8-billion-parameter masked diffusion model trained from scratch and released with open weights. Its significance was proof of scale: it was competitive with Llama 3 8B on many benchmarks in the authors' tests, so diffusion was not only a small-model curiosity. Later versions scaled up, with a 100-billion-parameter variant built by converting an existing autoregressive model, a pattern now common.</li>
+          <li><strong>Mercury</strong> (Inception Labs): the first commercial diffusion LLMs, aimed at coding and low-latency use, served through an API, with throughput of the order of a thousand tokens per second reported by the company on modern GPUs.</li>
+          <li><strong>Gemini Diffusion</strong> (Google DeepMind): an experimental model shown in May 2025, reported at roughly 1,500 tokens per second in Google's demonstrations, with quality about that of a small Gemini Flash-class model. Not a general product at the time of writing; treat any figure as vendor-reported.</li>
+        </ul>
+        <p>Figures like these are best read as "several times faster than an autoregressive model of similar quality on easy-to-parallelise tasks", not as a universal result.</p>
+      </div>
+
+      <h3 class="sub" id="m-bytes">Tokenizer-free models: reading bytes</h3>
+      <div class="prose">
+        <p>A tokenizer (M1.1) is a lookup table learned once, before training, that breaks text into frequent chunks. It is cheap and compresses well, but it is a separate, frozen component with side effects you have seen: a rare word, a typo, an IBAN or an Arabic phrase can shatter into many small pieces; numbers are split inconsistently, which hurts arithmetic; and a model trained mostly on English tokens spends more tokens, and so more cost and context, on other scripts.</p>
+        <p>The tokenizer-free idea is to feed the model <strong>bytes</strong>: the 256 possible values of UTF-8 encoding. There is no vocabulary to be unfair to anyone and no out-of-vocabulary word. The catch is length. In UTF-8, English letters take 1 byte but Arabic letters take 2, so a byte sequence is much longer than a token sequence, and attention cost grows with the square of length (F5.3). Reading everything byte by byte with a full transformer is expensive.</p>
+      </div>
+
+      <figure class="figure" id="fig-bytes">
+        <div class="fig-head"><span class="fig-title">What a byte model has to read</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> pick the English line, then the Arabic line, then the account number. Notice how the byte count rises against the character count for Arabic (each letter is two bytes, shaded). Then raise the patch size: grouping bytes into patches shrinks what the big central model has to attend over, by roughly the square of the patch size. You can also type your own text.</p>
+        <div class="btns" role="group" aria-label="Examples">
+          <button class="btn" type="button" data-txt="Please block my card">English</button>
+          <button class="btn" type="button" data-txt="من فضلك أوقف بطاقتي">Arabic</button>
+          <button class="btn" type="button" data-txt="AE070331234567890123456">IBAN</button>
+          <button class="btn" type="button" data-txt="Transfer AED 12,500.75 to Al Noor Trading">Mixed</button>
+        </div>
+        <input class="txt-in" id="txt-in" type="text" value="Please block my card" aria-label="Text to encode" dir="auto">
+        <div class="chips" id="chips" style="margin-top:12px"></div>
+        <div class="legend" style="margin-top:8px">
+          <span>Number under each character is its UTF-8 byte count; a left bar marks the start of a patch.</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-p">Bytes per patch (fixed size, for illustration) <output for="s-p"></output></label><input type="range" id="s-p" min="1" max="10" step="1" value="4"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Characters</div><div class="v" id="st3-c"></div><div class="s">as you see them</div></div>
+          <div class="stat" id="st3-b-b"><div class="k">Bytes</div><div class="v" id="st3-b"></div><div class="s" id="st3-b-s"></div></div>
+          <div class="stat"><div class="k">Patches</div><div class="v" id="st3-n"></div><div class="s">what the large central model reads</div></div>
+          <div class="stat" id="st3-q-b"><div class="k">Attention work, patches vs raw bytes</div><div class="v" id="st3-q"></div><div class="s">of the byte-by-byte cost</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: byte counts are exact (computed from the real UTF-8 encoding in your browser). Patches here are a fixed size, for illustration. Real systems choose patch boundaries dynamically, and they still run a small byte-level encoder and decoder around the large central model, which this arithmetic ignores. Attention cost is taken as proportional to length squared. No real tokenizer is run, so no token counts are shown.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The modern answer is <strong>hierarchical, patch-based</strong> models. A small, cheap network reads the raw bytes and groups them into patches; a large network works on the patches; a small network turns patches back into bytes. The Byte Latent Transformer from Meta (Pagnoni et al., 2024) makes the patch boundary <em>dynamic</em>, using the entropy of a small byte model (F1.7): where the next byte is easy to predict, such as the rest of a common word, it makes a long patch; where it is uncertain, such as the start of a new word or a number, it makes a short one. Compute is then spent where the text is surprising. The authors reported matching tokenizer-based Llama 3 models at up to 8 billion parameters while using up to about half the inference compute, and showed better robustness to noisy input. Other lines of work include MegaByte, MambaByte (state-space models handle long byte sequences cheaply) and H-Net (Hwang et al., 2025), which learns the chunking end to end.</p>
+        <p>For a Gulf bank, the appeal is concrete: one model over Arabic, English and mixed text without a tokenizer that favours English, and robustness to the noise real data contains (OCR errors, transliterated names, typos in free-text fields). That is the pitch, not the present reality. See Part 4.</p>
+      </div>
+
+      <h3 class="sub" id="m-mtp">Multi-token prediction: guess ahead, then check</h3>
+      <div class="prose">
+        <p>Standard training asks the model one question per position: what is the next token? <strong>Multi-token prediction</strong> (MTP) adds extra output heads that also predict the token two, three or four steps ahead, all from the same internal state. Gloeckle et al. (2024) found that this improved code and reasoning-style tasks at larger model sizes, and gave a model whose extra heads can be used at inference. DeepSeek-V3 adopted a variant: one extra module predicting one more token, used during training to give a denser signal (DeepSeek-AI, 2024).</p>
+        <p>The inference trick is <strong>speculative decoding</strong> (Leviathan et al., 2023). Cheaply draft a few next tokens, then run the full model once over the draft to check all of them in parallel. Keep the drafted tokens up to the first one the full model disagrees with, and take the model's own token there. The output is the same as if the full model had written it alone, but several tokens may arrive for one full pass. With MTP the model drafts for itself, with no separate small model.</p>
+        <p>If each drafted token is accepted with probability <i>a</i>, and a token can only be accepted if the ones before it were, then with <i>k</i> drafted tokens the expected number of tokens per full pass is:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>E</mi><mo>=</mo><mn>1</mn><mo>+</mo><mi>a</mi><mo>+</mo><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><mo>…</mo><mo>+</mo><msup><mi>a</mi><mi>k</mi></msup><mo>=</mo><mfrac><mrow><mn>1</mn><mo>−</mo><msup><mi>a</mi><mrow><mi>k</mi><mo>+</mo><mn>1</mn></mrow></msup></mrow><mrow><mn>1</mn><mo>−</mo><mi>a</mi></mrow></mfrac></math>
+        <p class="where">The leading 1 is the token you always get. The first draft adds <i>a</i> on average, the second adds <i>a</i><sup>2</sup> (it needs the first to be right too), and so on. With <i>a</i> = 0.87 and one extra token (<i>k</i> = 1) this is 1.87 tokens per pass, close to the 1.8 times speed-up DeepSeek reported with acceptance rates of 85 to 90% on its second token.</p>
+      </div>
+
+      <figure class="figure" id="fig-mtp">
+        <div class="fig-head"><span class="fig-title">How many drafts are worth having?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> set acceptance to 87% and one draft: about 1.8 times faster, DeepSeek's reported range. Raise the drafts and see the curve flatten, because each later draft needs every earlier one to be right. Then lower acceptance to 60% (an unfamiliar topic or a hard passage) and watch more drafts stop paying for themselves.</p>
+        <div class="chart-wrap" id="mtp-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Net speed-up by number of drafted tokens</span>
+          <span><i style="background:var(--muted)"></i>No speed-up (1.0)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-a">Chance each drafted token is accepted <output for="s-a"></output></label><input type="range" id="s-a" min="0.4" max="0.99" step="0.01" value="0.87"></div>
+          <div class="ctl"><label for="s-kd">Drafted tokens per pass <output for="s-kd"></output></label><input type="range" id="s-kd" min="0" max="8" step="1" value="1"></div>
+          <div class="ctl"><label for="s-c">Extra cost per drafted token, as share of one pass <output for="s-c"></output></label><input type="range" id="s-c" min="0" max="0.2" step="0.01" value="0.03"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Tokens kept per full pass</div><div class="v" id="st4-e"></div><div class="s">expected value</div></div>
+          <div class="stat" id="st4-s-b"><div class="k">Net speed-up</div><div class="v" id="st4-s"></div><div class="s">after the cost of drafting</div></div>
+          <div class="stat"><div class="k">Best number of drafts here</div><div class="v" id="st4-best"></div><div class="s" id="st4-best-s"></div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: the formula above with the same acceptance probability at every position, and a drafting overhead of c per drafted token (so a pass costs 1 + c·k). Real acceptance falls for later drafts and varies by topic; real overheads depend on the hardware and batch size. Exact arithmetic on this simplified model.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Notice what is shared. Diffusion, speculative decoding and MTP all trade <em>more arithmetic per pass</em> for <em>fewer sequential passes</em>, which suits modern GPUs, where memory traffic rather than arithmetic is the bottleneck. They differ in whether the output is guaranteed identical: speculative decoding with verification is lossless; diffusion with fewer steps is a different (and possibly worse) sampler.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>These ideas sit on the language-model pipeline at three different points: the input (tokenizer), the training objective, and the decoding loop.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M1.1 – M1.2 · Tokens and the transformer</span><span class="t"><a href="m1-tokenisation.html">What the tokenizer does and where it hurts</a></span><p>The baseline this lesson departs from. Token fertility on Arabic and numbers is the practical motivation for byte-level models.</p></div>
+        <div class="link-card"><span class="code">M1.3 · Context windows and the KV cache</span><span class="t"><a href="m1-context-windows-and-the-kv.html">Why diffusion lacks a simple cache</a></span><p>The KV cache is why autoregressive decoding is cheap per token. Understanding it explains why diffusion passes are heavier and why block diffusion exists.</p></div>
+        <div class="link-card"><span class="code">M1.4 · Pretraining then post-training</span><span class="t"><a href="m1-pretraining-then-post-training.html">Where a new objective plugs in</a></span><p>LLaDA-style models are pretrained with a masked objective and then instruction-tuned. Converting an existing autoregressive model is a pretraining shortcut.</p></div>
+        <div class="link-card"><span class="code">F5.3 · Attention</span><span class="t"><a href="f5-attention.html">Why length is expensive</a></span><p>Attention scales with the square of sequence length, so byte sequences are costly and patching is not cosmetic. Diffusion uses attention without a causal mask.</p></div>
+        <div class="link-card"><span class="code">F1.6 – F1.7 · Likelihood and entropy</span><span class="t"><a href="f1-likelihood-entropy.html">Cross-entropy and surprise</a></span><p>The masked loss is a likelihood bound. Entropy-based patching sends compute to high-surprise bytes.</p></div>
+        <div class="link-card"><span class="code">R1.1 – R1.2 · Mixture-of-experts and challengers</span><span class="t"><a href="r1-mixture-of-experts-at-scale.html">Other routes to cheaper inference</a></span><p>MoE saves arithmetic per token; this lesson saves passes. They combine, and the next lesson asks whether reasoning needs tokens at all.</p></div>
+        <div class="link-card"><span class="code">R1.5 · Reasoning in latent space</span><span class="t"><a href="r1-reasoning-in-latent-space-coconut.html">Another departure from token-by-token</a></span><p>Coconut-style models think in continuous vectors instead of written tokens: a different way of loosening the same rule.</p></div>
+        <div class="link-card"><span class="code">A5 · Inference economics</span><span class="t"><a href="a5-why-inference-got-cheap-moe.html">Why inference got cheap</a></span><p>Speculative decoding and MTP are part of the serving toolbox. See also <a href="a5-reasoning-models-and-test-time.html">reasoning models and test-time compute</a>, where long outputs make latency painful.</p></div>
+        <div class="link-card"><span class="code">M2.3 · Model choice, cost and latency</span><span class="t"><a href="m2-model-choice-cost-and-latency.html">Where this shows up in a buying decision</a></span><p>Latency per token is a vendor feature you can ask about. Diffusion APIs sell on it.</p></div>
+        <div class="link-card"><span class="code">A14 · Arabic LLMs</span><span class="t"><a href="a14-arabic-llms-jais-allam-falcon.html">Arabic and tokenization fairness</a></span><p>Byte-level and tokenizer-light designs speak directly to the Arabic cost and quality gap.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Contact-centre and chat assistants.</strong> Latency is felt directly. A faster decoder, whether diffusion or an MTP-enabled model, is a customer-experience feature, and speculative decoding is already a vendor-side setting to ask about.</li>
+          <li><strong>Code assistants.</strong> Diffusion's early strength is code and structured output, the exact use in analytics and engineering teams (A15).</li>
+          <li><strong>Arabic and mixed-script documents.</strong> Names, IBANs, amounts and OCR noise are where tokenizers fragment. Byte-level robustness is the research answer; today the practical answer is to test your chosen model on your own Arabic text.</li>
+          <li><strong>Structured extraction.</strong> Tasks that fill a fixed schema from a document suit parallel filling, and also expose the "one wrong digit" risk. Validate extracted fields independently.</li>
+          <li><strong>Procurement.</strong> When a vendor claims "10x faster", you now know to ask: at what quality, which task, how many steps, which hardware, and is the output guaranteed identical?</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The honest summary: all three are real and shipped in some form, but none has displaced the autoregressive transformer as the default for frontier general-purpose models. Multi-token prediction is the most deployed, diffusion the most hyped, byte-level models the least mature commercially.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two web searches. Throughput figures come from vendor claims and secondary write-ups; items marked from memory are older papers I did not re-check.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2021</span><div><div class="t">Discrete diffusion for text</div><p>D3PM defined diffusion over discrete tokens, including a masking variant. The seed of later work.</p><div class="src">Austin et al., NeurIPS 2021 (from memory)</div></div></li>
+        <li><span class="yr">2022–23</span><div><div class="t">Byte-level and hierarchical models; speculative decoding</div><p>ByT5 showed token-free models work but cost more compute. MegaByte introduced patches. Leviathan and colleagues showed lossless speed-ups from draft-and-verify decoding.</p><div class="src">Xue et al., TACL 2022; Yu et al., 2023; Leviathan et al., ICML 2023 (from memory)</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Masked diffusion gets a clean recipe; MTP becomes practical</div><p>Simple masked-diffusion language models closed much of the gap to autoregressive models on likelihood. Gloeckle et al. showed multi-token prediction helps code at scale, and DeepSeek-V3 used MTP in a frontier-class open model, reporting about a 1.8 times decoding speed-up from the extra module with 85–90% second-token acceptance.</p><div class="src">Sahoo et al., 2024; Gloeckle et al., ICML 2024; DeepSeek-AI, 2024</div></div></li>
+        <li><span class="yr">Dec 2024</span><div><div class="t">Byte Latent Transformer</div><p>Entropy-based dynamic patches; matched Llama 3-style tokenised models up to 8B parameters with up to about half the inference compute in the authors' tests.</p><div class="src">Pagnoni et al., Meta, arXiv 2412.09871 (from memory)</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Diffusion LLMs reach scale and product</div><p>LLaDA (8B, open weights) matched Llama 3 8B on many benchmarks in its authors' tests. Inception Labs launched Mercury, the first commercial diffusion LLM, and Google showed Gemini Diffusion at I/O in May 2025. Block diffusion and caching methods began to close the efficiency gap.</p><div class="src">Nie et al., arXiv 2502.09992; Khanna et al. (Mercury), arXiv 2506.17298; Arriola et al., ICLR 2025 (from memory)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Scaling up by conversion, and MTP in shipped models</div><p>The dominant pattern for diffusion LLMs is to start from a pretrained autoregressive model and continue training with the diffusion objective; LLaDA reached a 100B-parameter version this way. Inception's Mercury 2 launched on 24 February 2026, with a reported ~1,000 tokens per second on a single Blackwell GPU (secondary reports differ, up to around 1,200). NVIDIA released a model that unifies autoregressive, diffusion and self-speculation decoding in one set of weights. MTP heads appear in recent open models for self-speculative decoding, for example Nemotron 3 Super.</p><div class="src">Secondary reports, arXiv 2607.05722; arXiv 2604.12374. Throughput claims not independently verified.</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Active research</div><p>Papers address training-inference mismatch in diffusion LMs, retrofitting linear attention into them, training-free multi-token prediction on frozen models, and multi-byte prediction for hierarchical byte models. Read these as signs of direction, not settled results.</p><div class="src">arXiv 2605.11854, 2608.06628, 2603.17942, 2608.15454 (abstract-level only)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, for a bank:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Speculative decoding / MTP in serving stacks</b></td><td>Providers and inference engines use drafting to cut latency, usually invisibly. Lossless when verified.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Commercial diffusion LLM via API</b></td><td>Low-latency coding and short-answer use cases. Needs your own evaluation; available vendor data is largely self-reported.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Open-weight diffusion LLMs for experiments</b></td><td>LLaDA-family models in research and internal labs. Tooling and serving support are thinner than for autoregressive models.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Byte-level / patch models in production</b></td><td>Strong research results; few if any bank-grade, supported products I could confirm.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Regulated use of diffusion or byte models</b></td><td>No specific guidance I know of. Treated as any other model under model-risk rules; I am not aware of CBUAE or SAMA statements on architecture.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Autoregressive transformers remain the default; speculative decoding and MTP are already improving serving speed; diffusion is a credible fast, editable alternative for latency-sensitive and structured tasks; byte-level models are a promising answer to tokenizer problems that has not yet reached products a bank can buy.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Mostly these are failures of interpretation: of speed claims, of benchmark comparisons and of what "tokenizer-free" buys.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Quoting tokens per second without quality or steps</div><p>"1,000 tokens per second" for a diffusion model at few steps says nothing about whether it answers as well as a slower model.</p><div class="spot"><b>Spot it</b>Ask for the benchmark score at that speed, the number of denoising steps, the hardware, the batch size and the prompt length.</div></li>
+        <li><div class="t">Incoherence at fixed positions</div><p>Parallel decoding yields mismatched pairs: a name from one candidate and a surname from another, a currency from one clause and an amount from another.</p><div class="spot"><b>Spot it</b>Test on structured outputs with dependent fields. Check consistency between related fields automatically.</div></li>
+        <li><div class="t">Digit and identifier errors</div><p>One wrong digit in an IBAN or amount is a different fact, and parallel filling plus weak numeric reasoning makes this likelier than the headline accuracy suggests.</p><div class="spot"><b>Spot it</b>Round-trip tests: extract, re-render, compare with the source; checksum IBANs; reconcile totals.</div></li>
+        <li><div class="t">Comparing against a weak autoregressive baseline</div><p>A diffusion model beats "a similar-size model" that is older or untuned.</p><div class="spot"><b>Spot it</b>Check the baseline's release date, size and training tokens. Prefer a head-to-head on your own tasks.</div></li>
+        <li><div class="t">Assuming bytes mean no language bias</div><p>Byte-level models remove tokenizer bias but not data bias. A model trained on 95% English data still does worse in Arabic.</p><div class="spot"><b>Spot it</b>Evaluate per language and per dialect, including Gulf Arabic, on your own content.</div></li>
+        <li><div class="t">Ignoring the longer sequences</div><p>The byte-level model looks free of tokenizer cost, until the latency and memory bill for sequences several times longer arrives.</p><div class="spot"><b>Spot it</b>Ask for compute per character or per byte of text, not per token, when comparing.</div></li>
+        <li><div class="t">MTP acceptance that collapses off-distribution</div><p>Draft acceptance measured on chat falls on rare legal Arabic or numeric tables, and the promised speed-up shrinks.</p><div class="spot"><b>Spot it</b>Measure tokens per pass on your own prompts, not the vendor's.</div></li>
+        <li><div class="t">Assuming lossless when it is not</div><p>Speculative decoding with verification gives the same distribution; reducing diffusion steps or loosening acceptance thresholds does not.</p><div class="spot"><b>Spot it</b>Ask: is the output guaranteed identical to the base model, or only usually similar?</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Today's chatbots write one word at a time, so long answers are slow. Newer designs write many words at once, like refining a draft, and vendors report several times the speed. That helps live customer chat and coding tools. But writing words together can make them inconsistent, and in banking one wrong digit matters. So we would pilot them on low-risk, latency-sensitive tasks and test accuracy on our own documents before trusting any speed claim.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“Masked diffusion language models train a bidirectional denoiser with a weighted masked cross-entropy, then decode by iteratively unmasking high-confidence positions. They cut sequential passes but lose the KV cache and decide tokens in parallel, so there is a coherence cost for coupled tokens; block diffusion and adaptive thresholds mitigate it. Byte-level models such as BLT use entropy-based patching to avoid the quadratic cost of long byte sequences. MTP adds heads for future tokens and doubles as a self-draft for lossless speculative decoding. I'd evaluate each on task accuracy at matched latency, not on tokens per second alone.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Will diffusion models replace GPT-style models?”</summary><div class="ans"><p>Not on current evidence. They have matched autoregressive models at small and mid sizes and are very fast on easy-to-parallelise tasks, and the 2026 trend is to convert existing models. But the ecosystem, tooling, long-context behaviour and frontier reasoning are all autoregressive-first. The likelier future is both: diffusion or hybrid decoders for latency-critical and editing tasks, autoregressive for the rest.</p></div></details>
+        <details class="reveal"><summary>“Why can't a diffusion model just write everything in one step?”</summary><div class="ans"><p>Because tokens depend on each other. Fixing every position at once from independent probabilities produces clashes, like "New Angeles". The more steps, the more each token can condition on already-fixed neighbours. Fewer steps means faster and less coherent. Good decoders fix only tokens they are very sure of.</p></div></details>
+        <details class="reveal"><summary>“Is a tokenizer-free model better for Arabic?”</summary><div class="ans"><p>In principle it removes a source of unfairness, since a fixed vocabulary built mostly from English splits Arabic into more pieces. In practice quality still depends on training data, and byte sequences for Arabic are about twice as long as the characters, so you need patching to keep cost sane. I would test on our own Arabic and mixed-script documents rather than assume it.</p></div></details>
+        <details class="reveal"><summary>“Does speculative decoding change the answers?”</summary><div class="ans"><p>Not when done correctly with verification: the accepted output has the same distribution as the base model. What changes is how many tokens you get per full pass. It is therefore one of the few speed-ups with no quality trade-off, which is why it is widely used in serving.</p></div></details>
+        <details class="reveal"><summary>“A vendor says their diffusion model is ten times faster. What do you ask?”</summary><div class="ans"><p>Faster than what, at what quality, on which task. Number of steps, hardware, batch size, prompt and output length. Benchmark results at that setting, ideally our own test set, including Arabic and numeric extraction. And whether the output is guaranteed equal to a reference model or only similar.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the formulas in Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A model writes a 256-token answer. How many sequential passes does an autoregressive model need, and a diffusion model run for 32 steps? What is the ideal speed-up, and why might the real one be smaller?</summary><div class="ans"><p>256 against 32: an ideal 8 times. Real speed-up is smaller because each diffusion pass processes the whole sequence without a simple KV cache, so it costs more than one autoregressive step, and because quality may force more steps.</p></div></details>
+        <details class="reveal"><summary>2. Four tokens in a chunk are fixed in one pass and there are 3 equally likely coupled phrasings. What is the chance the chunk is coherent?</summary><div class="ans"><p>m<sup>1−k</sup> = 3<sup>−3</sup> = 1/27, about 3.7%. Only the 3 consistent combinations out of 3<sup>4</sup> = 81 count. This is why adaptive, confidence-based unmasking matters.</p></div></details>
+        <details class="reveal"><summary>3. Why does masked diffusion see "both sides" of a position, and what task does this help?</summary><div class="ans"><p>The model predicts masked tokens given all unmasked tokens, left and right, without a causal mask. It helps tasks like infilling and reversal-type questions that left-to-right models handle poorly, such as completing a line given the line after it.</p></div></details>
+        <details class="reveal"><summary>4. An Arabic sentence has 19 characters including 3 spaces. How many UTF-8 bytes does it have, and what does that say about byte-level models?</summary><div class="ans"><p>16 letters at 2 bytes plus 3 spaces at 1 byte is 35 bytes, so about 1.8 bytes per character against 1 for English. Byte sequences for Arabic are longer, so a naive byte model spends more compute on Arabic; patching is how modern byte-level models contain that.</p></div></details>
+        <details class="reveal"><summary>5. With patches of 4 bytes instead of raw bytes, roughly how much does attention work over the central model fall?</summary><div class="ans"><p>Sequence length falls by 4, attention work by about 4<sup>2</sup> = 16 times, to about 6% of the byte-by-byte cost. This ignores the small byte-level encoder and decoder that still run.</p></div></details>
+        <details class="reveal"><summary>6. MTP with one drafted token and 88% acceptance. How many tokens per full pass, and what if the drafting costs 5% of a pass?</summary><div class="ans"><p>E = 1 + 0.88 = 1.88 tokens per pass. Net speed-up = 1.88 ÷ 1.05 ≈ 1.79 times, consistent with the roughly 1.8 times DeepSeek reported.</p></div></details>
+        <details class="reveal"><summary>7. What is the difference between speculative decoding and running a diffusion model with fewer steps, in terms of output quality guarantees?</summary><div class="ans"><p>Speculative decoding verifies drafts with the full model and keeps only what it would have produced, so the output distribution is unchanged. Fewer diffusion steps is a different sampler whose quality falls as steps drop. One is lossless; the other is a dial.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>S. Nie et al. <a href="https://arxiv.org/abs/2502.09992">Large Language Diffusion Models</a> (LLaDA). arXiv, 2025.</li>
+        <li>S. Sahoo et al. <a href="https://arxiv.org/abs/2406.07524">Simple and Effective Masked Diffusion Language Models</a>. NeurIPS, 2024.</li>
+        <li>J. Austin et al. <a href="https://arxiv.org/abs/2107.03006">Structured Denoising Diffusion Models in Discrete State-Spaces</a>. NeurIPS, 2021.</li>
+        <li>M. Arriola et al. <a href="https://arxiv.org/abs/2503.09573">Block Diffusion: Interpolating Between Autoregressive and Diffusion Language Models</a>. ICLR, 2025.</li>
+        <li>Inception Labs. <a href="https://arxiv.org/abs/2506.17298">Mercury: Ultra-Fast Language Models Based on Diffusion</a>. arXiv, 2025.</li>
+        <li>Google DeepMind. <a href="https://deepmind.google/models/gemini-diffusion/">Gemini Diffusion</a>. Experimental model page, 2025.</li>
+        <li>A. Pagnoni et al. <a href="https://arxiv.org/abs/2412.09871">Byte Latent Transformer: Patches Scale Better Than Tokens</a>. arXiv, 2024.</li>
+        <li>L. Yu et al. <a href="https://arxiv.org/abs/2305.07185">MEGABYTE: Predicting Million-byte Sequences with Multiscale Transformers</a>. NeurIPS, 2023.</li>
+        <li>L. Xue et al. <a href="https://arxiv.org/abs/2105.13626">ByT5: Towards a Token-Free Future with Pre-trained Byte-to-Byte Models</a>. TACL, 2022.</li>
+        <li>S. Hwang, B. Wang, A. Gu. <a href="https://arxiv.org/abs/2507.07955">Dynamic Chunking for End-to-End Hierarchical Sequence Modeling</a> (H-Net). arXiv, 2025.</li>
+        <li>F. Gloeckle et al. <a href="https://arxiv.org/abs/2404.19737">Better &amp; Faster Large Language Models via Multi-token Prediction</a>. ICML, 2024.</li>
+        <li>DeepSeek-AI. <a href="https://arxiv.org/abs/2412.19437">DeepSeek-V3 Technical Report</a>. 2024. Section on multi-token prediction and acceptance rates.</li>
+        <li>Y. Leviathan, M. Kalman, Y. Matias. <a href="https://arxiv.org/abs/2211.17192">Fast Inference from Transformers via Speculative Decoding</a>. ICML, 2023.</li>
+        <li>NVIDIA. <a href="https://arxiv.org/abs/2607.05722">Nemotron-Labs-Diffusion: A Tri-Mode Language Model Unifying Autoregressive, Diffusion, and Self-Speculation Decoding</a>. arXiv, 2026 (preprint).</li>
+        <li>NVIDIA. <a href="https://arxiv.org/abs/2604.12374">Nemotron 3 Super</a>. arXiv, 2026 (shared-head multi-token prediction).</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in R1: Reasoning in latent space (R1.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: autoregressive vs diffusion decoding
+  // =====================================================================
+  const TOK = ["The","transfer","of","AED","12,500","was","held","because","the","beneficiary","name","matched","a","watchlist","entry","and","needs","review","."];
+  const CONF = [.95,.75,.93,.35,.30,.90,.70,.80,.92,.45,.52,.50,.91,.40,.55,.88,.60,.66,.98];
+  const N1 = TOK.length;
+  const ORDER = CONF.map((c, i) => [c, i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]).map(x => x[1]);
+  const S1 = { t: 0, T: 5, timer: null };
+  const cum = (t, T) => Math.min(N1, Math.round(N1 * t / T));
+  function renderRace() {
+    const arN = Math.min(S1.t, N1);
+    const dfN = S1.t >= S1.T ? N1 : cum(S1.t, S1.T), dfPrev = S1.t >= S1.T ? cum(Math.max(S1.T - 1, 0), S1.T) : cum(S1.t - 1, S1.T);
+    const revealed = new Set(ORDER.slice(0, dfN)), prev = new Set(ORDER.slice(0, S1.t > 0 ? dfPrev : 0));
+    $("lane-ar").innerHTML = TOK.map((w, i) => `<span class="tok ${i < arN ? "on" : "m"}${i === arN - 1 ? " new" : ""}">${i < arN ? w : "▒▒"}</span>`).join("");
+    $("lane-df").innerHTML = TOK.map((w, i) => {
+      const on = revealed.has(i), fresh = on && !prev.has(i) && S1.t > 0;
+      return `<span class="tok ${on ? "on" : "m"}${fresh ? " new" : ""}">${on ? w : "▒▒"}</span>`;
+    }).join("");
+    const sp = N1 / S1.T;
+    $("st1-T").textContent = S1.T; $("st1-T-s").textContent = "about " + Math.ceil(N1 / S1.T) + " tokens fixed per pass";
+    $("st1-sp").textContent = sp.toFixed(1) + "×"; cls($("st1-sp-b"), sp > 3 ? "warn" : "ok");
+    $("s1-verdict").innerHTML = S1.t === 0
+      ? "Press Play or drag the pass number. Nothing has been written yet in either lane."
+      : (S1.t >= N1 ? "After <b>" + N1 + "</b> passes the autoregressive lane has finished. " : "After pass <b>" + S1.t + "</b>: autoregressive has <b>" + arN + "</b> of " + N1 + " tokens; ") +
+        (S1.t >= S1.T ? "the diffusion lane finished at pass <b>" + S1.T + "</b>." : "diffusion has <b>" + dfN + "</b>, chosen by confidence, not position.") +
+        (S1.T <= 4 ? " At this few passes, " + Math.ceil(N1 / S1.T) + " tokens are fixed together each time, which is where clashes appear (Simulation 2)." : "");
+  }
+  const sT = L.bind("s-t", v => v, v => { S1.t = v; renderRace(); });
+  L.bind("s-T", v => v, v => { S1.T = v; renderRace(); });
+  function stop() { if (S1.timer) { clearInterval(S1.timer); S1.timer = null; $("b-play").textContent = "Play"; } }
+  $("b-play").addEventListener("click", () => {
+    if (S1.timer) { stop(); return; }
+    if (L.reduced) { S1.t = N1; sT.set(N1); renderRace(); return; }
+    if (S1.t >= N1) { S1.t = 0; sT.set(0); }
+    $("b-play").textContent = "Pause";
+    S1.timer = setInterval(() => { if (S1.t >= N1) { stop(); return; } S1.t++; sT.set(S1.t); renderRace(); }, 450);
+  });
+  $("b-reset").addEventListener("click", () => { stop(); S1.t = 0; sT.set(0); renderRace(); });
+
+  // =====================================================================
+  // Simulation 2: parallel decoding coherence
+  // =====================================================================
+  const S2 = { k: 4, m: 3, d: 0.3 };
+  const parBox = $("par-chart"), LEN = 64;
+  const clean = (k, m, d) => Math.pow(1 - d * (1 - Math.pow(m, 1 - k)), Math.ceil(LEN / k));
+  function renderPar() {
+    const { k, m, d } = S2;
+    const W = Math.max(300, parBox.clientWidth), H = 230, mg = { l: 44, r: 14, t: 14, b: 40 };
+    const svg = mk(parBox, W, H, "Chance of a clash-free answer against tokens fixed per pass");
+    const x = L.scale(1, 8, mg.l, W - mg.r), y = L.scale(0, 1, H - mg.b, mg.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: mg.l, x2: W - mg.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, mg.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" }); });
+    for (let i = 1; i <= 8; i++) tx(svg, x(i), H - mg.b + 16, i, { "text-anchor": "middle" });
+    tx(svg, (mg.l + W - mg.r) / 2, H - 6, "Tokens fixed per pass", { "text-anchor": "middle" });
+    const pts = []; for (let i = 1; i <= 8; i++) pts.push([x(i), y(clean(i, m, d))]);
+    L.svg("path", { d: L.path(pts), class: "cv-curve off" }, svg);
+    L.svg("circle", { cx: x(k), cy: y(clean(k, m, d)), r: 6, class: "cv-now" }, svg);
+    const c = 1 - d * (1 - Math.pow(m, 1 - k)), a = clean(k, m, d), passes = Math.ceil(LEN / k);
+    $("st2-p").textContent = passes; $("st2-p-s").textContent = (LEN / passes).toFixed(1) + "× fewer than " + LEN;
+    $("st2-c").textContent = pct(c, 1); cls($("st2-c-b"), c > 0.97 ? "ok" : c > 0.85 ? "warn" : "bad");
+    $("st2-a").textContent = pct(a, 1); cls($("st2-a-b"), a > 0.9 ? "ok" : a > 0.5 ? "warn" : "bad");
+    $("s2-verdict").innerHTML = k === 1
+      ? "One token per pass is autoregressive: every token sees its predecessor, so there is never a clash. 64 passes."
+      : d === 0
+        ? "With no coupled chunks, nothing can clash, so parallel filling is free speed. Real text is not like this."
+        : "Fixing <b>" + k + "</b> tokens per pass cuts passes to <b>" + passes + "</b>, but the chance the whole answer is clash-free is <b>" + pct(a, 0) + "</b>. Adaptive decoding avoids this by leaving coupled tokens masked until they can be settled one at a time.";
+  }
+  L.bind("s-k", v => v, v => { S2.k = v; renderPar(); });
+  L.bind("s-m", v => v, v => { S2.m = v; renderPar(); });
+  L.bind("s-d", v => Math.round(v * 100) + "%", v => { S2.d = v; renderPar(); });
+
+  // =====================================================================
+  // Simulation 3: bytes and patches
+  // =====================================================================
+  const S3 = { p: 4 };
+  const enc = new TextEncoder();
+  function renderBytes() {
+    const txt = $("txt-in").value.slice(0, 80), chars = Array.from(txt), p = S3.p;
+    let off = 0, html = "", bytes = 0;
+    chars.forEach(ch => {
+      const n = enc.encode(ch).length;
+      const edge = off % p === 0;
+      html += `<span class="chip${n === 2 ? " b2" : n >= 3 ? " b3" : ""}${edge ? " edge" : ""}"><span class="c">${ch === " " ? "&nbsp;" : ch.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span><span class="b">${n}</span></span>`;
+      off += n; bytes += n;
+    });
+    $("chips").innerHTML = html;
+    const patches = Math.ceil(bytes / p), rel = bytes > 0 ? 1 / (p * p) : 0;
+    $("st3-c").textContent = chars.length;
+    $("st3-b").textContent = bytes; $("st3-b-s").textContent = chars.length ? (bytes / chars.length).toFixed(2) + " bytes per character" : "";
+    cls($("st3-b-b"), chars.length && bytes / chars.length > 1.5 ? "warn" : "");
+    $("st3-n").textContent = patches;
+    $("st3-q").textContent = pct(rel, rel < 0.1 ? 1 : 0); cls($("st3-q-b"), "ok");
+    $("s3-verdict").innerHTML = bytes === 0 ? "Type something above." :
+      (bytes > chars.length ? "This text needs <b>" + bytes + "</b> bytes for <b>" + chars.length + "</b> characters, " + (bytes / chars.length).toFixed(2) + " bytes each, so a plain byte model reads a sequence longer than the text you see. " : "Plain ASCII: one byte per character. ") +
+      "With patches of <b>" + p + "</b> bytes the central model reads <b>" + patches + "</b> positions, about <b>" + pct(rel, rel < 0.1 ? 1 : 0) + "</b> of the attention work of reading bytes one by one.";
+  }
+  L.bind("s-p", v => v + (v === 1 ? " byte" : " bytes"), v => { S3.p = v; renderBytes(); });
+  $("txt-in").addEventListener("input", renderBytes);
+  document.querySelectorAll("[data-txt]").forEach(b => b.addEventListener("click", () => { $("txt-in").value = b.getAttribute("data-txt"); renderBytes(); }));
+
+  // =====================================================================
+  // Simulation 4: multi-token prediction
+  // =====================================================================
+  const S4 = { a: 0.87, k: 1, c: 0.03 };
+  const mtpBox = $("mtp-chart");
+  const EK = (a, k) => Math.abs(1 - a) < 1e-9 ? k + 1 : (1 - Math.pow(a, k + 1)) / (1 - a);
+  const SU = (a, k, c) => EK(a, k) / (1 + c * k);
+  function renderMtp() {
+    const { a, k, c } = S4;
+    const W = Math.max(300, mtpBox.clientWidth), H = 230, mg = { l: 44, r: 14, t: 14, b: 40 };
+    const svg = mk(mtpBox, W, H, "Net speed-up against number of drafted tokens");
+    const vals = []; for (let i = 0; i <= 8; i++) vals.push(SU(a, i, c));
+    const top = Math.max(2, Math.ceil(Math.max.apply(null, vals) * 2) / 2);
+    const x = L.scale(0, 8, mg.l, W - mg.r), y = L.scale(0, top, H - mg.b, mg.t);
+    for (let v = 0; v <= top + 1e-9; v += 0.5) { L.svg("line", { x1: mg.l, x2: W - mg.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, mg.l - 6, y(v) + 4, v.toFixed(1) + "×", { "text-anchor": "end" }); }
+    for (let i = 0; i <= 8; i++) tx(svg, x(i), H - mg.b + 16, i, { "text-anchor": "middle" });
+    tx(svg, (mg.l + W - mg.r) / 2, H - 6, "Drafted tokens per pass", { "text-anchor": "middle" });
+    L.svg("line", { x1: mg.l, x2: W - mg.r, y1: y(1), y2: y(1), class: "cv-ref" }, svg);
+    L.svg("path", { d: L.path(vals.map((v, i) => [x(i), y(v)])), class: "cv-curve" }, svg);
+    L.svg("circle", { cx: x(k), cy: y(vals[k]), r: 6, class: "cv-now" }, svg);
+    let best = 0; vals.forEach((v, i) => { if (v > vals[best] + 1e-9) best = i; });
+    $("st4-e").textContent = EK(a, k).toFixed(2);
+    $("st4-s").textContent = vals[k].toFixed(2) + "×"; cls($("st4-s-b"), vals[k] >= 1.5 ? "ok" : vals[k] > 1.05 ? "warn" : "bad");
+    $("st4-best").textContent = best; $("st4-best-s").textContent = "gives " + vals[best].toFixed(2) + "× (searched 0 to 8)";
+    $("s4-verdict").innerHTML = k === 0 ? "No drafting: one token per pass, the baseline."
+      : vals[k] < 1 ? "Drafting costs more than it saves here: <b>" + vals[k].toFixed(2) + "×</b>, slower than not drafting. Low acceptance or high overhead."
+      : k > best ? "<b>" + vals[k].toFixed(2) + "×</b>. Beyond " + best + " drafts the extra cost outweighs the extra tokens kept."
+      : "<b>" + EK(a, k).toFixed(2) + "</b> tokens kept per pass on average, <b>" + vals[k].toFixed(2) + "×</b> net of drafting cost.";
+  }
+  L.bind("s-a", v => Math.round(v * 100) + "%", v => { S4.a = v; renderMtp(); });
+  L.bind("s-kd", v => v, v => { S4.k = v; renderMtp(); });
+  L.bind("s-c", v => Math.round(v * 100) + "%", v => { S4.c = v; renderMtp(); });
+
+  function renderAll() { renderRace(); renderPar(); renderBytes(); renderMtp(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderPar(); renderMtp(); }, 120); });
+})();
+</script>
+</body>
+</html>

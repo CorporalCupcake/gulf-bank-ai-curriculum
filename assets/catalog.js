@@ -98,6 +98,16 @@ window.CATALOG = [
   {file: "c3-scoping-and-running-an-ai.html", module: "C3", title: "From Idea to Production: Scoping, Running and Landing an AI Project in a Gulf Bank", codes: ["C3.3","C3.4"], label: "C3.3 · C3.4", tier: "n", minutes: 40},
   {file: "c3-managing-risk-and-expectations-in.html", module: "C3", title: "Managing Risk and Expectations, and Leading People", codes: ["C3.5","C3.6"], label: "C3.5 · C3.6", tier: "n", minutes: 40},
   {file: "r1-mixture-of-experts-at-scale.html", module: "R1", title: "Mixture-of-Experts at Scale, and the Recurrent Challengers", codes: ["R1.1","R1.2"], label: "R1.1 · R1.2", tier: "n", minutes: 40, star: true, fast: true},
+  {file: "r1-diffusion-language-models-llada-gemini.html", module: "R1", title: "Writing Without Left-to-Right: Diffusion Language Models, Bytes and Multi-Token Prediction", codes: ["R1.3","R1.4"], label: "R1.3 · R1.4", tier: "e", minutes: 35, fast: true},
+  {file: "r1-reasoning-in-latent-space-coconut.html", module: "R1", title: "Thinking Without Words: Latent Reasoning and World Models", codes: ["R1.5","R1.6"], label: "R1.5 · R1.6", tier: "e", minutes: 30, fast: true},
+  {file: "r2-scaling-laws-then-and-now.html", module: "R2", title: "Scaling Laws, Then and Now, and the Data That Feeds Them", codes: ["R2.1","R2.2"], label: "R2.1 · R2.2", tier: "n", minutes: 40, star: true},
+  {file: "r2-synthetic-data-and-model-collapse.html", module: "R2", title: "Synthetic Data, Cheaper Training and Model Merging", codes: ["R2.3","R2.4","R2.5"], label: "R2.3 – R2.5", tier: "n", minutes: 40, fast: true},
+  {file: "r3-from-rlhf-to-dpo-to.html", module: "R3", title: "From RLHF to DPO to Verifiable Rewards: How Reasoning Models Are Trained", codes: ["R3.1","R3.2"], label: "R3.1 · R3.2", tier: "n", minutes: 40, star: true, fast: true},
+  {file: "r3-process-reward-models-and-verifiers.html", module: "R3", title: "Buying Accuracy With Thinking: Verifiers, Process Rewards and Test-Time Scaling", codes: ["R3.3","R3.4"], label: "R3.3 · R3.4", tier: "n", minutes: 40, fast: true},
+  {file: "r3-constitutional-ai-and-rl-from.html", module: "R3", title: "Written Principles and Gamed Rewards: Constitutional AI, RLAIF and Reward Hacking", codes: ["R3.5","R3.6"], label: "R3.5 · R3.6", tier: "n", minutes: 40},
+  {file: "r4-sycophancy.html", module: "R4", title: "Sycophancy, and Models That Behave Differently When Watched", codes: ["R4.1","R4.2"], label: "R4.1 · R4.2", tier: "n", minutes: 38, star: true, fast: true},
+  {file: "r4-chain-of-thought-faithfulness-and.html", module: "R4", title: "Can You Trust What the Model Says It Thought? Reasoning Traces, Test Awareness and AI Control", codes: ["R4.3","R4.4","R4.5"], label: "R4.3 – R4.5", tier: "e", minutes: 38, fast: true},
+  {file: "r5-superposition-and-sparse-autoencoders.html", module: "R5", title: "Superposition, Sparse Autoencoders and Attribution Graphs: Reading a Model's Internals", codes: ["R5.1","R5.2"], label: "R5.1 · R5.2", tier: "e", minutes: 40, star: true, fast: true},
   {file: "a1-know-your-agent.html", module: "A1", title: "Know Your Agent: How AI Agents Get Permission to Pay", codes: ["A1.1","A1.2","A1.3","A1.4","A1.5"], label: "A1.1 – A1.5", tier: "n", star: true, fast: true, minutes: 40}
 ];
 

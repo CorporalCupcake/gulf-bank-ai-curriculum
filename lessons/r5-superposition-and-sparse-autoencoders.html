@@ -1,0 +1,704 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Superposition, Sparse Autoencoders and Attribution Graphs: Reading a Model's Internals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 13px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  .ax { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; fill: none; }
+  .fv { stroke: var(--neutral); stroke-width: 2; }
+  .fv.on { stroke: var(--accent); stroke-width: 3.2; }
+  .fdot { fill: var(--neutral); }
+  .fdot.on { fill: var(--accent); }
+  .dec { stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; }
+  .dec.weak { stroke: var(--warn); stroke-width: 1.6; stroke-dasharray: 3 3; }
+  .tru { fill: var(--ink); }
+  .tru.hit { fill: var(--ok); }
+  .tru.miss { fill: var(--bad); }
+  .cv-th { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-emp { fill: var(--ink); }
+  .cv-ref { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 4 4; }
+  .cv-bad { stroke: var(--bad); stroke-width: 2.4; fill: none; }
+  .rd { fill: var(--accent); fill-opacity: .85; }
+  .rd.ph { fill: var(--bad); fill-opacity: .8; }
+  .nd { fill: var(--surface); stroke: var(--ink); stroke-width: 1.4; }
+  .nd.on { fill: var(--accent); fill-opacity: .18; stroke: var(--accent); stroke-width: 2; }
+  .nd.off { stroke: var(--muted); stroke-dasharray: 3 3; fill: var(--sunk); }
+  .ed { stroke: var(--accent); fill: none; }
+  .ed.off { stroke: var(--muted); stroke-dasharray: 3 3; }
+  .pbar { fill: var(--neutral); }
+  .pbar.top { fill: var(--accent); }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track R · Research frontier: AI, ML and data science</span>
+    <span>Module R5 · Interpretability science</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>R5.1 · R5.2</span>
+        <span class="pill e">Edge</span>
+        <span class="star" title="Priority topic">★</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Superposition, Sparse Autoencoders and Attribution Graphs: Reading a Model's Internals</h1>
+      <p class="dek">Why a model's neurons are not its concepts, how sparse autoencoders pull the concepts back out, and how transcoders and attribution graphs trace a chain of internal steps from prompt to answer, with an honest account of what still goes wrong.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A network stores far more concepts than it has neurons by packing them in as overlapping directions, which works only because few concepts are active at once; sparse autoencoders learn a dictionary that unpacks those directions into readable features, and transcoders with attribution graphs use that dictionary to draw the pathway from prompt to answer, though so far for a minority of prompts and with a large unexplained remainder.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Open a language model and look at one neuron in the middle of the network. You might hope it means something: "Arabic names", "refund requests", "legal text". Mostly it doesn't. The same neuron fires for a clump of unrelated things: some Arabic honorifics, some DNA sequences, a kind of punctuation in code. Researchers call this a <strong>polysemantic</strong> neuron. The neuron is not the unit of meaning.</p>
+        <p>Why would a network do that? Because it has more things to represent than it has neurons. A model has to track thousands upon thousands of concepts (every language, entity, style, fact pattern and code idiom), and a layer might have a few thousand neurons. The model's answer is to <strong>superpose</strong> concepts: give each concept its own <em>direction</em> in the layer's activation space, not its own neuron, and let the directions overlap slightly. The picture is a long list of people sharing a small office by taking turns at the desks. It works if few people are in at once.</p>
+        <p>That condition, that few concepts are active at once, is called <strong>sparsity</strong>, and it is the key to everything in this lesson. Sparsity is why packing works. It is also why we can undo the packing: if the true concepts are sparse, we can search for a dictionary of directions in which every activation is explained by only a handful of entries. That search is what a <strong>sparse autoencoder</strong> (SAE) does.</p>
+        <p>An SAE tells you what ingredients are present at one place in the network. The next question is how the model got from the prompt to its answer. <strong>Transcoders</strong> and <strong>attribution graphs</strong> answer that: they replace the model's dense layers with sparse, readable stand-ins, then trace which features feed which, from the prompt, through intermediate concepts, to the output. In one published example, asked for "the capital of the state containing Dallas", the model internally activates something like <em>Texas</em> before it says <em>Austin</em>. It does not jump straight from "Dallas" to "Austin". You can see, and test, the middle step.</p>
+      </div>
+
+      <figure class="figure" id="fig-sup">
+        <div class="fig-head"><span class="fig-title">Five concepts in a two-dimensional space</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> switch on one concept. Its own readout is high, but two neighbours show a small false reading (red). Switch on a second and a third: the false readings grow and overlap. Then drag the bias down. It suppresses the phantoms, but at the cost of shrinking the real readings. Below, the curve shows why this still pays when concepts are rare.</p>
+        <div class="toggles" role="group" aria-label="Active concepts" id="sup-toggles"></div>
+        <div class="chart-wrap" id="sup-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-bias">Readout bias (shifts every readout down) <output for="s-bias"></output></label><input type="range" id="s-bias" min="-0.6" max="0" step="0.02" value="-0.2"></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <div class="chart-wrap" id="sup-curve" style="margin-top:14px"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Five concepts packed into 2 dimensions (best bias for each rate)</span>
+          <span><i style="background:var(--warn)"></i>Dedicate both dimensions to two concepts, drop the rest</span>
+        </div>
+        <p class="sim-note">Simulated: five concept directions at equal angles (72° apart) in 2D, each unit length. A concept that is on has amplitude 1 in the top panel; in the lower curve its amplitude is uniform on 0 to 1 and each concept is on independently with the stated probability (fixed random draws, 3,000 samples per point). The model reads concept <i>i</i> back as ReLU(sum of overlaps + bias). The bias is picked by grid search per point. Error is mean squared error per active concept. This is the simplest version of the toy model of Elhage et al. (2022); it is an illustration, not their full training experiment.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three ideas to carry through the rest of the lesson.</p>
+        <ul>
+          <li><strong>The unit of meaning is a direction, not a neuron.</strong> If you read individual neurons, you see a smear. The concepts are there, but rotated and overlapped.</li>
+          <li><strong>Sparsity buys capacity.</strong> A space with <i>d</i> dimensions can hold far more than <i>d</i> nearly-separate directions, as long as only a few are used at a time. Part 2 puts numbers on it.</li>
+          <li><strong>Interpretability is now a measurement science with open questions.</strong> A feature dictionary is a model of the model, with its own reconstruction error and failure modes. Treat its outputs as evidence to test, not as a readout of what the model "thinks".</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Neurons are the wrong basis. Features, meaning directions found by a sparse dictionary, are a better one. Attribution graphs chain features into a pathway. Each step is a hypothesis about the real computation that you check by intervening, not by looking.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-super">R5.1a · Superposition: why it is possible</h3>
+      <div class="prose">
+        <p>Start with the geometry from F1.1. In a space of <i>d</i> dimensions you can have exactly <i>d</i> perfectly perpendicular directions. But if you allow small overlaps, you can fit many more. Random directions in a high-dimensional space are almost perpendicular: the cosine between two random unit vectors has a typical size of</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>cos</mi><mi>θ</mi><mo>~</mo><mfrac><mn>1</mn><msqrt><mi>d</mi></msqrt></mfrac></math>
+        <p class="where">At <i>d</i> = 4 that is 0.5, a big overlap. At <i>d</i> = 1,000 it is 0.03. So in a 1,000-dimensional layer you can place a huge number of directions (many thousands, far beyond 1,000) whose pairwise overlaps stay around 3%. This is a property of geometry, a relative of the Johnson–Lindenstrauss lemma, and it is why the trick is available to a network.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The cost is <strong>interference</strong>. If you read off concept <i>i</i> by projecting the activation onto its direction, every other active concept leaks in a little. With <i>k</i> concepts active at once, each with random overlap of size about 1/√<i>d</i>, the leakage adds up like a random walk. Its typical size is √((<i>k</i> − 1)/<i>d</i>), against a true signal of 1. So the readout stays clean while the number of simultaneously active concepts stays well below <i>d</i>. That is the whole bargain: <em>sparse use, dense storage</em>.</p>
+      </div>
+
+      <figure class="figure" id="fig-int">
+        <div class="fig-head"><span class="fig-title">How many concepts can share a space before the noise wins?</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> set 64 dimensions. With 5 concepts active the readout noise is around 0.25, tolerable. With 30 active it is near 0.7, comparable to the signal itself. Now double the dimensions: the whole curve drops by a factor of √2. Sparsity (how few are active) matters as much as size.</p>
+        <div class="chart-wrap" id="int-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Theory: √((k−1)/d)</span>
+          <span><i style="background:var(--ink)"></i>Measured on random directions</span>
+          <span><i style="background:var(--warn)"></i>Noise = one third of the signal</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-d">Dimensions of the layer, <i>d</i> <output for="s-d"></output></label><input type="range" id="s-d" min="8" max="512" step="8" value="64"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Typical overlap of two directions</div><div class="v" id="st-cos"></div><div class="s" id="st-cos-s"></div></div>
+          <div class="stat"><div class="k">Worst overlap among 200 random directions</div><div class="v" id="st-max"></div><div class="s">about 19,900 pairs checked</div></div>
+          <div class="stat"><div class="k">Concepts active at once before noise passes 1/3</div><div class="v" id="st-k"></div><div class="s">roughly <i>d</i> ÷ 9 + 1</div></div>
+        </div>
+        <p class="sim-note">Simulated: for each point, 300 trials. Each trial draws <i>k</i> random unit directions (Gaussian, normalised), sets all <i>k</i> concepts to amplitude 1, and reads the first concept back by projection. The plotted dots are the standard deviation of the leakage onto that readout across trials. Fixed random seed, so the picture is stable. Real model features are not random and are correlated, which changes the numbers.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two refinements matter in practice.</p>
+        <ul>
+          <li><strong>Importance and sparsity set what gets packed.</strong> In the toy models of Elhage et al. (2022), a small network trained to reproduce sparse inputs stores the most important features in dedicated dimensions, packs rarer and less important ones into shared geometry (pairs, triangles, pentagons, the shapes in Simulation 1), and drops the least valuable. As sparsity rises, more features go into superposition. Real models seem to do something like this, but the evidence is indirect: we infer it from the success of the methods below.</li>
+          <li><strong>Neurons are still partly meaningful.</strong> Activation functions such as ReLU or GELU act neuron by neuron, so models are biased to align some features with the neuron basis. This is why you do sometimes find a clean neuron, and why polysemantic neurons look like a mix of a few clean features and many odd ones.</li>
+        </ul>
+        <p>Superposition is why analyses that assume "one neuron, one idea", for example inspecting single units or the attention-head studies of F5.5, are incomplete. It is also why a simple linear probe (R5.3, <a href="r5-linear-representations-probing-representation-engineering.html">the next lesson</a>) can find a concept that no single neuron shows: the concept is a direction, and a probe fits a direction.</p>
+      </div>
+
+      <h3 class="sub" id="m-sae">R5.1b · Sparse autoencoders: learning the dictionary</h3>
+      <div class="prose">
+        <p>If activations are sums of a few sparse feature directions, we can learn the feature directions from data. Collect a very large pile of activation vectors from one place in the model (say the residual stream after layer 12), for example hundreds of millions of tokens' worth. Train a small network to compress each activation into a <em>wide, sparse</em> code and then rebuild it. A standard SAE has one hidden layer that is wider than the input, often by a factor of 8 up to hundreds, in the thousands to millions of latents:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>z</mi><mo>=</mo><mtext>ReLU</mtext><mo stretchy="false">(</mo><msub><mi>W</mi><mtext>enc</mtext></msub><mi>x</mi><mo>+</mo><mi>b</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"></mspace><mover><mi>x</mi><mo>^</mo></mover><mo>=</mo><msub><mi>W</mi><mtext>dec</mtext><mi>z</mi></msub></math>
+        <p class="where"><i>x</i> is the model's activation, <i>z</i> the code (one entry per learned feature), and each column of <i>W</i><sub>dec</sub> is a feature's direction. The loss is reconstruction error plus a penalty λ times the sum of the code's entries (the L1 norm), which pushes most entries of <i>z</i> to exactly zero. The model's activation is then written as "a bit of feature 4,201, a bit of feature 77,018, and so on", a short list of directions with strengths. Other designs get sparsity directly: <strong>TopK</strong> SAEs keep only the <i>k</i> largest entries, and <strong>JumpReLU</strong> SAEs use a learned threshold per feature. Both avoid the L1 shrinkage problem below.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>There is an unavoidable tension. More sparsity gives cleaner, more interpretable features but a worse reconstruction. Less sparsity reconstructs well but lets features blur together again. The simulation below trains a real, tiny SAE in your browser on the five-concept toy of Simulation 1, so you can slide along that trade-off and see exactly what is gained and lost.</p>
+      </div>
+
+      <figure class="figure" id="fig-sae">
+        <div class="fig-head"><span class="fig-title">Train a sparse autoencoder on packed concepts</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> at sparsity penalty 0, the SAE reconstructs almost perfectly but typically recovers only three or so of the five true directions (dark dots), because it can use several overlapping latents to do the job. Raise the penalty to about 0.4: the latents snap onto the true directions (dots turn green), but the reconstruction error rises, because the penalty shrinks every strength. Press <b>Retrain with a new seed</b> a few times to see how much the outcome depends on luck.</p>
+        <div class="btns" role="group" aria-label="Training">
+          <button class="btn" type="button" id="b-seed">Retrain with a new seed</button>
+        </div>
+        <div class="chart-wrap" id="sae-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Learned feature directions (SAE decoder)</span>
+          <span><i style="background:var(--ok)"></i>True concept found</span>
+          <span><i style="background:var(--bad)"></i>True concept not found</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-lam">Sparsity penalty, λ <output for="s-lam"></output></label><input type="range" id="s-lam" min="0" max="0.5" step="0.01" value="0.01"></div>
+          <div class="ctl"><label for="s-pa">How often each concept is on <output for="s-pa"></output></label><input type="range" id="s-pa" min="0.05" max="0.5" step="0.01" value="0.1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-rec-b"><div class="k">True concepts recovered</div><div class="v" id="st3-rec"></div><div class="s">a latent within about 14° of each</div></div>
+          <div class="stat" id="st3-err-b"><div class="k">Unexplained share of the signal</div><div class="v" id="st3-err"></div><div class="s">reconstruction error ÷ signal power</div></div>
+          <div class="stat"><div class="k">Latents firing per input (L0)</div><div class="v" id="st3-l0"></div><div class="s" id="st3-l0-s"></div></div>
+          <div class="stat" id="st3-dead-b"><div class="k">Dead latents</div><div class="v" id="st3-dead"></div><div class="s">of 10, never fire</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated and genuinely trained in the page: 2D data built from the five directions of Simulation 1 (each concept on with the chosen probability, strength uniform on 0.5 to 1). The SAE has 10 latents, a ReLU encoder, unit-norm decoder columns, Adam, 1,500 steps of 128 samples, L1 penalty λ. Metrics use 2,000 fresh samples. Results vary with the seed; that variability is part of the lesson. Real SAEs have thousands to millions of latents and billions of training tokens.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What you saw in the toy shows up at full scale as named problems.</p>
+        <ul>
+          <li><strong>Shrinkage.</strong> The L1 penalty drags feature strengths down, so the SAE under-reports how strongly a feature fires. TopK and JumpReLU designs reduce this.</li>
+          <li><strong>Feature splitting.</strong> Enlarge the dictionary and a broad feature ("a city") splits into narrower ones ("Gulf cities", "Texan cities"). Neither dictionary size is "the right one"; it is a choice of resolution.</li>
+          <li><strong>Feature absorption.</strong> A general feature stops firing exactly where a more specific one does, so a feature that looks like "starts with S" has holes. Sparsity pressure causes this, and it makes features less reliable as detectors.</li>
+          <li><strong>Dead and dense latents.</strong> Some latents never fire, and a few fire on a large share of tokens without any clear meaning. Dead latents waste capacity; dense ones are partly artefacts.</li>
+          <li><strong>The unexplained remainder.</strong> Even large SAEs leave a reconstruction error, and that error is not harmless noise: swapping the model's real activation for the SAE's reconstruction typically raises the language-model loss noticeably. Some of what the model uses lives in the remainder.</li>
+        </ul>
+        <p>How do you know a feature means something? Three kinds of evidence, in rising strength. <strong>Look</strong> at the text where it fires most and see if a human or another model can name it (automated interpretation). <strong>Predict</strong>: does the label forecast where it fires on new text? <strong>Intervene</strong>: push the feature up or down and check that behaviour changes in the expected way. The most famous demonstration is a "Golden Gate Bridge" feature in Claude 3 Sonnet: amplify it and the model starts to bring the bridge into everything (Templeton et al., 2024). Intervention is the strongest test because it shows the feature is used by the model, not merely correlated with something.</p>
+      </div>
+
+      <h3 class="sub" id="m-trans">R5.2a · Transcoders: sparse stand-ins for the model's own layers</h3>
+      <div class="prose">
+        <p>An SAE reads the activation at one point. To explain computation, how one layer's features produce the next layer's, you need to represent the <em>layers</em>, not just the snapshots. A <strong>transcoder</strong> is built like an SAE, but it does not rebuild its own input. It takes the input to an MLP block and predicts that block's <em>output</em>, through a wide sparse layer of features:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>MLP</mtext><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>≈</mo><msub><mi>W</mi><mtext>dec</mtext></msub><mtext>ReLU</mtext><mo stretchy="false">(</mo><msub><mi>W</mi><mtext>enc</mtext></msub><mi>x</mi><mo>+</mo><mi>b</mi><mo stretchy="false">)</mo></math>
+        <p class="where">Same shape as an SAE, different target. The original MLP is dense and tangled; its sparse replacement is a short list of active features, each with an input pattern that says <em>when</em> it fires and an output direction that says <em>what it writes</em>. That separation is what makes tracing possible (Dunefsky et al., 2024): the effect of feature A on feature B is a clean product of A's output direction and B's input pattern.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Anthropic's circuit-tracing work (Ameisen et al., 2025) extends this to <strong>cross-layer transcoders</strong>: a feature reads from the residual stream at one layer and can write to <em>all</em> the later layers' MLP outputs. This matters because a concept that the model computes once and uses many times would otherwise be copied as many separate features, one per layer, making graphs cluttered. A single set of cross-layer transcoders replaces all the MLPs together, giving what they call a <strong>replacement model</strong>: a stand-in that tries to match the original's outputs while being made of sparse, nameable pieces.</p>
+        <p>The replacement is not perfect. On any particular prompt, the stand-in's activations differ from the real model's by some leftover, and the method keeps that leftover as explicit <strong>error nodes</strong>. The share of the final answer that flows through error nodes rather than features is a direct measure of how much the explanation fails to explain.</p>
+      </div>
+
+      <h3 class="sub" id="m-graph">R5.2b · Attribution graphs: tracing one prompt</h3>
+      <div class="prose">
+        <p>An <strong>attribution graph</strong> is a diagram for a single prompt and a single output token. Nodes are the active features (plus the prompt tokens, the output, and error nodes). An edge from A to B says how much A's activity directly pushed up B's, calculated as the product of A's activation and the linear effect of A's output on B's input. To make this effect well defined and linear, the method builds a <strong>local replacement model</strong> for that prompt: it takes the real model's attention patterns and normalisation scale factors for that prompt and freezes them as constants. With those frozen, the path from features to features is linear, and edge weights are exact for that stand-in.</p>
+        <p>Raw graphs have thousands of nodes. The researchers prune them to those that matter for the output, group similar features into labelled <strong>supernodes</strong> by hand, and read the story off the result. The fixed attention patterns are an important limit. The graph can tell you that a feature <em>was moved</em> from one position to another by attention, but not <em>why attention chose to</em>. That is a separate analysis.</p>
+        <p>The headline example is two-step reasoning. For "Fact: the capital of the state containing Dallas is", the graph shows features for <em>Dallas</em> feeding features for <em>Texas</em>, which together with <em>capital</em> features feed an output promoting <em>Austin</em>. There is also a weaker direct path from Dallas to Austin that skips Texas. A tidy graph is only a hypothesis. The test is to intervene: suppress the Texas features and the answer should weaken; replace them with California features and, if the story is right, the model should say Sacramento. Anthropic reported that this works (Lindsey et al., 2025). The simulation below lets you do the same on a schematic of that graph.</p>
+      </div>
+
+      <figure class="figure" id="fig-graph">
+        <div class="fig-head"><span class="fig-title">A hand-built attribution graph you can intervene on</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> leave everything on: Austin wins. Remove the middle step ("Dallas implies a Texas feature"): the direct path still gives Austin a little, but the answer collapses. Now keep the middle step but <b>replace</b> the state with California: the same circuit now answers Sacramento. Switch off "say a capital" and the model names the state instead of its capital.</p>
+        <div class="toggles" role="group" aria-label="Interventions" id="g-toggles"></div>
+        <div class="btns" role="group" aria-label="Replace the intermediate state" style="margin-top:10px" id="g-state"></div>
+        <div class="chart-wrap" id="g-chart"></div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Schematic, not real model data. The graph follows the published Dallas to Texas to Austin example in shape only. All weights are invented for teaching: a capital is promoted when a state feature and the "say a capital" feature are both on (weight 3.2); a state name is promoted when the capital feature is off (2.4 and 0.3); Dallas promotes Austin directly (0.9); "other" has a fixed logit of 1.5. Probabilities are a softmax over those logits. Real graphs have thousands of features and a large error-node component.</p>
+      </figure>
+
+      <div class="prose">
+        <p>A few practical points on reading real graphs. Always check the <strong>replacement score</strong> or the share of influence on the answer that passes through error nodes: if most of it does, the picture is not explaining the model. Always <strong>validate with interventions</strong> on the real model, not just the replacement: the graph says that perturbing a feature should change the output, so do it and see. And remember that a graph is one prompt. A pattern that holds on a handful of hand-chosen prompts can fail on the next thousand.</p>
+        <p>Tooling is open. Anthropic published its circuit-tracing library in May 2025, with an interactive viewer hosted on Neuronpedia, and the library supports open-weight models such as Gemma-2-2B and Llama-3.2-1B. That means a bank team can run these methods on a small model it controls, which is the realistic way to learn them.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson sits on top of the representation ideas from the foundations track and feeds into safety and model-risk questions.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F1.1 – F1.2 · Vectors and geometry</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Near-orthogonality in high dimensions</a></span><p>Superposition is the geometry of dot products and angles. The 1/√<i>d</i> overlap of random directions is the quantitative core.</p></div>
+        <div class="link-card"><span class="code">F5.1 · F5.2 · Neurons and residual connections</span><span class="t"><a href="f5-neurons-layers-and-backpropagation.html">The residual stream is the shared workspace</a></span><p>SAEs are usually trained on the residual stream, the running sum that every layer reads from and writes to.</p></div>
+        <div class="link-card"><span class="code">F5.5 · Attention</span><span class="t"><a href="f5-attention.html">What attention moves, and what attribution graphs freeze</a></span><p>Attribution graphs hold attention patterns fixed. They show what attention carried, not why it chose.</p></div>
+        <div class="link-card"><span class="code">M1.2 · The transformer, end to end</span><span class="t"><a href="m1-tokenisation.html">Where MLP blocks sit</a></span><p>Transcoders replace the MLP blocks of the architecture you learned there.</p></div>
+        <div class="link-card"><span class="code">F5.7 · Self-supervised learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">Autoencoders and reconstruction</a></span><p>An SAE is an autoencoder with a wide, sparse middle: the same reconstruction idea with a sparsity constraint.</p></div>
+        <div class="link-card"><span class="code">R5.3 · Linear representations and probing</span><span class="t"><a href="r5-linear-representations-probing-representation-engineering.html">A concept as a direction</a></span><p>Probes and steering vectors find or use one direction at a time. SAEs find a whole dictionary of directions without being told what to look for.</p></div>
+        <div class="link-card"><span class="code">R4.3 · Chain-of-thought faithfulness</span><span class="t"><a href="r4-chain-of-thought-faithfulness-and.html">Does the written reasoning match the circuit?</a></span><p>Attribution graphs give an independent view of what the model computed, which can be compared with the reasoning it writes out.</p></div>
+        <div class="link-card"><span class="code">R4.2 · Sleeper agents and misalignment</span><span class="t"><a href="r4-sycophancy.html">Inspecting for hidden behaviours</a></span><p>A central hope for interpretability is checking what a model is doing internally, not only what it says. Today that is a research aim, not a dependable audit.</p></div>
+        <div class="link-card"><span class="code">F8 · Global and local explanations</span><span class="t"><a href="f8-global-versus-local-explanations.html">Not the same as explaining a credit decision</a></span><p>SHAP and partial dependence explain tabular models to customers and regulators. Mechanistic interpretability explains a network's internal computation to researchers. Do not mix up the two.</p></div>
+        <div class="link-card"><span class="code">G3 · Independent validation</span><span class="t"><a href="g3-independent-validation.html">What a validator can reasonably ask</a></span><p>A feature dictionary or circuit story is a model of a model. A validator would ask the usual questions: how was it tested, on what data, and how large is the error.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it touches the bank:</p>
+        <ul>
+          <li><strong>Choosing and assuring open-weight models on-premises.</strong> If you host Gemma, Llama or Qwen yourself, public SAEs (such as Gemma Scope) let you probe for features such as sycophancy, deception, or sensitive topics. That is useful evidence in a model-risk review, but not an approval on its own.</li>
+          <li><strong>Investigating odd behaviour.</strong> When an internal copilot gives a strange answer for a certain kind of Arabic or English prompt, features and graphs on a small open model may point to which concept is interfering. It is a diagnostic aid.</li>
+          <li><strong>Steering and monitoring.</strong> Research uses features as monitors, for example flagging prompts where "deception" or "jailbreak" features fire, and as steering handles. Treat this as pilot-grade, with evaluation against ordinary classifiers.</li>
+          <li><strong>Where it does not apply.</strong> Customer-facing explanations for credit or fraud decisions on classical models. Those use the methods of F8 and the model-risk documentation of G3. Nothing in this lesson substitutes for them, and I am not aware of any regulator in the Gulf that accepts feature dictionaries as an explanation standard; check CBUAE and SAMA guidance yourself.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Mechanistic interpretability went from toy models to production-scale models in about three years. The live arguments are whether SAE features are the right unit, whether this will scale to the point of useful safety guarantees, and whether simpler methods do the job just as well.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with a small number of searches. Items from the 2022–2025 papers are well known; items marked "from memory" were not re-verified.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2022</span><div><div class="t">Toy models of superposition</div><p>Elhage et al. showed in small networks that features are stored in superposition when they are sparse, in geometric patterns, and tied it to polysemantic neurons.</p><div class="src">Elhage et al., Transformer Circuits Thread, 2022</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Sparse autoencoders find interpretable features</div><p>Two independent groups applied SAEs to language-model activations and found far more interpretable directions than neurons. Anthropic's version, on a one-layer transformer, found features for things such as Arabic script, DNA and base64 text, and showed that feature splitting happens as the dictionary grows.</p><div class="src">Cunningham et al., 2023; Bricken et al., 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Scaling to frontier models</div><p>Anthropic trained SAEs with up to about 34 million features on Claude 3 Sonnet and demonstrated feature steering (the Golden Gate Bridge). OpenAI trained TopK SAEs with up to 16 million latents on GPT-4 and studied scaling laws. Google DeepMind released Gemma Scope, hundreds of open SAEs for Gemma 2, so outsiders could work on them.</p><div class="src">Templeton et al., 2024; Gao et al., 2024; Lieberum et al., 2024</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Transcoders for circuits</div><p>Dunefsky, Chlenski and Nanda showed that transcoders make circuit analysis cleaner than SAEs on MLP inputs and outputs, because the input-to-output relationship is factored.</p><div class="src">Dunefsky et al., NeurIPS 2024</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Attribution graphs on a production model, then open tools</div><p>Anthropic published circuit tracing with cross-layer transcoders and the "biology" case studies on Claude 3.5 Haiku: multi-step reasoning, planning rhymes in poetry before writing a line, shared multilingual concepts, refusal and hallucination circuits. Its own account is frank that the method gives a satisfying picture for only a minority of prompts (from memory, roughly a quarter) and leaves much unexplained. In May the library was open-sourced, with Neuronpedia hosting an interactive graph viewer.</p><div class="src">Ameisen et al., Lindsey et al., Transformer Circuits, March 2025; Anthropic, May 2025</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Doubts about SAEs as a safety tool</div><p>Benchmarks such as SAEBench found no single SAE design best on every measure, and that gains on reconstruction did not reliably mean gains on usefulness. Google DeepMind's interpretability team reported negative results for SAEs on downstream tasks such as detecting harmful intent, where simple linear probes did as well or better, and said it was shifting emphasis (from memory; check their post for the exact claims).</p><div class="src">Karvonen et al., SAEBench, 2025; Google DeepMind alignment-research posts, 2025</div></div></li>
+        <li><span class="yr">Late 2025 – 2026</span><div><div class="t">Larger open SAE suites and continued debate</div><p>DeepMind released Gemma Scope 2. Its technical paper says there is still no consensus on a reliable quality metric for SAEs or their latents, that costs grow quickly as more layers are covered, and that its list of open problems reflects the team's changed views over the previous year. Recent work also questions how reliable SAE benchmarks themselves are.</p><div class="src">Gemma Scope 2 technical paper, Google DeepMind; arXiv 2605.18229 (checked by search only; not read in full)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, for a bank team:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Linear probes on hidden states</b></td><td>Fit a classifier on activations to test whether a concept is represented. Cheap and often the strong baseline.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Public SAEs on open models</b></td><td>Use Gemma Scope or similar to browse features and steer on a model you host.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Attribution graphs with open tooling</b></td><td>Trace single prompts on small open models; analyses are hand-built and slow.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Interpretability inside frontier labs' safety work</b></td><td>Labs describe using feature-based checks in pre-deployment investigations. Details are not independently verifiable.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Feature-based monitors of production traffic</b></td><td>Flag prompts when a "jailbreak" or "deception" feature fires.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Interpretability as a regulatory explanation</b></td><td>Using features or circuits to explain a decision to a customer or regulator.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Sparse features are a real and useful way to look inside a model, and attribution graphs have produced genuine, testable discoveries on single prompts; but the methods leave a large unexplained remainder, are expensive, and have not yet beaten simple baselines at the practical tasks that matter for assurance.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in papers, vendor demos and internal write-ups. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Taking a feature's name as its meaning</div><p>The label "deception" was written from the top ten examples. Beyond those, the feature may fire on something else entirely.</p><div class="spot"><b>Spot it</b>Ask how the label was validated on random activations, not just top ones, and whether anyone intervened on the feature.</div></li>
+        <li><div class="t">Ignoring the reconstruction error</div><p>An SAE that rebuilds the activation poorly makes any feature story partial. Splicing it into the model can raise loss a lot.</p><div class="spot"><b>Spot it</b>Ask for the loss recovered when the SAE is spliced in, and for the share of variance left unexplained.</div></li>
+        <li><div class="t">Cherry-picked examples</div><p>A beautiful graph for one prompt, with no sense of how many failed.</p><div class="spot"><b>Spot it</b>Ask how many prompts were tried and how many gave a usable account. Demos that never mention a failure rate are marketing.</div></li>
+        <li><div class="t">Mistaking correlation for use</div><p>A feature fires when the model handles fraud-related text, but the model's behaviour does not depend on it.</p><div class="spot"><b>Spot it</b>Ask for the intervention: suppress or amplify the feature and see if behaviour changes. No ablation, no claim of causal role.</div></li>
+        <li><div class="t">Explanations of the replacement, not the model</div><p>The graph is of a stand-in with frozen attention. Its edges can differ from what the real model does.</p><div class="spot"><b>Spot it</b>Check the share of the answer that flows through error nodes, and whether interventions were tested on the original model.</div></li>
+        <li><div class="t">Treating dictionary size as a fact</div><p>"The model has 34 million features." It has as many as the researchers chose to train, with splitting and absorption varying by size.</p><div class="spot"><b>Spot it</b>Ask whether results hold at two dictionary sizes, and with a different seed.</div></li>
+        <li><div class="t">Beating a baseline you never ran</div><p>An SAE-based detector for harmful requests is reported without comparing a linear probe or a fine-tuned classifier.</p><div class="spot"><b>Spot it</b>Ask for the best simple baseline and the numbers side by side.</div></li>
+        <li><div class="t">Claiming "we can see what the model is thinking"</div><p>Overclaim in a vendor deck or a risk paper. Interpretability gives partial, hypothesis-grade evidence about internal computation.</p><div class="spot"><b>Spot it</b>Look for the words "complete", "guarantee", "audit-ready". They are red flags in this field at the end of 2026.</div></li>
+        <li><div class="t">Confusing this with model explanation for customers</div><p>Proposing feature dictionaries as the answer to a regulator's request for credit-decision reasons.</p><div class="spot"><b>Spot it</b>Ask whether the model in question is a transformer language model or a scorecard or gradient-boosted model. For the latter, use F8 methods.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“There is real progress in looking inside language models. Researchers can now pull out thousands of internal concepts and, for a single question, trace how the model arrived at its answer, for example going from a city to its state to the capital. It is useful for understanding and testing models we host ourselves. But it is a research tool: it explains a minority of cases and leaves a lot unexplained. I would not put it in front of a regulator as proof of how a model decides. For that we rely on testing behaviour, which we can evidence today.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“Neurons are polysemantic because the model stores more sparse features than it has dimensions, in superposition. A sparse autoencoder learns an overcomplete dictionary with a sparsity constraint, and its quality is a trade-off between sparsity and reconstruction, with known issues of shrinkage, splitting and absorption. Transcoders replace MLP blocks with sparse stand-ins so that edges between features are well defined, and attribution graphs freeze attention to make the path linear for one prompt. I'd always check the error-node share and validate with interventions on the real model, and compare against a linear-probe baseline before claiming SAEs add anything.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“What is a feature, exactly?”</summary><div class="ans"><p>A direction in a layer's activation space that the model appears to use to represent some concept, found by a method such as a sparse autoencoder. It is a working definition. Different dictionaries carve the space differently, and a feature's meaning is a hypothesis you test by looking, predicting and intervening.</p></div></details>
+        <details class="reveal"><summary>“Why not just look at neurons?”</summary><div class="ans"><p>Because a single neuron mixes several unrelated concepts. The model has more concepts than neurons, so it overlaps them. Concepts are directions across many neurons. A neuron is a bad unit of analysis, though occasionally a neuron is clean.</p></div></details>
+        <details class="reveal"><summary>“Can this tell us why the model gave a wrong answer to a customer?”</summary><div class="ans"><p>Sometimes, on a model we can inspect, for a specific prompt, with effort. It might show that the model retrieved the wrong entity or ignored an instruction. It is a research-grade diagnostic for open-weight models. For hosted proprietary models we cannot do it ourselves, and for routine incident work we start with logs, retrieval traces and evaluation sets.</p></div></details>
+        <details class="reveal"><summary>“Does this solve the black-box problem for regulators?”</summary><div class="ans"><p>Not yet. The methods explain a fraction of cases, leave a measurable unexplained remainder, and have not been standardised or accepted as evidence in any supervisory framework I know of. We should keep to behavioural testing, documentation and monitoring, and watch the research.</p></div></details>
+        <details class="reveal"><summary>“I read that people are moving away from SAEs. Is that true?”</summary><div class="ans"><p>Partly. Some groups report that SAEs fell short of simple probes on downstream safety tasks and have shifted effort, while others continue to scale SAEs and transcoders for discovery, and open suites keep appearing. The sensible reading: SAEs are good for exploring and hypothesis-generation, and not yet shown superior for practical detection. I'd check the specific claim against the source.</p></div></details>
+        <details class="reveal"><summary>“Should our team build this?”</summary><div class="ans"><p>Learn it, don't build it from scratch. Use public SAEs and the open circuit-tracing library on a small open model to build skill and to run occasional investigations. A production monitor or a training run of our own SAEs is expensive and has a weak track record against linear probes, so it needs a clear business case first.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A layer has 256 dimensions. About how large is the typical overlap (cosine) between two random directions, and what is the typical interference when 17 concepts are active at once?</summary><div class="ans"><p>Cosine about 1/√256 = 1/16 ≈ 0.06. Interference ≈ √((17 − 1)/256) = √0.0625 = 0.25, a quarter of the signal. This is why packing works only when few concepts are active.</p></div></details>
+        <details class="reveal"><summary>2. Why does sparsity make superposition possible, and what happens if concepts are dense?</summary><div class="ans"><p>When few concepts are active at once, the interference between overlapping directions is small, so each can still be read back. If many are active together the leakage adds up and readouts become unreliable. The model would need dedicated dimensions for its most important concepts.</p></div></details>
+        <details class="reveal"><summary>3. In an SAE, what does raising the L1 penalty do, and what do you lose?</summary><div class="ans"><p>It forces more latents to zero, so each input is explained by fewer, usually cleaner features. You lose reconstruction accuracy, and the L1 term also shrinks strengths. TopK and JumpReLU designs address the shrinkage.</p></div></details>
+        <details class="reveal"><summary>4. Explain feature splitting and feature absorption in one sentence each.</summary><div class="ans"><p>Splitting: with a bigger dictionary a broad feature divides into narrower ones. Absorption: a general feature stops firing where a more specific feature already covers the case, leaving gaps in the general one.</p></div></details>
+        <details class="reveal"><summary>5. How is a transcoder different from an SAE, and why does that help trace computation?</summary><div class="ans"><p>An SAE rebuilds its own input at one point; a transcoder predicts an MLP block's output from its input through a sparse layer. That gives each feature an input pattern and an output direction, so the effect of one feature on a later one is a clean product, which is what attribution edges need.</p></div></details>
+        <details class="reveal"><summary>6. An attribution graph shows Dallas leading to Texas leading to Austin. What would count as evidence that the Texas step is really used?</summary><div class="ans"><p>An intervention on the real model: suppress the Texas features and the Austin probability should fall; substitute California features and the model should move to Sacramento. A tidy graph without intervention is only a story.</p></div></details>
+        <details class="reveal"><summary>7. What do error nodes measure, and why are they the first thing you check?</summary><div class="ans"><p>The part of the model's computation that the replacement model fails to capture on that prompt. If much of the influence on the answer flows through error nodes, the graph is explaining little.</p></div></details>
+        <details class="reveal"><summary>8. A vendor says its SAE-based detector finds harmful prompts better than anything else. What do you ask for?</summary><div class="ans"><p>A comparison against a linear probe and a fine-tuned classifier on the same held-out data, with intervals, performance in Arabic as well as English, and the false alarm rate at the operating point. Published evidence so far shows simple probes are strong baselines.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>N. Elhage et al. <a href="https://transformer-circuits.pub/2022/toy_model/index.html">Toy Models of Superposition</a>. Transformer Circuits Thread, 2022.</li>
+        <li>H. Cunningham, A. Ewart, L. Riggs, R. Huben, L. Sharkey. <a href="https://arxiv.org/abs/2309.08600">Sparse Autoencoders Find Highly Interpretable Features in Language Models</a>. arXiv, 2023.</li>
+        <li>T. Bricken et al. <a href="https://transformer-circuits.pub/2023/monosemantic-features/index.html">Towards Monosemanticity: Decomposing Language Models With Dictionary Learning</a>. Transformer Circuits Thread, 2023.</li>
+        <li>A. Templeton et al. <a href="https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html">Scaling Monosemanticity: Extracting Interpretable Features from Claude 3 Sonnet</a>. Transformer Circuits Thread, 2024.</li>
+        <li>L. Gao et al. <a href="https://arxiv.org/abs/2406.04093">Scaling and Evaluating Sparse Autoencoders</a>. OpenAI, 2024. TopK SAEs.</li>
+        <li>T. Lieberum et al. <a href="https://arxiv.org/abs/2408.05147">Gemma Scope: Open Sparse Autoencoders Everywhere All At Once on Gemma 2</a>. BlackboxNLP, 2024.</li>
+        <li>Google DeepMind. <a href="https://storage.googleapis.com/deepmind-media/DeepMind.com/Blog/gemma-scope-2-helping-the-ai-safety-community-deepen-understanding-of-complex-language-model-behavior/Gemma_Scope_2_Technical_Paper.pdf">Gemma Scope 2 technical paper</a>. Includes open problems and the state of SAE evaluation.</li>
+        <li>J. Dunefsky, P. Chlenski, N. Nanda. <a href="https://arxiv.org/abs/2406.11944">Transcoders Find Interpretable LLM Feature Circuits</a>. NeurIPS, 2024.</li>
+        <li>E. Ameisen et al. <a href="https://transformer-circuits.pub/2025/attribution-graphs/methods.html">Circuit Tracing: Revealing Computational Graphs in Language Models</a>. Transformer Circuits Thread, 2025.</li>
+        <li>J. Lindsey et al. <a href="https://transformer-circuits.pub/2025/attribution-graphs/biology.html">On the Biology of a Large Language Model</a>. Transformer Circuits Thread, 2025.</li>
+        <li>Anthropic. <a href="https://www.anthropic.com/research/open-source-circuit-tracing">Open-sourcing circuit-tracing tools</a>. May 2025. Code: <a href="https://github.com/safety-research/circuit-tracer">safety-research/circuit-tracer</a>; viewer on <a href="https://www.neuronpedia.org/graph/info">Neuronpedia</a>.</li>
+        <li>A. Karvonen et al. <a href="https://arxiv.org/abs/2503.09532">SAEBench: A Comprehensive Benchmark for Sparse Autoencoders in Language Model Interpretability</a>. 2025.</li>
+        <li>D. Chanin et al. <a href="https://arxiv.org/abs/2409.14507">A is for Absorption: Studying Feature Splitting and Absorption in Sparse Autoencoders</a>. 2024.</li>
+        <li><a href="https://arxiv.org/abs/2605.18229">Are Sparse Autoencoder Benchmarks Reliable?</a> arXiv 2605.18229 (found by search; not read in full).</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in R5: Linear representations, probing, representation engineering (R5.3)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { let s = seed >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = 0; while (!u) u = r(); const v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+
+  const NF = 5;
+  const FD = [0, 1, 2, 3, 4].map(k => [Math.cos(2 * Math.PI * k / NF + Math.PI / 2), Math.sin(2 * Math.PI * k / NF + Math.PI / 2)]);
+  const G = FD.map(a => FD.map(b => a[0] * b[0] + a[1] * b[1]));
+  const NAMES = ["Arabic name", "Wire transfer", "Refund", "Overseas", "Payroll"];
+
+  // =====================================================================
+  // Simulation 1: superposition toy
+  // =====================================================================
+  const S1 = { on: [false, false, false, false, false], b: -0.2 };
+  const supBox = $("sup-chart"), curveBox = $("sup-curve"), tg = $("sup-toggles");
+  NAMES.forEach((n, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "toggle"; b.textContent = n; b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => { S1.on[i] = !S1.on[i]; b.setAttribute("aria-pressed", String(S1.on[i])); renderSup(); });
+    tg.appendChild(b);
+  });
+  function readouts(b) {
+    return FD.map((_, i) => Math.max(0, S1.on.reduce((s, o, j) => s + (o ? G[i][j] : 0), 0) + b));
+  }
+  function renderSup() {
+    const W = Math.max(300, supBox.clientWidth), H = 290;
+    const svg = mk(supBox, W, H, "Five concept directions in two dimensions and their readouts");
+    const cx = Math.min(130, W * 0.3), cy = 140, R = Math.min(100, W * 0.24);
+    L.svg("circle", { cx, cy, r: R, class: "ax" }, svg);
+    FD.forEach((d, i) => {
+      L.svg("line", { x1: cx, y1: cy, x2: cx + R * d[0], y2: cy - R * d[1], class: "fv" + (S1.on[i] ? " on" : "") }, svg);
+      L.svg("circle", { cx: cx + R * d[0], cy: cy - R * d[1], r: 5, class: "fdot" + (S1.on[i] ? " on" : "") }, svg);
+      tx(svg, cx + (R + 14) * d[0], cy - (R + 14) * d[1] + 4, String.fromCharCode(65 + i), { "text-anchor": "middle", class: "lbl-strong" });
+    });
+    let px = 0, py = 0; S1.on.forEach((o, i) => { if (o) { px += FD[i][0]; py += FD[i][1]; } });
+    if (S1.on.some(Boolean)) {
+      const s = Math.min(1, (R * 1.15) / Math.max(1e-6, Math.hypot(px, py) * R));
+      L.svg("circle", { cx: cx + R * px * s, cy: cy - R * py * s, r: 5.5, fill: "var(--ink)" }, svg);
+    }
+    const r = readouts(S1.b);
+    const bx = cx + R + 62, bw = W - bx - 44, bh = 18;
+    tx(svg, bx, 18, "Readout of each concept", { class: "lbl-strong" });
+    const X = L.scale(0, 1, bx + 56, bx + 56 + Math.max(60, bw - 56));
+    r.forEach((v, i) => {
+      const y = 36 + i * 44, real = S1.on[i];
+      tx(svg, bx, y + 13, String.fromCharCode(65 + i) + " " + (real ? "(on)" : "(off)"), { class: "lbl-ink" });
+      L.svg("rect", { x: X(0), y, width: Math.max(0, X(Math.min(v, 1.2)) - X(0)), height: bh, rx: 3, class: "rd" + (!real && v > 0.005 ? " ph" : "") }, svg);
+      tx(svg, X(Math.min(v, 1.2)) + 5, y + 13, v.toFixed(2), { class: "lbl-ink" });
+    });
+    tx(svg, bx, H - 6, "red = reads as on, but is off", { class: "lbl-warn" });
+    const act = S1.on.filter(Boolean).length;
+    const ph = r.filter((v, i) => !S1.on[i] && v > 0.05).length;
+    const shrink = S1.on.map((o, i) => o ? r[i] : null).filter(v => v !== null);
+    $("s1-verdict").innerHTML = act === 0
+      ? "Nothing is on. Switch on a concept."
+      : act === 1 ? "One concept on: its readout is <b>" + shrink[0].toFixed(2) + "</b> and <b>" + ph + "</b> neighbour(s) show a false reading. Packing five directions into two dimensions guarantees some overlap."
+      : "<b>" + act + " concepts on</b>: " + ph + " off concept(s) now read as active, and the real readouts range from " + Math.min(...shrink).toFixed(2) + " to " + Math.max(...shrink).toFixed(2) + ". The more that are on at once, the worse the interference: this is why the trick needs sparsity.";
+  }
+  L.bind("s-bias", v => v.toFixed(2), v => { S1.b = v; renderSup(); });
+
+  // sparsity curve (Monte Carlo, fixed seed)
+  const CURVE = [];
+  (function () {
+    [0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9].forEach(p => {
+      const r = rng(5), n = 3000, S = [];
+      for (let s = 0; s < n; s++) { const a = []; for (let i = 0; i < NF; i++) a.push(r() < p ? r() : 0); S.push(a); }
+      let best = 1e9;
+      for (let b = -0.8; b <= 0.0001; b += 0.04) {
+        let Lo = 0;
+        for (const a of S) for (let i = 0; i < NF; i++) { let o = b; for (let j = 0; j < NF; j++) o += G[i][j] * a[j]; o = Math.max(0, o); Lo += (o - a[i]) * (o - a[i]); }
+        best = Math.min(best, Lo / n);
+      }
+      // dedicated: features 0 and 1 perfect, 2..4 dropped
+      let drop = 0; for (const a of S) for (let i = 2; i < NF; i++) drop += a[i] * a[i]; drop /= n;
+      const act = NF * p / 3; // mean squared amplitude of active (1/3) times expected number active... per active concept normaliser
+      CURVE.push({ p, sup: best / (NF * p * (1 / 3)), ded: drop / (NF * p * (1 / 3)) });
+    });
+  })();
+  function renderCurve() {
+    const W = Math.max(300, curveBox.clientWidth), H = 220, m = { l: 48, r: 14, t: 14, b: 44 };
+    const svg = mk(curveBox, W, H, "Error against how often concepts are on");
+    const x = L.scale(0, 1, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, pct(v), { "text-anchor": "end" });
+    });
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => tx(svg, x(v), H - m.b + 16, pct(v), { "text-anchor": "middle" }));
+    L.svg("path", { d: L.path(CURVE.map(c => [x(c.p), y(c.sup)])), class: "cv-th" }, svg);
+    L.svg("path", { d: L.path(CURVE.map(c => [x(c.p), y(c.ded)])), class: "cv-bad", stroke: "var(--warn)" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Chance each concept is on", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Error per active concept", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+  }
+
+  // =====================================================================
+  // Simulation 2: interference
+  // =====================================================================
+  const S2 = { d: 64 };
+  const intBox = $("int-chart");
+  const KS = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64];
+  function renderInt() {
+    const d = S2.d, r = rng(1234 + d), trials = 300, emp = [];
+    KS.forEach(k => {
+      let s = 0, s2 = 0;
+      for (let t = 0; t < trials; t++) {
+        const v0 = new Array(d); let n0 = 0;
+        for (let c = 0; c < d; c++) { v0[c] = gauss(r); n0 += v0[c] * v0[c]; }
+        n0 = Math.sqrt(n0);
+        let leak = 0;
+        for (let q = 1; q < k; q++) {
+          let dot = 0, nn = 0;
+          for (let c = 0; c < d; c++) { const g = gauss(r); dot += g * v0[c]; nn += g * g; }
+          leak += dot / (n0 * Math.sqrt(nn));
+        }
+        s += leak; s2 += leak * leak;
+      }
+      const mean = s / trials; emp.push(Math.sqrt(Math.max(0, s2 / trials - mean * mean)));
+    });
+    const W = Math.max(300, intBox.clientWidth), H = 280, m = { l: 48, r: 14, t: 14, b: 44 };
+    const svg = mk(intBox, W, H, "Readout noise against number of concepts active");
+    const YM = 1.2, x = L.scale(0, 64, m.l, W - m.r), y = L.scale(0, YM, H - m.b, m.t);
+    [0, 0.3, 0.6, 0.9, 1.2].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, v.toFixed(1), { "text-anchor": "end" });
+    });
+    [0, 16, 32, 48, 64].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(1 / 3), y2: y(1 / 3), class: "cv-ref" }, svg);
+    tx(svg, W - m.r - 4, y(1 / 3) - 6, "noise = 1/3 of signal", { "text-anchor": "end", class: "lbl-warn" });
+    const pts = []; for (let k = 1; k <= 64; k += 1) pts.push([x(k), y(Math.min(YM, Math.sqrt((k - 1) / d)))]);
+    L.svg("path", { d: L.path(pts), class: "cv-th" }, svg);
+    KS.forEach((k, i) => L.svg("circle", { cx: x(k), cy: y(Math.min(YM, emp[i])), r: 4, class: "cv-emp" }, svg));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Concepts active at once, k", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Leakage onto a readout", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    // worst overlap among 200 random directions
+    const N = 200, V = []; const rr = rng(77 + d);
+    for (let i = 0; i < N; i++) { const v = []; let nn = 0; for (let c = 0; c < d; c++) { const g = gauss(rr); v.push(g); nn += g * g; } nn = Math.sqrt(nn); V.push(v.map(z => z / nn)); }
+    let mx = 0;
+    for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) { let dt = 0; for (let c = 0; c < d; c++) dt += V[i][c] * V[j][c]; mx = Math.max(mx, Math.abs(dt)); }
+    $("st-cos").textContent = (1 / Math.sqrt(d)).toFixed(3);
+    $("st-cos-s").textContent = "1 ÷ √" + d + ", about " + (Math.acos(1 / Math.sqrt(d)) * 180 / Math.PI).toFixed(0) + "° from perpendicular";
+    $("st-max").textContent = mx.toFixed(2);
+    $("st-k").textContent = String(Math.floor(d / 9) + 1);
+  }
+  L.bind("s-d", v => String(v), v => { S2.d = v; renderInt(); });
+
+  // =====================================================================
+  // Simulation 3: train a real tiny SAE
+  // =====================================================================
+  const S3 = { lam: 0.01, p: 0.1, seed: 11 };
+  const saeBox = $("sae-chart");
+  function sampleX(r, p) {
+    const x = [0, 0];
+    for (let i = 0; i < NF; i++) if (r() < p) { const v = 0.5 + 0.5 * r(); x[0] += v * FD[i][0]; x[1] += v * FD[i][1]; }
+    return x;
+  }
+  function trainSAE(p, lam, seed) {
+    const M = 10, steps = 1500, B = 128, lr = 0.01, b1 = 0.9, b2 = 0.999, r = rng(seed);
+    const D = [], E = [], be = new Array(M).fill(0);
+    for (let j = 0; j < M; j++) { const a = 2 * Math.PI * r(); D.push([Math.cos(a), Math.sin(a)]); E.push([D[j][0], D[j][1]]); }
+    const z2 = () => ({ D: D.map(() => [0, 0]), E: E.map(() => [0, 0]), b: new Array(M).fill(0) });
+    const m1 = z2(), m2 = z2();
+    function upd(g, A, Bm, k, t) {
+      A[k] = b1 * A[k] + (1 - b1) * g; Bm[k] = b2 * Bm[k] + (1 - b2) * g * g;
+      return lr * (A[k] / (1 - Math.pow(b1, t))) / (Math.sqrt(Bm[k] / (1 - Math.pow(b2, t))) + 1e-8);
+    }
+    for (let t = 1; t <= steps; t++) {
+      const gD = D.map(() => [0, 0]), gE = E.map(() => [0, 0]), gb = new Array(M).fill(0);
+      for (let n = 0; n < B; n++) {
+        const x = sampleX(r, p), z = [], pre = []; const xh = [0, 0];
+        for (let j = 0; j < M; j++) { const q = E[j][0] * x[0] + E[j][1] * x[1] + be[j]; pre.push(q); z.push(q > 0 ? q : 0); xh[0] += z[j] * D[j][0]; xh[1] += z[j] * D[j][1]; }
+        const e = [2 * (xh[0] - x[0]) / B, 2 * (xh[1] - x[1]) / B];
+        for (let j = 0; j < M; j++) {
+          gD[j][0] += e[0] * z[j]; gD[j][1] += e[1] * z[j];
+          if (pre[j] > 0) { const gz = e[0] * D[j][0] + e[1] * D[j][1] + lam / B; gE[j][0] += gz * x[0]; gE[j][1] += gz * x[1]; gb[j] += gz; }
+        }
+      }
+      for (let j = 0; j < M; j++) {
+        for (let c = 0; c < 2; c++) { D[j][c] -= upd(gD[j][c], m1.D[j], m2.D[j], c, t); E[j][c] -= upd(gE[j][c], m1.E[j], m2.E[j], c, t); }
+        be[j] -= upd(gb[j], m1.b, m2.b, j, t);
+        const nn = Math.hypot(D[j][0], D[j][1]) || 1; D[j][0] /= nn; D[j][1] /= nn;
+      }
+    }
+    const re = rng(seed + 999), NE = 2000, fire = new Array(M).fill(0);
+    let err = 0, sig = 0, l0 = 0;
+    for (let n = 0; n < NE; n++) {
+      const x = sampleX(re, p), xh = [0, 0];
+      for (let j = 0; j < M; j++) { const q = E[j][0] * x[0] + E[j][1] * x[1] + be[j]; if (q > 0) { l0++; fire[j]++; xh[0] += q * D[j][0]; xh[1] += q * D[j][1]; } }
+      err += (xh[0] - x[0]) ** 2 + (xh[1] - x[1]) ** 2; sig += x[0] * x[0] + x[1] * x[1];
+    }
+    const alive = fire.map(f => f >= NE * 0.002);
+    const hit = FD.map(f => { let best = 0; for (let j = 0; j < M; j++) if (alive[j]) best = Math.max(best, Math.abs(D[j][0] * f[0] + D[j][1] * f[1])); return best; });
+    return { D, alive, hit, rec: hit.filter(h => h > 0.97).length, rel: sig > 0 ? err / sig : 0, l0: l0 / NE, dead: alive.filter(a => !a).length, trueL0: NF * p };
+  }
+  function renderSAE() {
+    const res = trainSAE(S3.p, S3.lam, S3.seed);
+    const W = Math.max(300, saeBox.clientWidth), H = 280, cx = W / 2, cy = 140, R = Math.min(110, W * 0.3);
+    const svg = mk(saeBox, W, H, "Learned feature directions against the true concept directions");
+    L.svg("circle", { cx, cy, r: R, class: "ax" }, svg);
+    res.D.forEach((d, j) => {
+      if (!res.alive[j]) return;
+      L.svg("line", { x1: cx - R * d[0] * 0.0, y1: cy, x2: cx + R * d[0], y2: cy - R * d[1], class: "dec" }, svg);
+    });
+    FD.forEach((f, i) => {
+      const ok = res.hit[i] > 0.97;
+      L.svg("circle", { cx: cx + (R + 8) * f[0], cy: cy - (R + 8) * f[1], r: 6.5, class: "tru " + (ok ? "hit" : "miss") }, svg);
+      tx(svg, cx + (R + 26) * f[0], cy - (R + 26) * f[1] + 4, String.fromCharCode(65 + i), { "text-anchor": "middle", class: "lbl-strong" });
+    });
+    $("st3-rec").textContent = res.rec + " of 5"; cls($("st3-rec-b"), res.rec >= 5 ? "ok" : res.rec <= 3 ? "bad" : "warn");
+    $("st3-err").textContent = pct(res.rel, 1); cls($("st3-err-b"), res.rel > 0.15 ? "bad" : res.rel > 0.04 ? "warn" : "ok");
+    $("st3-l0").textContent = res.l0.toFixed(2); $("st3-l0-s").textContent = "true concepts on per input: " + res.trueL0.toFixed(2);
+    $("st3-dead").textContent = String(res.dead); cls($("st3-dead-b"), res.dead > 3 ? "warn" : "");
+    $("s3-verdict").innerHTML = S3.lam < 0.03
+      ? "Almost no sparsity pressure: error is <b>" + pct(res.rel, 1) + "</b>, but only <b>" + res.rec + " of 5</b> true directions were found. Extra latents fire together to rebuild each input, so features are blends. Reconstruction looks great while interpretability is poor."
+      : res.rel > 0.15
+        ? "Heavy penalty: <b>" + res.rec + " of 5</b> found, but <b>" + pct(res.rel, 0) + "</b> of the signal is left unexplained. Shrinkage is eating the strengths."
+        : "Middle ground: <b>" + res.rec + " of 5</b> found with <b>" + pct(res.rel, 1) + "</b> unexplained. Try other seeds: the outcome is not guaranteed, which is a real property of SAE training.";
+  }
+  L.bind("s-lam", v => v.toFixed(2), v => { S3.lam = v; renderSAE(); });
+  L.bind("s-pa", v => pct(v), v => { S3.p = v; renderSAE(); });
+  $("b-seed").addEventListener("click", () => { S3.seed = (S3.seed * 7 + 13) % 9973; renderSAE(); });
+
+  // =====================================================================
+  // Simulation 4: attribution graph
+  // =====================================================================
+  const S4 = { noDallas: false, noCap: false, state: "auto" };
+  const OUTS = ["Austin", "Sacramento", "Springfield", "Texas", "California", "Illinois", "other"];
+  const STATES = ["TX", "CA", "IL"], STN = { TX: "Texas", CA: "California", IL: "Illinois" };
+  const gBox = $("g-chart");
+  function mkToggle(parent, label, key) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "toggle"; b.textContent = label; b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => { S4[key] = !S4[key]; b.setAttribute("aria-pressed", String(S4[key])); renderGraph(); });
+    parent.appendChild(b);
+  }
+  mkToggle($("g-toggles"), "Remove: Dallas implies a state feature", "noDallas");
+  mkToggle($("g-toggles"), "Remove: say-a-capital feature", "noCap");
+  const stateBtns = {};
+  [["auto", "Leave the state as the model chose"], ["TX", "Replace state with Texas"], ["CA", "Replace with California"], ["IL", "Replace with Illinois"]].forEach(([k, lab]) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = lab; b.setAttribute("aria-pressed", String(k === "auto"));
+    b.addEventListener("click", () => { S4.state = k; Object.entries(stateBtns).forEach(([kk, bb]) => bb.setAttribute("aria-pressed", String(kk === k))); renderGraph(); });
+    stateBtns[k] = b; $("g-state").appendChild(b);
+  });
+  function graphProbs() {
+    const dallas = S4.noDallas ? 0 : 1, cap = S4.noCap ? 0 : 1;
+    const s = { TX: 0, CA: 0, IL: 0 };
+    if (S4.state !== "auto") s[S4.state] = 1; else if (!S4.noDallas) s.TX = 1;
+    const lg = [3.2 * cap * s.TX + 0.9 * (S4.state === "auto" ? dallas : 0), 3.2 * cap * s.CA, 3.2 * cap * s.IL,
+      (2.4 * (1 - cap) + 0.3) * s.TX, (2.4 * (1 - cap) + 0.3) * s.CA, (2.4 * (1 - cap) + 0.3) * s.IL, 1.5];
+    const mx = Math.max(...lg), ex = lg.map(v => Math.exp(v - mx)), sm = ex.reduce((a, b) => a + b, 0);
+    return { p: ex.map(v => v / sm), s, cap, dallas };
+  }
+  function renderGraph() {
+    const { p, s, cap, dallas } = graphProbs();
+    const W = Math.max(300, gBox.clientWidth), H = 300;
+    const svg = mk(gBox, W, H, "Schematic attribution graph and output probabilities");
+    const c1 = 8, w1 = Math.min(104, W * 0.26), c2 = W * 0.4, w2 = Math.min(112, W * 0.28), c3 = W - Math.min(150, W * 0.38);
+    const nodes = {
+      dal: { x: c1, y: 50, w: w1, h: 34, t: "“Dallas”", on: true },
+      cap: { x: c1, y: 170, w: w1, h: 34, t: "“capital”", on: true },
+      st: { x: c2, y: 50, w: w2, h: 34, t: "state: " + (s.TX ? "Texas" : s.CA ? "California" : s.IL ? "Illinois" : "none"), on: s.TX + s.CA + s.IL > 0 },
+      sc: { x: c2, y: 170, w: w2, h: 34, t: "say a capital", on: cap > 0 }
+    };
+    const edge = (a, b, on, wt) => L.svg("path", { d: `M${a.x + a.w} ${a.y + a.h / 2} C ${(a.x + a.w + b.x) / 2} ${a.y + a.h / 2}, ${(a.x + a.w + b.x) / 2} ${b.y + b.h / 2}, ${b.x} ${b.y + b.h / 2}`, class: "ed" + (on ? "" : " off"), "stroke-width": on ? wt : 1.2 }, svg);
+    const outTop = 22, rowH = 36, bx = c3;
+    const outNode = { x: c3 - 6, y: outTop + 18, w: 6, h: 0 };
+    const stateOn = nodes.st.on;
+    edge(nodes.dal, nodes.st, !S4.noDallas && S4.state === "auto", 3.5);
+    edge(nodes.cap, nodes.sc, cap > 0, 3.5);
+    // to outputs
+    const mid = (n) => ({ x: n.x, y: n.y, w: n.w, h: n.h });
+    const toOut = (n, row, on, wt) => L.svg("path", { d: `M${n.x + n.w} ${n.y + n.h / 2} C ${(n.x + n.w + c3) / 2} ${n.y + n.h / 2}, ${(n.x + n.w + c3) / 2} ${outTop + row * rowH + 11}, ${c3 - 2} ${outTop + row * rowH + 11}`, class: "ed" + (on ? "" : " off"), "stroke-width": on ? wt : 1, opacity: on ? 0.75 : 0.5 }, svg);
+    toOut(nodes.st, 0, s.TX > 0 && cap > 0, 3.2); toOut(nodes.st, 1, s.CA > 0 && cap > 0, 3.2); toOut(nodes.st, 2, s.IL > 0 && cap > 0, 3.2);
+    toOut(nodes.sc, 0, s.TX > 0 && cap > 0, 2.4); toOut(nodes.sc, 1, s.CA > 0 && cap > 0, 2.4); toOut(nodes.sc, 2, s.IL > 0 && cap > 0, 2.4);
+    L.svg("path", { d: `M${nodes.dal.x + nodes.dal.w} ${nodes.dal.y + 8} C ${W * 0.5} 8, ${W * 0.55} ${outTop + 11}, ${c3 - 2} ${outTop + 11}`, class: "ed" + (S4.noDallas || S4.state !== "auto" ? " off" : ""), "stroke-width": 1.2 + 0.9, "stroke-dasharray": "5 3" }, svg);
+    tx(svg, W * 0.46, 14, "direct path (weak)", { class: "lbl-ink", "text-anchor": "middle" });
+    Object.values(nodes).forEach(n => {
+      L.svg("rect", { x: n.x, y: n.y, width: n.w, height: n.h, rx: 7, class: "nd " + (n.on ? "on" : "off") }, svg);
+      tx(svg, n.x + n.w / 2, n.y + n.h / 2 + 4, n.t, { "text-anchor": "middle", class: "lbl-ink" });
+    });
+    tx(svg, c1, 130, "prompt tokens", { class: "lbl-ink" });
+    tx(svg, c2, 130, "internal features", { class: "lbl-ink" });
+    const top = p.indexOf(Math.max(...p));
+    const barX = c3, bw = W - c3 - 54;
+    OUTS.forEach((o, i) => {
+      const y = outTop + i * rowH;
+      L.svg("rect", { x: barX, y, width: Math.max(1, bw * p[i]), height: 22, rx: 3, class: "pbar" + (i === top ? " top" : "") }, svg);
+      tx(svg, barX + 4, y + 15, o, { class: "lbl-ink" });
+      tx(svg, barX + Math.max(1, bw * p[i]) + 5, y + 15, pct(p[i]), { class: "lbl-ink" });
+    });
+    const topName = OUTS[top];
+    let msg = "The model says <b>" + topName + "</b> (" + pct(p[top]) + "). ";
+    if (S4.state === "auto" && !S4.noDallas && !S4.noCap) msg += "Both steps are intact: Dallas gives a Texas feature, which with the capital feature promotes Austin.";
+    else if (S4.state !== "auto" && !S4.noCap) msg += "You replaced the intermediate state with " + STN[S4.state] + ", and the answer follows it. That is what a real causal intermediate looks like: change the middle and the output changes with it.";
+    else if (S4.noCap) msg += "With the capital feature off, the same state is named instead of its capital.";
+    else if (S4.noDallas) msg += "Without the state step only the weak direct path to Austin is left (" + pct(p[0]) + "), so the model is mostly unsure. The middle step carried most of the answer.";
+    $("s4-verdict").innerHTML = msg;
+  }
+
+  function renderAll() { renderSup(); renderCurve(); renderInt(); renderSAE(); renderGraph(); }
+  renderAll();
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
+})();
+</script>
+</body>
+</html>

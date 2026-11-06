@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Buying Accuracy With Thinking: Verifiers, Process Rewards and Test-Time Scaling</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .cv-ideal { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-curve.off { stroke: var(--bad); }
+  .cv-ink { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .cv-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .cv-bad { fill: var(--bad); stroke: var(--surface); stroke-width: 2; }
+  .bar-w { fill: var(--warn); fill-opacity: .8; }
+  .bar-n { fill: var(--neutral); fill-opacity: .6; }
+  .chain { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+  .chain button { font: inherit; font-size: 13px; min-height: 40px; min-width: 40px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+  .chain button[aria-pressed="true"] { border-color: var(--bad); background: var(--bad-soft); color: var(--bad); }
+  .chain button.after { opacity: .55; }
+  .credit { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track R · Research frontier: AI, ML and data science</span>
+    <span>Module R3 · Post-training and reasoning</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>R3.3 · R3.4</span>
+        <span class="pill n">90 days</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Buying Accuracy With Thinking: Verifiers, Process Rewards and Test-Time Scaling</h1>
+      <p class="dek">Why checking an answer is easier than producing one, how scoring each reasoning step differs from scoring the final answer, how sampling many answers and voting or picking can lift accuracy, and the specific ways each trick backfires.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model can often be made more accurate by spending more compute at answer time (longer thinking, many samples, search), but every such method is only as good as the thing that judges the answers, so a hard check (code, arithmetic, a rules engine) scales well, a learned judge scales until the model learns to fool it, and a vote scales only when the right answer is already the most common one.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A credit analyst at a Gulf bank asks an assistant to compute the debt-service ratio for a retail customer: salary AED 28,000, a car loan instalment of AED 2,150, a personal finance instalment of AED 3,400, and a proposed Murabaha home finance at AED 9,300 a month. Six steps: add the existing instalments, add the new one, divide by income, compare with a limit. The assistant writes a fluent page of reasoning and lands on 45.4%. The right answer is 53.0%. Somewhere in the page it dropped the AED 2,150 car loan.</p>
+        <p>Now suppose you could ask for ten attempts. Seven say 53.0%, two say 45.4%, one says 58%. Or suppose you ran each attempt's arithmetic through a calculator. Or suppose a second model read each step and flagged the one where a figure vanished. These are the three families in this lesson. They share one idea: <strong>generating a good answer is hard, but recognising or checking one is often much easier</strong>, so spend compute on checking.</p>
+        <p>The idea has an old shape. Finding a route through a city is hard; seeing that a proposed route is wrong is quick. Writing a proof is hard; checking one is routine. If checking is cheaper than producing, then producing many candidates and keeping the best one converts money into accuracy. This is what is meant by <strong>test-time scaling</strong>: improving results by using more compute when the question is asked, with no change to the trained weights. The 2024-25 wave of "reasoning models" (see <a href="a5-reasoning-models-and-test-time.html">A5, Reasoning models and test-time compute</a>) is built on it.</p>
+      </div>
+
+      <figure class="figure" id="fig-chain">
+        <div class="fig-head"><span class="fig-title">One bad step ruins the answer, and the final grade does not say which</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> click a step to plant an error in it. The outcome grade is just "wrong" for the whole chain. A step-level grade (a process reward) points at the faulty step. Then move the sliders: longer chains with the same per-step reliability are far less often sound, and a high lucky-guess rate means plenty of right answers rest on broken reasoning.</p>
+        <div class="chain" id="chain" role="group" aria-label="Pick the step with the error"></div>
+        <div class="credit">
+          <div class="verdict" id="s1-out"></div>
+          <div class="verdict" id="s1-proc"></div>
+        </div>
+        <div class="chart-wrap" id="chain-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Chance the chain is still error-free after each step</span>
+          <span><i class="sq" style="background:var(--warn);opacity:.8"></i>Chance the first error lands on this step</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-p">Chance each step is right <output for="s-p"></output></label><input type="range" id="s-p" min="0.8" max="0.995" step="0.005" value="0.95"></div>
+          <div class="ctl"><label for="s-n">Steps in the chain <output for="s-n"></output></label><input type="range" id="s-n" min="3" max="16" step="1" value="8"></div>
+          <div class="ctl"><label for="s-q">Chance a broken chain still lands on the right final answer <output for="s-q"></output></label><input type="range" id="s-q" min="0" max="0.5" step="0.01" value="0.1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st1-sound-b"><div class="k">Chains with every step right</div><div class="v" id="st1-sound"></div><div class="s">p to the power of the number of steps</div></div>
+          <div class="stat"><div class="k">Chains with the right final answer</div><div class="v" id="st1-right"></div><div class="s">what an outcome grader sees</div></div>
+          <div class="stat" id="st1-flaw-b"><div class="k">Of those, flawed inside</div><div class="v" id="st1-flaw"></div><div class="s">rewarded by an outcome-only grader</div></div>
+        </div>
+        <p class="sim-note">Simulated: steps are independent and each is right with the stated chance; a chain with any wrong step still reaches the right final answer with the stated "lucky" chance (a multiple-choice style guess, or errors that cancel). Exact expected values, no sampling. Real errors are correlated: a hard problem makes every step less reliable.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Four things to take from it.</p>
+        <ul>
+          <li><strong>Long reasoning chains are fragile.</strong> Even at 95% per step, an eight-step chain is fully sound only about two times in three. This is why harder problems need checking and not just a bigger model.</li>
+          <li><strong>The grade can be given at two places.</strong> An <em>outcome</em> grade scores the final answer. A <em>process</em> grade scores each step. Process grades give far more information per example, at far higher labelling cost.</li>
+          <li><strong>A grader is a model of "good", and it can be wrong.</strong> Everything downstream (picking the best of many, searching, training on graded outputs) optimises against the grader. The harder you optimise, the more you find its blind spots.</li>
+          <li><strong>More thinking is not free and not always better.</strong> It costs tokens and latency, it helps a lot on some problems and not at all on others, and on some it hurts.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before using any test-time trick, ask three questions. Who or what judges the candidates, and how hard is it to fool? Is the right answer already the one the model produces most often? And what does each extra sample cost, in AED and in seconds? The answers decide which method, if any, pays.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-orm-prm">Outcome rewards, process rewards and what each teaches</h3>
+      <div class="prose">
+        <p>A <strong>reward model</strong> is a network that reads a prompt and a response and outputs a score for how good it is. Two designs matter here.</p>
+        <ul>
+          <li><strong>Outcome reward model (ORM).</strong> One score for the whole response, trained from labels on the final answer: right or wrong. Cheap to label, because for many tasks the right answer is known. The cost is <em>credit assignment</em>. If a twelve-step solution ends wrong, the label says nothing about which step failed, and the model must work it out from many examples.</li>
+          <li><strong>Process reward model (PRM).</strong> A score after <em>each step</em>, trained from labels on every step: correct, neutral or wrong. The first wrong step is then known. A solution is typically scored by combining step scores, for example the product of step "correct" probabilities, or the minimum.</li>
+        </ul>
+        <p>The comparison was made carefully on school-level maths by Uesato and colleagues at DeepMind (2022): process supervision reached similar final-answer error to outcome supervision but sharply cut the rate of <em>flawed reasoning behind right answers</em>. OpenAI's "Let's Verify Step by Step" (Lightman et al., 2023) then showed on the harder MATH benchmark that a PRM trained on about 800,000 human step labels (the PRM800K data set) picked better solutions out of many than an ORM. Simulation 1's last statistic is the reason that matters: an outcome grader pays for right answers reached by wrong reasoning, which is exactly what a bank cannot accept in a credit memo or an AML narrative, where the working is the product.</p>
+        <p>There is a second reason for step-level scores that has nothing to do with labels. They make <strong>search</strong> possible. If you can score a half-finished solution, you can stop exploring the bad branches early and spend compute on promising ones, as in beam search or tree search. An outcome score only exists at the end, when all the compute has already been spent.</p>
+      </div>
+
+      <h3 class="sub" id="m-labels">Where step labels come from</h3>
+      <div class="prose">
+        <p>Human step labels are expensive: a skilled annotator reading a twelve-step proof takes minutes. Three routes exist.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Route</th><th>How labels are made</th><th>Strength</th><th>Weakness</th></tr></thead>
+          <tbody>
+            <tr><td><b>Human annotation</b></td><td>People mark each step correct, neutral or wrong. PRM800K is the public example.</td><td>Highest quality; captures subtle errors.</td><td>Slow, costly, hard to scale to new domains. Needs experts for finance or law.</td></tr>
+            <tr><td><b>Rollout estimation</b> (Math-Shepherd, OmegaPRM and relatives)</td><td>From a step, finish the solution many times. If most completions reach the right answer, call the step good. No human needed, only a known final answer.</td><td>Cheap, automatic, scales.</td><td>Noisy. A wrong step can still be followed by a lucky right answer, so it gets a good label. Reports in 2025 found these labels weaker than careful judge or human labels.</td></tr>
+            <tr><td><b>Model as judge</b> (generative verifiers, "thinking" PRMs)</td><td>A language model writes a critique of each step in words, then a verdict. Can be trained on a few thousand labels.</td><td>Needs far fewer labels; the critique is readable; can itself use extra compute to check.</td><td>The judge makes mistakes and can be talked round by confident, fluent errors.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Notice what rollout estimation does: it turns an <em>outcome</em> check into <em>step</em> labels by averaging. That is a standard move in reinforcement learning (estimating a value from sampled returns, see <a href="f9-bandits-and-reinforcement-learning.html">F9, Bandits and reinforcement learning</a>), and it carries the same variance problem: few rollouts give noisy values.</p>
+      </div>
+
+      <h3 class="sub" id="m-verifiers">Verifiers: from hard checks to learned judges</h3>
+      <div class="prose">
+        <p>"Verifier" is the general word for anything that decides whether a candidate answer is good. The useful thing to understand is a spectrum of how trustworthy it is.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Verifier</th><th>Example in a bank</th><th>Can it be fooled?</th></tr></thead>
+          <tbody>
+            <tr><td><b>Exact check</b></td><td>Recompute the debt-service ratio in code. Check a Murabaha profit figure against cost × margin × tenor. Run generated SQL and compare the row count with a control total.</td><td>Not on what it checks. It says nothing about what it does not check, so the specification can still be wrong.</td></tr>
+            <tr><td><b>Rule and constraint check</b></td><td>Does the draft cite a limit that exists in the credit policy? Do the figures in the memo match the source table? Is every required KYC field present?</td><td>Only by omission. Coverage is the weakness.</td></tr>
+            <tr><td><b>Learned checker</b> (ORM, PRM, LLM judge)</td><td>A model scores whether a credit memo's reasoning holds up, or whether an AML narrative is supported by the transactions.</td><td>Yes. It was trained on examples and it has blind spots. Fluent, confident, well-formatted errors score well.</td></tr>
+            <tr><td><b>Human review</b></td><td>The analyst signs off.</td><td>Yes: tired, rushed, anchored by the model's confidence (see <a href="b7-internal-copilots-for-staff.html">B7, Internal copilots for staff</a>).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The most consequential development of 2025 was the realisation that, where an exact check exists, you can skip learned reward models and train directly on it. This is <strong>reinforcement learning with verifiable rewards</strong>: run the model's answer through a checker and give reward 1 or 0. DeepSeek-R1 (2025) used rule-based rewards for answer correctness and format and said it avoided neural reward models for reasoning because they were open to reward hacking and costly to retrain. Maths and code have cheap exact checks. That is why reasoning models improved fastest there, and why progress on messier work such as policy interpretation or credit judgement is slower: there is no calculator for "is this a good decision".</p>
+        <p>This asymmetry is the key to deciding where test-time scaling will pay in your bank. List your use cases by the strength of the best available check. The strongest are reconciliation, calculation, structured data extraction against a schema, code, and SQL. The weakest are advice, summaries and anything requiring judgement.</p>
+      </div>
+
+      <h3 class="sub" id="m-bon">Best-of-N: sample many, let the verifier pick</h3>
+      <div class="prose">
+        <p>The simplest test-time recipe: draw <i>N</i> independent answers, score each, return the highest. Two ceilings frame what is possible.</p>
+        <ul>
+          <li><strong>Coverage, or pass@N.</strong> If each sample is right with chance <i>a</i>, the chance that at least one of <i>N</i> is right is 1 − (1 − <i>a</i>)<sup><i>N</i></sup>. With <i>a</i> = 30%, N = 16 gives 99.7%. This is what a perfect verifier would deliver. Brown and colleagues (2024) showed that coverage keeps rising with the number of samples over several orders of magnitude, on maths and on software tasks with unit tests. On those tasks the tests are the verifier.</li>
+          <li><strong>The verifier's discrimination.</strong> A learned verifier does not know which sample is right; it gives scores that are <em>higher on average</em> for correct ones. Picking the top score is then right only as often as the scores separate the groups.</li>
+        </ul>
+        <p>The simulation below models the verifier as a score with some overlap. Correct answers score on average <i>d</i> standard deviations above ordinary wrong ones. The extra knob, <strong>fooling share</strong>, is the part that matters most in practice: a fraction of wrong answers are fluent, confident and look right to this particular verifier, so they score <em>higher</em> than correct ones. With few samples, the fool is rare in the pool. With many, the maximum score is almost certainly a fool, because you have gone looking for the extreme.</p>
+      </div>
+
+      <figure class="figure" id="fig-bon">
+        <div class="fig-head"><span class="fig-title">Best-of-N with an imperfect verifier</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> start with the default (30% single-sample accuracy, a decent verifier, 5% of wrong answers able to fool it) and read the red curve. It rises and then <b>falls</b> as N grows. Set the fooling share to 0 and it climbs towards the ceiling. Press <b>Exact check</b> and the curve follows the ceiling exactly. Then lower the single-sample accuracy to 5% and see how far the verifier can rescue a weak model.</p>
+        <div class="btns" role="group" aria-label="Verifier type">
+          <button class="btn" type="button" id="b-exact" aria-pressed="false">Exact check (a calculator, a unit test)</button>
+        </div>
+        <div class="chart-wrap" id="bon-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>Ceiling: at least one sample is right</span>
+          <span><i style="background:var(--accent)"></i>Best-of-N with this verifier</span>
+          <span><i style="background:var(--bad)"></i>Where it has turned over</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-a">Chance a single sample is right <output for="s-a"></output></label><input type="range" id="s-a" min="0.03" max="0.7" step="0.01" value="0.3"></div>
+          <div class="ctl"><label for="s-d">Verifier separation (how far apart right and wrong score) <output for="s-d"></output></label><input type="range" id="s-d" min="0" max="4" step="0.1" value="2"></div>
+          <div class="ctl"><label for="s-h">Share of wrong answers that fool the verifier <output for="s-h"></output></label><input type="range" id="s-h" min="0" max="0.6" step="0.01" value="0.05"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">One sample</div><div class="v" id="st2-1"></div><div class="s">no verifier at all</div></div>
+          <div class="stat" id="st2-16-b"><div class="k">Best of 16</div><div class="v" id="st2-16"></div><div class="s" id="st2-16-s"></div></div>
+          <div class="stat" id="st2-pk-b"><div class="k">Best accuracy reached</div><div class="v" id="st2-pk"></div><div class="s" id="st2-pk-s"></div></div>
+          <div class="stat" id="st2-1k-b"><div class="k">Best of 1,024</div><div class="v" id="st2-1k"></div><div class="s" id="st2-1k-s"></div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: each sample is right with the chosen chance. Scores are normal with spread 1: right answers centred at the separation, ordinary wrong answers at 0, and fooling wrong answers at the separation plus 1.5. The pick is the highest score. Computed exactly by numerical integration of the density of the top score being a right one; no sampling noise. A stylised model of the over-optimisation effect measured by Gao et al. (2023), not a measurement of any real verifier.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three observations carry over to real systems.</p>
+        <ul>
+          <li><strong>The ceiling is a model property; the gap to it is a verifier property.</strong> If the model almost never produces a right answer (<i>a</i> near zero), no verifier helps. If it produces right answers 5% of the time and you can verify exactly, 64 samples are enough to cover 96% of problems.</li>
+          <li><strong>A learned verifier has an optimal N and then it declines.</strong> This is reward-model over-optimisation (Gao, Schulman and Hilton, 2023): the proxy score keeps rising with selection pressure while true quality peaks and falls. Best-of-N is the gentlest form of selection pressure. Reinforcement learning against a learned reward is stronger and breaks sooner (the topic of <a href="r3-from-rlhf-to-dpo-to.html">R3.1–R3.2, RLHF, DPO and GRPO</a>).</li>
+          <li><strong>Step-level verifiers raise the bar but do not remove it.</strong> A PRM is harder to fool with a lucky guess, since a broken step shows up. It can still be fooled by a fluent step that is subtly wrong, and in 2025 papers on PRM weaknesses documented it rewarding verbose or stylistically "correct-looking" steps. DeepSeek's own report on R1 listed hard-to-define steps, hard-to-judge intermediate correctness and reward hacking as the reasons it did not use a PRM.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-vote">Self-consistency: let the model vote</h3>
+      <div class="prose">
+        <p>When no verifier is available, there is a cheaper judge: agreement. Sample <i>N</i> reasoning paths, extract each final answer, return the most common one. This is <strong>self-consistency</strong> (Wang et al., 2022). The logic is that there are many ways to reach a right answer and they converge, while errors scatter in different directions. It lifted accuracy on school maths benchmarks by double-digit points with the models of that time.</p>
+        <p>The mechanism needs a condition that is easy to miss. Voting returns the <em>plurality</em> answer. It improves accuracy exactly when the right answer is the most common single answer, because more samples then make the vote more reliable. If one <em>wrong</em> answer is more common than the right one, more samples make the vote reliably wrong. Voting amplifies whatever the model's most popular answer is.</p>
+      </div>
+
+      <figure class="figure" id="fig-vote">
+        <div class="fig-head"><span class="fig-title">Majority voting: sharpening a bias, or a signal</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> keep the right answer at 30% and the strongest wrong answer at 10%: voting pushes accuracy towards 100%. Raise the strongest wrong answer to 40% and the same voting pushes accuracy towards zero. Note that a single sample is right 30% of the time in both cases. Then watch the cost row: the 64th sample costs as much as the first.</p>
+        <div class="chart-wrap" id="vote-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>Single-sample accuracy</span>
+          <span><i style="background:var(--accent)"></i>Accuracy after majority vote</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-va">Chance a sample gives the right answer <output for="s-va"></output></label><input type="range" id="s-va" min="0.05" max="0.7" step="0.01" value="0.3"></div>
+          <div class="ctl"><label for="s-vw">Chance a sample gives the single most common wrong answer <output for="s-vw"></output></label><input type="range" id="s-vw" min="0" max="0.5" step="0.01" value="0.1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">One sample</div><div class="v" id="st3-1"></div><div class="s">no voting</div></div>
+          <div class="stat" id="st3-8-b"><div class="k">Vote of 8</div><div class="v" id="st3-8"></div><div class="s" id="st3-8-s"></div></div>
+          <div class="stat" id="st3-64-b"><div class="k">Vote of 64</div><div class="v" id="st3-64"></div><div class="s" id="st3-64-s"></div></div>
+          <div class="stat"><div class="k">Model cost per 1,000 cases at 64 samples</div><div class="v" id="st3-cost"></div><div class="s">against AED 110 for one sample each</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated by Monte Carlo (4,000 trials per point, fixed seed, so the curve is stable but carries about ±1 point of noise). The remaining answers are spread over 20 distinct wrong values with equal probability. Ties are broken at random. Cost uses an illustrative AED 55 per million output tokens and 2,000 tokens per sample; substitute your own price list.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two refinements are used in practice. <strong>Weighted voting</strong> gives each answer the sum of its verifier scores instead of one vote each, combining Simulations 2 and 3, and usually beats either alone. <strong>Early stopping</strong> samples until the lead is clear: on easy questions where the first three agree you stop, on contested ones you keep going. This keeps the average cost down, and agreement is itself a useful uncertainty signal: a question on which the samples split five ways is one to send to a human.</p>
+      </div>
+
+      <h3 class="sub" id="m-budget">Thinking longer: budget forcing, search and spending compute well</h3>
+      <div class="prose">
+        <p>Voting and best-of-N are <em>parallel</em> scaling: many independent attempts. The other direction is <em>sequential</em>: let one attempt think for longer. Reasoning models do this by writing a long chain of thought before the answer (see <a href="a5-reasoning-models-and-test-time.html">A5</a>). The question is how to control how long.</p>
+        <p>The cleanest demonstration is <strong>budget forcing</strong> from the s1 paper (Muennighoff et al., 2025). At decode time you control the thinking length by hand. To stop early, you cut the thinking off and force the model to start its answer. To think longer, when the model tries to finish you suppress the end-of-thinking marker and append the word "Wait". The model often rereads its work and corrects itself. A model fine-tuned on only 1,000 carefully chosen reasoning examples went from about 50% to about 57% on the AIME 2024 maths-competition set with this control, and accuracy rose smoothly with the thinking budget until it flattened.</p>
+        <p>Alongside this, three other families scale test-time compute:</p>
+        <ul>
+          <li><strong>Search over steps.</strong> Beam search, tree search (including Monte Carlo tree search) and "lookahead" use a step-level verifier to prune. They are worth it when a PRM is reliable, and wasteful when it is not.</li>
+          <li><strong>Iterative revision.</strong> The model writes, critiques and rewrites. Works when the model can actually find its own errors; Snell et al. (2024) found it helps more on easier problems than harder ones.</li>
+          <li><strong>Adaptive allocation.</strong> Spend more on hard questions and little on easy ones. In the same study, allocating compute by estimated difficulty let a small model with extra test-time compute beat a model about 14 times larger on easy and intermediate questions, but not on the hardest. Test-time compute substitutes for model size only when the question is within reach.</li>
+        </ul>
+        <p>The word "forced" matters. Longer is not monotonically better. Studies of "overthinking" show models spending thousands of tokens on trivial questions, and Anthropic-led work on inverse scaling in test-time compute (Gema et al., 2025) found tasks where longer reasoning made models <em>worse</em>: distracted by irrelevant detail, or drifting from a good first answer to a worse one.</p>
+      </div>
+
+      <figure class="figure" id="fig-budget">
+        <div class="fig-head"><span class="fig-title">More thinking: where it pays and where it backfires</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> on an easy question (difficulty at 0) accuracy is already high at a few hundred tokens and then <b>drifts down</b> as thinking runs long. On a hard question (difficulty at 1) it keeps climbing for tens of thousands of tokens. Slide the budget along each curve and read the third box: what does the next 1,000 tokens buy?</p>
+        <div class="chart-wrap" id="budget-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Accuracy at each thinking budget (stylised)</span>
+          <span><i style="background:var(--ink)"></i>Your budget</span>
+          <span><i style="background:var(--warn)"></i>Best budget for this difficulty</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-diff">Question difficulty <output for="s-diff"></output></label><input type="range" id="s-diff" min="0" max="1" step="0.05" value="0.6"></div>
+          <div class="ctl"><label for="s-bud">Thinking budget (tokens) <output for="s-bud"></output></label><input type="range" id="s-bud" min="8" max="15" step="0.05" value="11"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Accuracy at your budget</div><div class="v" id="st4-acc"></div><div class="s" id="st4-acc-s"></div></div>
+          <div class="stat" id="st4-best-b"><div class="k">Best budget</div><div class="v" id="st4-best"></div><div class="s" id="st4-best-s"></div></div>
+          <div class="stat" id="st4-marg-b"><div class="k">Next 1,000 tokens buy</div><div class="v" id="st4-marg"></div><div class="s">change in accuracy</div></div>
+          <div class="stat"><div class="k">Model cost per 1,000 cases</div><div class="v" id="st4-cost"></div><div class="s">at your budget</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Stylised, not measured: the curve is a hand-built shape (a saturating gain, then a slow decline past an onset that moves later as difficulty rises) chosen to illustrate the pattern reported in the literature. The numbers are not predictions for any model. Cost uses the same illustrative AED 55 per million tokens as Simulation 3.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Put the pieces together and test-time scaling is a three-way tradeoff among accuracy, cost and latency, with the verifier deciding how much each extra unit of compute is worth. A rough order of reliability for a bank: (1) exact verifier plus parallel samples, which gives dependable gains; (2) adaptive thinking length matched to difficulty; (3) voting, when you have checked that the right answer is the plurality; (4) learned verifiers and PRMs, only after measuring where they top out on your data.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Verification is where post-training, evaluation and bank controls meet.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">R3.1 – R3.2 · RLHF, DPO, GRPO</span><span class="t"><a href="r3-from-rlhf-to-dpo-to.html">Reward models used for training</a></span><p>The same reward models that rank samples at answer time are used to train the model. A verifier you trust at inference can become the reward in training; one you do not should not be.</p></div>
+        <div class="link-card"><span class="code">A5 · Reasoning models and test-time compute</span><span class="t"><a href="a5-reasoning-models-and-test-time.html">The applied view</a></span><p>This lesson explains why long reasoning and sampling help. A5 covers how to choose and price reasoning models for bank workloads.</p></div>
+        <div class="link-card"><span class="code">R4 · Chain-of-thought faithfulness</span><span class="t"><a href="r4-chain-of-thought-faithfulness-and.html">Is the written reasoning the real reasoning?</a></span><p>A PRM scores the text of the steps. If the text is a rationalisation rather than the cause of the answer, step scores can be high while the real process is not what they show.</p></div>
+        <div class="link-card"><span class="code">M1 · Pretraining then post-training</span><span class="t"><a href="m1-pretraining-then-post-training.html">Where this stage sits</a></span><p>Pretraining gives the knowledge, post-training shapes the behaviour, and test-time compute adds a third lever that needs no new weights.</p></div>
+        <div class="link-card"><span class="code">A4 · Statistics for evals · Hallucination detection</span><span class="t"><a href="a4-statistics-for-evals.html">Measure the gain properly</a></span><p>Does best-of-16 beat a single sample on <em>your</em> cases? That is a paired comparison with an interval, not an impression. <a href="a4-hallucination-detection-and-groundedness.html">Groundedness checks</a> are verifiers for text claims.</p></div>
+        <div class="link-card"><span class="code">F2.1 · F2.2 · Intervals and the bootstrap</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">How wrong is this accuracy?</a></span><p>Accuracy on 60 test questions has an interval near ±12 points. Most claimed test-time gains on small sets are inside that.</p></div>
+        <div class="link-card"><span class="code">F7.4 · Calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html#m-curves">Scores that mean something</a></span><p>A verifier score is only useful as a threshold ("send to a human below 0.7") if it is calibrated on cases like yours.</p></div>
+        <div class="link-card"><span class="code">F1.6 · Likelihood and entropy</span><span class="t"><a href="f1-likelihood-entropy.html">Why a vote is an uncertainty signal</a></span><p>The spread of sampled answers is an empirical entropy. High disagreement is a cheap sign the model does not know.</p></div>
+        <div class="link-card"><span class="code">M4 · Agents and guardrails · M5 · Agent evaluation</span><span class="t"><a href="m4-guardrails-and-approval-gates.html">A verifier before an action</a></span><p>An approval gate is a verifier in front of an irreversible step. <a href="m5-evaluating-agents-trajectories-tool-use.html">Trajectory evaluation</a> is the process-reward idea applied to agent steps.</p></div>
+        <div class="link-card"><span class="code">P3 · Quantisation and distillation · A5 · Cheap inference</span><span class="t"><a href="p3-quantization-pruning-and-distillation.html">Cutting the cost per sample</a></span><p>Sampling many times is only affordable if each sample is cheap. Smaller or <a href="a5-why-inference-got-cheap-moe.html">cheaper-to-serve models</a> change the break-even N.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Credit memos and ratios.</strong> Recompute every figure in code and compare to the source table. This is an exact verifier, and it catches the dropped-number error from Part 1. See <a href="a10-llms-for-credit-memos-and.html">A10, LLMs for credit memos</a>.</li>
+          <li><strong>AML alert narratives.</strong> Generate a narrative, then check that each claim cites a transaction in the case file. A groundedness verifier plus human review is cheaper than a human writing it from nothing.</li>
+          <li><strong>Document extraction for trade finance.</strong> Sample the extraction several times; fields where samples disagree go to a person. Agreement is the uncertainty signal (<a href="b7-document-ai-for-trade-finance.html">B7</a>).</li>
+          <li><strong>Islamic finance calculations.</strong> Profit rate, rebate on early settlement and instalment schedules have exact formulas, so generate-then-recompute is available. Shariah <em>judgements</em> have no calculator and need scholar review.</li>
+          <li><strong>Arabic and English customer answers.</strong> Verifiers trained mostly on English reasoning data may be weaker in Arabic; measure per language before trusting a score threshold.</li>
+          <li><strong>Latency-bound channels.</strong> A chat assistant cannot wait for 64 samples. Overnight batch jobs such as reconciliation can.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The central result has held since 2024: extra inference compute buys accuracy, with a clear divide between domains that can be verified exactly and domains that cannot. The live arguments concern whether step-level learned verifiers are worth their cost, how to train models that decide for themselves how long to think, and how far any of this transfers beyond maths and code.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Two light searches; I could confirm the 2025 papers below and found only titles, not results, for 2026 work on PRMs. Treat 2026 claims you hear in the room as things to verify.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2021</span><div><div class="t">Trained verifiers on school maths</div><p>Cobbe et al. sampled many solutions per problem and trained a verifier to pick one, finding that this beat simply fine-tuning the generator at larger data sizes. The template for best-of-N with a learned judge.</p><div class="src">Cobbe et al., arXiv 2110.14168, 2021</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Self-consistency and the first process-versus-outcome study</div><p>Majority voting over sampled reasoning paths gave large gains on maths benchmarks. In the same year, Uesato et al. compared process and outcome supervision directly and found process supervision cut flawed reasoning behind right answers.</p><div class="src">Wang et al., ICLR 2023 (arXiv 2203.11171); Uesato et al., arXiv 2211.14275</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">PRM800K and automatic step labels</div><p>Lightman et al. released about 800,000 human step labels and showed a PRM beat an ORM at selecting solutions on MATH. Math-Shepherd soon showed step labels could be estimated by sampling completions, without humans. Gao et al. quantified how best-of-N and RL against a learned reward model over-optimise.</p><div class="src">Lightman et al., arXiv 2305.20050; Wang et al., arXiv 2312.08935; Gao et al., ICML 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Test-time compute as a scaling axis</div><p>Brown et al. found coverage rising log-linearly with samples and flagged verification as the bottleneck outside domains with automatic checks. Snell et al. studied compute-optimal allocation by difficulty and showed small models with extra inference compute matching much larger ones on easier questions. OpenAI's o1 made long reasoning a product.</p><div class="src">Brown et al., arXiv 2407.21787; Snell et al., arXiv 2408.03314</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Verifiable rewards beat learned ones for reasoning RL; budget forcing</div><p>DeepSeek-R1 trained long reasoning with rule-based rewards, reporting that it left out neural reward models because of reward hacking. The s1 paper showed that 1,000 examples plus budget forcing give a smooth test-time scaling curve, with AIME 2024 rising from about 50% to about 57%.</p><div class="src">DeepSeek-AI, arXiv 2501.12948; Muennighoff et al., arXiv 2501.19393</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Verifiers that think, and PRM caveats</div><p>ThinkPRM trains a verifier that writes a long chain-of-thought critique, using orders of magnitude fewer process labels than discriminative PRMs and beating them on several benchmarks under best-of-N and guided search. Other 2025 work (the Qwen team's "Lessons of developing PRMs") reported that rollout-estimated labels underperform and that best-of-N tests can flatter a PRM that is not actually checking steps. Gema et al. documented tasks where longer reasoning lowers accuracy.</p><div class="src">Khalifa et al., arXiv 2504.16828; Zhang et al., arXiv 2501.07301; Gema et al., arXiv 2507.14417</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Surveys and generalisation to code</div><p>Surveys of PRMs and reward models (October 2025) summarise that re-ranking with step scores consistently helps, and a study of PRM transfer from maths to code found best-of-N winning at low compute and tree search overtaking it as budgets grow. I could not confirm specific 2026 benchmark results; the field's direction is generative, reasoning verifiers and RL on verifiable tasks beyond maths.</p><div class="src">arXiv 2510.08049; arXiv 2510.01925; arXiv 2506.00027</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Generate, then recompute with code</b></td><td>Figures, ratios and schedules in drafts are checked against source data by deterministic code before a person sees them.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Reasoning models with adjustable effort</b></td><td>Vendor APIs expose a thinking level or token budget; teams set it per workflow.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Sample-agreement as an uncertainty flag</b></td><td>Extractions or answers where samples disagree are routed to a person.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>LLM-as-judge ranking of drafts</b></td><td>A second model scores or critiques candidate answers; usually validated against human-labelled samples.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Majority voting at scale</b></td><td>Common in benchmark reports and research; costly and latency-bound for customer channels.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Process reward models for financial reasoning</b></td><td>Step-level scoring of credit or compliance reasoning. Step labels need domain experts; I found no public bank deployments.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Tree search guided by a learned verifier</b></td><td>Research on maths and code; heavy compute and fragile verifiers.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Test-time compute is a real lever, strongest where an exact check exists. Learned verifiers help at moderate N and then get gamed, voting needs the right answer to be the common one, and every extra sample has a price, so measure the gain on your own cases before paying for it.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These appear in vendor decks, internal pilots and AI-written analyses. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Picking by a learned score at very large N</div><p>"We sample 256 and keep the best-scored." The top score is increasingly an answer that fits the verifier's taste.</p><div class="spot"><b>Spot it</b>Plot true accuracy against N on labelled cases. If it flattens or falls beyond some N, cap N there. Read a sample of top-scored answers by hand.</div></li>
+        <li><div class="t">Voting when the common answer is wrong</div><p>A systematic misreading (for example the wrong tax treatment, or a unit confusion) is repeated in most samples.</p><div class="spot"><b>Spot it</b>Look at single-sample accuracy and the top wrong answer's share. If a wrong answer is the plurality, voting will hurt; see Simulation 3.</div></li>
+        <li><div class="t">Right answers from wrong reasoning</div><p>Outcome-checked accuracy looks fine, but the written working is flawed and will be read by an auditor or customer.</p><div class="spot"><b>Spot it</b>Sample 30 right-answer cases and have an expert read the working. Report the share with a flaw.</div></li>
+        <li><div class="t">Verifying the wrong thing</div><p>The code check confirms the arithmetic but not that the right inputs were chosen, or the policy cited is current.</p><div class="spot"><b>Spot it</b>List what the verifier does not check. Test it with a plausible answer that is wrong in exactly those ways.</div></li>
+        <li><div class="t">Over-thinking and "Wait" loops</div><p>Longer budgets on easy tasks waste money, add latency, and sometimes turn a right first answer into a wrong final one.</p><div class="spot"><b>Spot it</b>Compare accuracy at a short and a long budget by task difficulty. Check the distribution of thinking length, not only the mean.</div></li>
+        <li><div class="t">Reporting gains on a handful of questions</div><p>Best-of-8 beats one sample by 6 points on 50 questions.</p><div class="spot"><b>Spot it</b>Ask for the number of questions and a paired interval. At 50 questions the interval on one accuracy is about ±14 points.</div></li>
+        <li><div class="t">Benchmark leakage and contaminated test sets</div><p>A public maths or finance benchmark was in the model's training data, so sampling "finds" memorised answers.</p><div class="spot"><b>Spot it</b>Test on questions written after the model's data cutoff, or on private bank cases.</div></li>
+        <li><div class="t">Ignoring cost and latency in the headline</div><p>"Accuracy up 8 points" with a 40x increase in tokens, quoted without the AED figure.</p><div class="spot"><b>Spot it</b>Ask for cost per correct case and 95th-percentile latency. Compare against a cheaper model used once.</div></li>
+        <li><div class="t">Trusting the shown reasoning as the real reasoning</div><p>A PRM approves clean steps that do not reflect how the model reached the answer.</p><div class="spot"><b>Spot it</b>Run a perturbation test: change a fact in the input and see whether the stated steps and the final answer change consistently (see <a href="r4-chain-of-thought-faithfulness-and.html">R4</a>).</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“These models can be made more accurate by letting them think longer or try several times and checking the answers. It works best where we can check automatically, such as recalculating a ratio or reconciling a total. It works less well where the check is another AI's opinion, and each extra attempt costs money and time. I'd start with the workflows that have an automatic check, measure the accuracy gain and the cost per correct case on our own data, and keep a person on anything involving judgement.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd separate the generator from the verifier and evaluate each. Where an exact check exists, I'd use best-of-N or RL against that check. Where only learned verifiers exist, I'd find the N at which true accuracy peaks on labelled cases, because over-optimisation against a proxy is guaranteed past some point. Majority voting is only safe if the right answer is the plurality, which I'd measure per task. Process reward models are attractive for credit or compliance reasoning because they penalise flawed working behind right answers, but step labels need expert annotators, so I'd start with outcome checks plus audits of the reasoning and report cost per correct case with intervals.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“What is the difference between an outcome reward model and a process reward model?”</summary><div class="ans"><p>An outcome reward model scores the final answer; a process reward model scores each reasoning step. The process version tells you where the reasoning went wrong, penalises right answers reached by flawed working, and lets you prune branches during search. The price is step-level labels, which are expensive or noisy.</p></div></details>
+        <details class="reveal"><summary>“Why can't we just generate 100 answers and pick the best?”</summary><div class="ans"><p>You can, if 'best' is checkable. With an exact check, such as a recomputed ratio or a unit test, more samples reliably raise accuracy. With a learned judge, selection pressure finds its blind spots and accuracy peaks and then declines. And every sample costs money and latency. So: yes with a calculator, carefully with a model, and measure it.</p></div></details>
+        <details class="reveal"><summary>“Does a reasoning model make a separate verifier unnecessary?”</summary><div class="ans"><p>No. It makes errors less frequent but they still occur, and the model's own confidence is a poor guide. The deterministic parts (arithmetic, reconciliation, policy lookups) should still be verified in code. The reasoning model helps most on the parts that cannot be.</p></div></details>
+        <details class="reveal"><summary>“The vendor says accuracy rises with more thinking time. Should we always set it to maximum?”</summary><div class="ans"><p>No. The gains depend on difficulty: easy questions saturate almost immediately and can get worse with long reasoning, while hard ones keep improving. I'd set the budget by workflow, measure accuracy and cost per correct case at two or three levels on our own labelled cases, and use routing so that only hard cases get the large budget.</p></div></details>
+        <details class="reveal"><summary>“Is self-consistency a reliable way to cut hallucination?”</summary><div class="ans"><p>Partly. Disagreement between samples is a good warning sign, and it can be used to route to a person. Agreement is weaker evidence: a model can be consistently wrong, and voting then reinforces the error. I'd use it as an uncertainty flag and check grounding against the source documents separately.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A twelve-step reasoning chain has 97% reliability per step. How often is the whole chain sound? If a broken chain still gets the final answer right 10% of the time, what share of right answers rest on flawed reasoning?</summary><div class="ans"><p>Sound: 0.97<sup>12</sup> ≈ 0.694. Right final answers: 0.694 + 0.306 × 0.1 ≈ 0.725. Flawed among right: 0.0306 ÷ 0.725 ≈ <strong>4.2%</strong>. Small here, but it grows quickly as per-step reliability falls or the lucky-guess rate rises.</p></div></details>
+        <details class="reveal"><summary>2. A model is right on a task 8% of the time per sample, and you have an exact check. How many samples give at least a 90% chance that one is right?</summary><div class="ans"><p>Need 1 − 0.92<sup>N</sup> ≥ 0.9, so 0.92<sup>N</sup> ≤ 0.1. N ≥ ln 0.1 ÷ ln 0.92 = 2.303 ÷ 0.0834 ≈ 27.6, so <strong>28 samples</strong>. With a learned verifier the answer is not available this way; the check's quality limits it.</p></div></details>
+        <details class="reveal"><summary>3. Why does best-of-N against a learned verifier often get worse at large N?</summary><div class="ans"><p>The top of a large pool is the extreme of the verifier's scores, and extremes are where the verifier is least reliable. Fluent but wrong answers that happen to look right to it become more likely to be selected than the genuinely correct ones. This is reward over-optimisation: the proxy keeps climbing while true quality peaks and falls.</p></div></details>
+        <details class="reveal"><summary>4. When does majority voting make accuracy worse as N increases?</summary><div class="ans"><p>When a wrong answer is more common than the right one. Each sample is more likely to land on that wrong answer than on the right one, so the more you take, the more certain it is that the wrong answer wins the vote. Single-sample accuracy can be identical in the good and bad cases, so measure the top wrong answer's share.</p></div></details>
+        <details class="reveal"><summary>5. Why are rollout-estimated step labels noisy?</summary><div class="ans"><p>They label a step by the share of completions from it that reach the right final answer. A wrong step can be followed by completions that happen to recover or guess correctly, giving it a good label, and a right step followed by an unlucky model gets a bad one. The same outcome-versus-process gap from Simulation 1 re-enters through the back door.</p></div></details>
+        <details class="reveal"><summary>6. Describe budget forcing in two sentences.</summary><div class="ans"><p>You control reasoning length at decode time: to stop early, you cut the thinking off and force the answer to begin; to think longer, you stop the model from ending its thinking and append "Wait" so it rechecks. Accuracy then follows a smooth rise with the thinking budget until it flattens.</p></div></details>
+        <details class="reveal"><summary>7. Rank these by how well test-time scaling should work, and say why: recomputing loan instalment schedules; drafting a Shariah-compliance opinion; extracting invoice totals; summarising a complaint.</summary><div class="ans"><p>Best: instalment schedules (exact formula, so generate-then-recompute). Next: invoice totals (can be reconciled against line items and sampling agreement flags weak cases). Weaker: complaint summaries (groundedness checks help, no exact answer). Weakest: the Shariah opinion, which is a judgement without an automatic check; more samples only produce more fluent text and a scholar must decide.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>K. Cobbe et al. <a href="https://arxiv.org/abs/2110.14168">Training Verifiers to Solve Math Word Problems</a>. arXiv, 2021.</li>
+        <li>X. Wang et al. <a href="https://arxiv.org/abs/2203.11171">Self-Consistency Improves Chain of Thought Reasoning in Language Models</a>. ICLR, 2023.</li>
+        <li>J. Uesato et al. <a href="https://arxiv.org/abs/2211.14275">Solving math word problems with process- and outcome-based feedback</a>. arXiv, 2022.</li>
+        <li>H. Lightman et al. <a href="https://arxiv.org/abs/2305.20050">Let's Verify Step by Step</a>. arXiv, 2023.</li>
+        <li>P. Wang et al. <a href="https://arxiv.org/abs/2312.08935">Math-Shepherd: Verify and Reinforce LLMs Step-by-step without Human Annotations</a>. arXiv, 2023.</li>
+        <li>L. Gao, J. Schulman, J. Hilton. <a href="https://arxiv.org/abs/2210.10760">Scaling Laws for Reward Model Overoptimization</a>. ICML, 2023.</li>
+        <li>B. Brown et al. <a href="https://arxiv.org/abs/2407.21787">Large Language Monkeys: Scaling Inference Compute with Repeated Sampling</a>. arXiv, 2024.</li>
+        <li>C. Snell et al. <a href="https://arxiv.org/abs/2408.03314">Scaling LLM Test-Time Compute Optimally can be More Effective than Scaling Model Parameters</a>. arXiv, 2024.</li>
+        <li>DeepSeek-AI. <a href="https://arxiv.org/abs/2501.12948">DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning</a>. arXiv, 2025.</li>
+        <li>N. Muennighoff et al. <a href="https://arxiv.org/abs/2501.19393">s1: Simple test-time scaling</a>. arXiv, 2025.</li>
+        <li>Z. Zhang et al. <a href="https://arxiv.org/abs/2501.07301">The Lessons of Developing Process Reward Models in Mathematical Reasoning</a>. arXiv, 2025.</li>
+        <li>M. Khalifa et al. <a href="https://arxiv.org/abs/2504.16828">Process Reward Models That Think</a>. arXiv, 2025.</li>
+        <li>A. Gema et al. <a href="https://arxiv.org/abs/2507.14417">Inverse Scaling in Test-Time Compute</a>. arXiv, 2025.</li>
+        <li><a href="https://arxiv.org/abs/2510.08049">A Survey of Process Reward Models: From Outcome Signals to Process Supervisions for Large Language Models</a>. arXiv, 2025.</li>
+        <li><a href="https://arxiv.org/abs/2506.00027">From Mathematical Reasoning to Code: Generalization of Process Reward Models in Test-Time Scaling</a>. arXiv, 2025.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in R3: Constitutional AI and RL from AI feedback (R3.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  const aed = v => "AED " + L.fmtInt(v);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  const fmtN = n => L.fmtInt(n);
+
+  // =====================================================================
+  // Simulation 1: chain of steps
+  // =====================================================================
+  const S1 = { p: 0.95, n: 8, q: 0.1, bad: 4 };
+  const chainBox = $("chain-chart"), chainEl = $("chain");
+  function buildChain() {
+    chainEl.innerHTML = "";
+    if (S1.bad > S1.n) S1.bad = S1.n;
+    for (let i = 1; i <= S1.n; i++) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = "Step " + i;
+      b.setAttribute("aria-pressed", String(i === S1.bad));
+      if (i > S1.bad) b.className = "after";
+      b.addEventListener("click", () => { S1.bad = i; render1(); });
+      chainEl.appendChild(b);
+    }
+  }
+  function render1() {
+    buildChain();
+    const { p, n, q, bad } = S1;
+    $("s1-out").innerHTML = "<b>Outcome grade:</b> the final answer is wrong, so the whole chain scores 0. All " + n + " steps get the same blame, including the " + (bad - 1) + " correct one" + (bad === 2 ? "" : "s") + " before the error and the " + (n - bad) + " step" + (n - bad === 1 ? "" : "s") + " after it, which are built on a wrong number.";
+    $("s1-proc").innerHTML = "<b>Process grade:</b> steps 1" + (bad > 2 ? " to " + (bad - 1) : "") + (bad === 1 ? " (none)" : " score correct") + "; <b>step " + bad + " is flagged wrong</b>; later steps are marked unreliable. The model learns exactly where it slipped, and a search can discard this branch at step " + bad + ", saving " + (n - bad) + " step" + (n - bad === 1 ? "" : "s") + " of compute.";
+    const W = Math.max(300, chainBox.clientWidth), H = 190, m = { l: 40, r: 12, t: 12, b: 36 };
+    const svg = mk(chainBox, W, H, "Chance the chain is still sound, and where the first error lands");
+    const x = L.scale(0.5, n + 0.5, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+    });
+    const bw = Math.min(26, (x(2) - x(1)) * 0.6);
+    const pts = [];
+    for (let k = 1; k <= n; k++) {
+      const first = Math.pow(p, k - 1) * (1 - p);
+      L.svg("rect", { x: x(k) - bw / 2, y: y(first), width: bw, height: y(0) - y(first), rx: 2, class: "bar-w" }, svg);
+      pts.push([x(k), y(Math.pow(p, k))]);
+      if (n <= 10 || k % 2 === 0 || k === 1) tx(svg, x(k), H - m.b + 16, String(k), { "text-anchor": "middle" });
+    }
+    L.svg("path", { d: L.path(pts), class: "cv-curve" }, svg);
+    pts.forEach(pt => L.svg("circle", { cx: pt[0], cy: pt[1], r: 3.5, class: "cv-dot" }, svg));
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Step number", { "text-anchor": "middle" });
+    const sound = Math.pow(p, n), right = sound + (1 - sound) * q, flaw = right > 0 ? (1 - sound) * q / right : 0;
+    $("st1-sound").textContent = pct(sound, 1); cls($("st1-sound-b"), sound < 0.5 ? "bad" : sound < 0.75 ? "warn" : "ok");
+    $("st1-right").textContent = pct(right, 1);
+    $("st1-flaw").textContent = pct(flaw, 1); cls($("st1-flaw-b"), flaw > 0.2 ? "bad" : flaw > 0.08 ? "warn" : "ok");
+  }
+  L.bind("s-p", v => pct(v, 1), v => { S1.p = v; render1(); });
+  L.bind("s-n", v => v + " steps", v => { S1.n = v; render1(); });
+  L.bind("s-q", v => pct(v, 0), v => { S1.q = v; render1(); });
+
+  // =====================================================================
+  // Simulation 2: best-of-N with an imperfect verifier (exact integration)
+  // =====================================================================
+  const S2 = { a: 0.3, d: 2, h: 0.05, exact: false };
+  const bonBox = $("bon-chart");
+  const NS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(k => Math.pow(2, k));
+  const phi = z => L.normPdf(z), Phi = z => L.normCdf(z);
+  const FOOL = 1.5;
+  function bonAcc(N, a, d, h) {
+    if (N === 1) return a;
+    const b = (1 - a) * h, c = (1 - a) * (1 - h), f = d + FOOL;
+    let s = 0;
+    const lo = -6, hi = Math.max(d, f) + 6, step = 0.025;
+    for (let x = lo; x <= hi; x += step) {
+      const F = a * Phi(x - d) + b * Phi(x - f) + c * Phi(x);
+      s += phi(x - d) * Math.pow(F, N - 1) * step;
+    }
+    return Math.min(1, N * a * s);
+  }
+  function renderBon() {
+    const { a, d, h, exact } = S2;
+    const ceil = NS.map(N => 1 - Math.pow(1 - a, N));
+    const acc = NS.map((N, i) => exact ? ceil[i] : bonAcc(N, a, d, h));
+    let pk = 0; acc.forEach((v, i) => { if (v > acc[pk] + 1e-9) pk = i; });
+    const W = Math.max(300, bonBox.clientWidth), H = 280, m = { l: 46, r: 14, t: 14, b: 44 };
+    const svg = mk(bonBox, W, H, "Accuracy of best-of-N against N");
+    const x = L.scale(0, 10, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+    });
+    [0, 2, 4, 6, 8, 10].forEach(k => tx(svg, x(k), H - m.b + 16, fmtN(Math.pow(2, k)), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Samples drawn (N, log scale)", { "text-anchor": "middle" });
+    L.svg("path", { d: L.path(ceil.map((v, i) => [x(i), y(v)])), class: "cv-ideal" }, svg);
+    const dropped = acc[pk] - acc[acc.length - 1] > 0.02;
+    L.svg("path", { d: L.path(acc.map((v, i) => [x(i), y(v)])), class: "cv-curve" + (dropped ? " off" : "") }, svg);
+    acc.forEach((v, i) => L.svg("circle", { cx: x(i), cy: y(v), r: 3, class: "cv-dot" }, svg));
+    L.svg("circle", { cx: x(pk), cy: y(acc[pk]), r: 6, class: dropped ? "cv-bad" : "cv-dot" }, svg);
+    if (dropped) tx(svg, Math.min(x(pk), W - m.r - 60), Math.max(y(acc[pk]) - 12, m.t + 10), "peak at N=" + fmtN(NS[pk]), { "text-anchor": "middle", class: "lbl-warn" });
+    $("st2-1").textContent = pct(acc[0], 0);
+    $("st2-16").textContent = pct(acc[4], 0); $("st2-16-s").textContent = "ceiling " + pct(ceil[4], 0);
+    cls($("st2-16-b"), acc[4] < acc[0] ? "bad" : acc[4] > ceil[4] - 0.05 ? "ok" : "");
+    $("st2-pk").textContent = pct(acc[pk], 0); $("st2-pk-s").textContent = "at N = " + fmtN(NS[pk]);
+    $("st2-1k").textContent = pct(acc[10], 0); $("st2-1k-s").textContent = "ceiling " + pct(ceil[10], 0);
+    cls($("st2-1k-b"), dropped ? "bad" : "");
+    $("s2-verdict").innerHTML = exact
+      ? "With an <b>exact check</b> the pick is always a right answer when one exists, so accuracy equals the ceiling. This is why code, arithmetic and reconciliation scale so well."
+      : dropped
+        ? "The learned verifier helps up to about <b>N = " + fmtN(NS[pk]) + "</b> (" + pct(acc[pk], 0) + "), then <b>falls to " + pct(acc[10], 0) + "</b> at N = 1,024. More samples find more answers that fool it. The remedy is to cap N where true accuracy peaks, or to improve the verifier."
+        : acc[10] < ceil[10] - 0.1
+          ? "No decline here, but the verifier leaves a gap of <b>" + Math.round((ceil[10] - acc[10]) * 100) + " points</b> to the ceiling at N = 1,024. A better verifier is worth more than more samples."
+          : "The verifier is good enough that best-of-N tracks the ceiling. Raise the fooling share to see what changes.";
+  }
+  L.bind("s-a", v => pct(v, 0), v => { S2.a = v; renderBon(); });
+  L.bind("s-d", v => v.toFixed(1), v => { S2.d = v; renderBon(); });
+  L.bind("s-h", v => pct(v, 0), v => { S2.h = v; renderBon(); });
+  $("b-exact").addEventListener("click", e => { S2.exact = !S2.exact; e.currentTarget.setAttribute("aria-pressed", String(S2.exact)); renderBon(); });
+
+  // =====================================================================
+  // Simulation 3: majority vote (Monte Carlo, seeded)
+  // =====================================================================
+  const S3 = { a: 0.3, w: 0.1 };
+  const voteBox = $("vote-chart");
+  const VN = [1, 2, 4, 8, 16, 32, 64], TRIALS = 4000, OTHERS = 20;
+  function mulberry(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function voteAcc(a, w) {
+    const rnd = mulberry(12345), res = [];
+    const rest = Math.max(0, 1 - a - w);
+    VN.forEach(N => {
+      let wins = 0;
+      for (let t = 0; t < TRIALS; t++) {
+        const cnt = new Array(OTHERS + 2).fill(0);
+        for (let i = 0; i < N; i++) {
+          const u = rnd();
+          if (u < a) cnt[0]++; else if (u < a + w) cnt[1]++; else cnt[2 + Math.floor(rnd() * OTHERS)]++;
+        }
+        let mx = 0; cnt.forEach(c => { if (c > mx) mx = c; });
+        let ties = 0, rightTop = cnt[0] === mx;
+        cnt.forEach(c => { if (c === mx) ties++; });
+        if (rightTop && (ties === 1 || rnd() < 1 / ties)) wins++;
+      }
+      res.push(wins / TRIALS);
+    });
+    return res;
+  }
+  function renderVote() {
+    const { a, w } = S3;
+    const acc = voteAcc(a, w);
+    const W = Math.max(300, voteBox.clientWidth), H = 250, m = { l: 46, r: 14, t: 14, b: 44 };
+    const svg = mk(voteBox, W, H, "Accuracy after majority vote against samples");
+    const x = L.scale(0, 6, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+    });
+    VN.forEach((N, i) => tx(svg, x(i), H - m.b + 16, String(N), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Samples voting (N, log scale)", { "text-anchor": "middle" });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(a), y2: y(a), class: "cv-ideal" }, svg);
+    const up = acc[6] > a;
+    L.svg("path", { d: L.path(acc.map((v, i) => [x(i), y(v)])), class: "cv-curve" + (up ? "" : " off") }, svg);
+    acc.forEach((v, i) => L.svg("circle", { cx: x(i), cy: y(v), r: 3.5, class: up ? "cv-dot" : "cv-bad" }, svg));
+    $("st3-1").textContent = pct(a, 0);
+    $("st3-8").textContent = pct(acc[3], 0); $("st3-8-s").textContent = (acc[3] >= a ? "+" : "") + Math.round((acc[3] - a) * 100) + " points";
+    $("st3-64").textContent = pct(acc[6], 0); $("st3-64-s").textContent = (acc[6] >= a ? "+" : "") + Math.round((acc[6] - a) * 100) + " points";
+    cls($("st3-8-b"), acc[3] < a - 0.02 ? "bad" : acc[3] > a + 0.05 ? "ok" : "");
+    cls($("st3-64-b"), acc[6] < a - 0.02 ? "bad" : acc[6] > a + 0.05 ? "ok" : "");
+    $("st3-cost").textContent = aed(64 * 110);
+    $("s3-verdict").innerHTML = w >= a
+      ? "The most common <b>wrong</b> answer (" + pct(w, 0) + ") is at least as likely as the right one (" + pct(a, 0) + "). Voting now converges on the wrong answer: <b>" + pct(acc[6], 0) + "</b> at N = 64 against " + pct(a, 0) + " for one sample. Sampling more makes this worse."
+      : "The right answer (" + pct(a, 0) + ") out-polls the strongest wrong one (" + pct(w, 0) + "), so votes sharpen it: <b>" + pct(acc[6], 0) + "</b> at N = 64. The more clearly it leads, the fewer samples you need. Keep it small: " + (w > a * 0.8 ? "a narrow lead means slow, expensive gains." : "a wide lead means 8 or 16 are enough.");
+  }
+  L.bind("s-va", v => pct(v, 0), v => { S3.a = v; renderVote(); });
+  L.bind("s-vw", v => pct(v, 0), v => { S3.w = Math.min(v, 1 - S3.a); renderVote(); });
+
+  // =====================================================================
+  // Simulation 4: thinking budget (stylised)
+  // =====================================================================
+  const S4 = { D: 0.6, e: 11 };
+  const budBox = $("budget-chart");
+  const E0 = 8, E1 = 15;
+  function accAt(e, D) {
+    const t = Math.pow(2, e);
+    const base = 0.88 - 0.7 * D, hi = 0.99 - 0.38 * D, tau = 400 + 9000 * D * D + 1500 * D;
+    const onset = Math.pow(2, 10 + 4 * D);
+    const over = Math.max(0, Math.log2(t / onset));
+    return Math.max(0.02, base + (hi - base) * (1 - Math.exp(-t / tau)) - 0.012 * over * over - 0.02 * over * (D < 0.4 ? 1.5 : 0.5));
+  }
+  function renderBud() {
+    const { D, e } = S4;
+    const W = Math.max(300, budBox.clientWidth), H = 250, m = { l: 46, r: 14, t: 14, b: 44 };
+    const svg = mk(budBox, W, H, "Accuracy against thinking budget");
+    const x = L.scale(E0, E1, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+    });
+    [[8, "256"], [10, "1k"], [12, "4k"], [14, "16k"]].forEach(([k, s]) => tx(svg, x(k), H - m.b + 16, s, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Thinking tokens (log scale)", { "text-anchor": "middle" });
+    const pts = []; let bestE = E0, bestV = -1;
+    for (let k = E0; k <= E1 + 1e-9; k += 0.05) { const v = accAt(k, D); pts.push([x(k), y(v)]); if (v > bestV + 1e-9) { bestV = v; bestE = k; } }
+    L.svg("path", { d: L.path(pts), class: "cv-curve" }, svg);
+    L.svg("line", { x1: x(bestE), x2: x(bestE), y1: m.t, y2: H - m.b, stroke: "var(--warn)", "stroke-width": 1.4, "stroke-dasharray": "3 3" }, svg);
+    L.svg("line", { x1: x(e), x2: x(e), y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1.4 }, svg);
+    const cur = accAt(e, D);
+    L.svg("circle", { cx: x(e), cy: y(cur), r: 6, class: "cv-now" }, svg);
+    const t = Math.pow(2, e), bt = Math.pow(2, bestE);
+    const marg = accAt(Math.log2(t + 1000), D) - cur;
+    const short = n => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(Math.round(n));
+    $("st4-acc").textContent = pct(cur, 0); $("st4-acc-s").textContent = short(t) + " tokens";
+    $("st4-best").textContent = short(bt); $("st4-best-s").textContent = "accuracy " + pct(bestV, 0);
+    cls($("st4-best-b"), "");
+    $("st4-marg").textContent = (marg >= 0 ? "+" : "") + (marg * 100).toFixed(1) + " pts";
+    cls($("st4-marg-b"), marg < -0.002 ? "bad" : marg > 0.01 ? "ok" : "warn");
+    $("st4-cost").textContent = aed(1000 * t / 1e6 * 55);
+    $("s4-verdict").innerHTML = t > bt * 1.5
+      ? "You are past the best budget for this difficulty: accuracy is <b>" + Math.round((bestV - cur) * 100) + " points below its peak</b> and you are paying for " + short(t - bt) + " extra tokens per case. Easy questions are where this hurts most."
+      : t < bt / 1.5
+        ? "Below the best budget: accuracy is <b>" + Math.round((bestV - cur) * 100) + " points short</b> of what " + short(bt) + " tokens would give. Extra thinking is worth buying here."
+        : "Near the best budget for this difficulty. Little left to gain, so spend the saving elsewhere.";
+  }
+  L.bind("s-diff", v => v < 0.25 ? "easy" : v > 0.75 ? "hard" : "medium", v => { S4.D = v; renderBud(); });
+  L.bind("s-bud", v => { const n = Math.pow(2, v); return (n >= 1000 ? (n / 1000).toFixed(1) + "k" : Math.round(n)) + " tokens"; }, v => { S4.e = v; renderBud(); });
+
+  function all() { render1(); renderBon(); renderVote(); renderBud(); }
+  all();
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(all, 150); });
+})();
+</script>
+</body>
+</html>
