@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fairness in Lending and Fraud Models: Competing Definitions and Where Bias Comes From</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 13px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  .ba { fill: var(--accent); }
+  .bb { fill: var(--warn); fill-opacity: .85; }
+  .cut-line { stroke: var(--ink); stroke-width: 1.4; stroke-dasharray: 4 3; }
+  .ref-line { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; }
+  .btn.sm { font-size: 13px; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track G · Security, governance and risk</span>
+    <span>Module G2 · Responsible AI</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>G2.1 · G2.2</span>
+        <span class="pill d">Day one</span>
+        <span class="star">★ Priority</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Fairness in Lending and Fraud Models: Competing Definitions and Where Bias Comes From</h1>
+      <p class="dek">Why "treat everyone the same" is not one rule but several, why a model cannot satisfy them all when groups differ, and how unfairness gets into a model through data, labels and proxies without anyone intending it.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Fairness is a choice among competing, individually reasonable measurements that cannot all hold at once when groups differ in base rates, so the job is to pick and justify the one that fits the decision, and to hunt for the data, label and proxy problems that make every one of them misleading.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A bank builds a personal-finance approval model. A reviewer splits applicants into two groups, say UAE nationals and expatriates, or men and women, or under-30s and over-30s, and finds that the model approves 73% of one group and 65% of the other. "Unfair," says one person. Another replies: "Of those we approved, 94% in one group and 87% in the other repaid. The model is simply more cautious where the evidence is thinner." A third says: "Among people who would have repaid, we approved the same share in both groups. That is what fairness means."</p>
+        <p>All three are measuring something real. All three numbers can come from the <em>same</em> model. The disagreement is not about arithmetic. It is about <strong>which comparison deserves the word "fair"</strong>.</p>
+        <p>Here is the awkward core, which this lesson builds up to. When the two groups genuinely differ in how often the outcome happens (repayment, fraud, default), and your model is not perfect, you <strong>cannot</strong> equalise approval rates, error rates and the meaning of a score all at the same time. This is a theorem, not a software limitation. Pick one and you break another. So fairness work is mostly an exercise in naming trade-offs honestly.</p>
+        <p>The second half of the lesson is about how bias enters before any of that. A model trained on past decisions inherits the past. A label that records "who got investigated" rather than "who did something wrong" teaches the model to investigate the same people again. Removing the protected column does not help when twenty other columns quietly reconstruct it.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Two separate questions. First, <em>measurement</em>: given a model and its outcomes, which fairness numbers do we compute and which gaps do we accept? Second, <em>origin</em>: is the data we are measuring on a trustworthy picture of reality, or does it already carry the bias? Teams that argue only about the first question often have the second one wrong.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-defs">The main definitions, and what each one protects</h3>
+      <div class="prose">
+        <p>Take a lending model that scores applicants and approves anyone above a cut. Call the groups A and B (the protected attribute could be gender, nationality, age, religion or anything similar). Let the true outcome be "would repay". Everything below is a statement about a different slice of the same confusion table, computed per group.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Definition</th><th>It asks that…</th><th>In plain words</th><th>It protects / its weakness</th></tr></thead>
+          <tbody>
+            <tr><td><b>Fairness through unawareness</b></td><td>The protected attribute is not a model input.</td><td>"We never look at gender."</td><td>Easy to audit and often legally required as a rule of conduct. Does <em>not</em> prevent discrimination, because other inputs act as proxies (Part 2, Sources of bias).</td></tr>
+            <tr><td><b>Demographic (statistical) parity</b></td><td>P(approve | A) = P(approve | B).</td><td>Same approval rate in each group.</td><td>Ignores whether the groups differ in real repayment. Forcing it can approve riskier applicants in one group and reject safer ones in the other.</td></tr>
+            <tr><td><b>Equal opportunity</b></td><td>True positive rates match: P(approve | would repay, A) = P(approve | would repay, B).</td><td>Creditworthy people are approved equally often whichever group they are in.</td><td>Protects the qualified. Says nothing about the unqualified who get approved, and needs the true outcome (hard when rejected applicants never show theirs).</td></tr>
+            <tr><td><b>Equalised odds</b></td><td>True positive <em>and</em> false positive rates both match.</td><td>Both kinds of error are equally likely in each group.</td><td>Strong and symmetric. Both error rates fall on the same footing.</td></tr>
+            <tr><td><b>Predictive parity / calibration within groups</b></td><td>Among those the model approves (or gives a score s), the share who truly repay is the same in each group.</td><td>"A score of 0.8 means the same thing for everyone."</td><td>What risk and finance teams usually mean by fair pricing. Can hide very different error rates between groups.</td></tr>
+            <tr><td><b>Individual fairness</b></td><td>Similar people get similar scores (Dwork et al., 2012).</td><td>Two applicants who differ only in an irrelevant way get the same decision.</td><td>Intuitive, but needs a defensible definition of "similar", which is the whole difficulty.</td></tr>
+            <tr><td><b>Counterfactual fairness</b></td><td>The decision would not change if the protected attribute were different, holding the causal story fixed (Kusner et al., 2017).</td><td>"Would she have been approved had she been a man, everything else about her life equal?"</td><td>Needs a causal model of how the attribute influences other variables (F9.3), which is contestable.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Notice the structure. Demographic parity compares <em>outcomes</em> to group size. Equal opportunity and equalised odds compare outcomes to the <em>truth</em>, conditioning on who really would repay. Predictive parity compares the truth to the <em>decision</em>, conditioning on who got approved. These are different directions of conditioning. F1.4 taught that P(A given B) and P(B given A) are different numbers. Fairness definitions are the same trap, wearing a suit.</p>
+        <p>One more number often appears in compliance packs: the <strong>four-fifths rule</strong>. If one group's approval rate is less than 80% of the highest group's, that is treated as preliminary evidence of adverse impact. It comes from US employment-selection guidance, and it is a screening rule of thumb, not a Gulf requirement and not a proof of discrimination. Teams use it because it is simple, so know where it came from.</p>
+      </div>
+
+      <figure class="figure" id="fig-defs">
+        <div class="fig-head"><span class="fig-title">One model, five fairness numbers</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> at the start, both groups use the same cut on a score of identical quality. Look at the first bars: good applicants and bad applicants are approved at <em>exactly</em> the same rates (equalised odds holds), yet approval rates and the repay rate among the approved differ. Now close the gap in repayment between the groups with the first slider: the other gaps shrink. Then make the score nearly perfect and watch them all vanish.</p>
+        <div class="chart-wrap" id="defs-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--accent)"></i>Group A (85% would repay)</span>
+          <span><i class="sq" style="background:var(--warn);opacity:.85"></i>Group B</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-pb">Share of group B that would repay <output for="s-pb"></output></label><input type="range" id="s-pb" min="0.5" max="0.85" step="0.01" value="0.70"></div>
+          <div class="ctl"><label for="s-d">How well the score separates good from bad <output for="s-d"></output></label><input type="range" id="s-d" min="0.5" max="4" step="0.1" value="1.5"></div>
+          <div class="ctl"><label for="s-t">Approval cut (same for both groups) <output for="s-t"></output></label><input type="range" id="s-t" min="-1" max="3" step="0.05" value="0.6"></div>
+        </div>
+        <div class="verdict" id="s1-verdict"></div>
+        <p class="sim-note">Simulated: scores are normal with unit spread; applicants who would repay score on average d higher than those who would not, the same in both groups, so the score is equally good for A and B. Group A: 85% would repay. All numbers are exact expected values, no sampling noise. "Chance a score right at the cut repays" is the calibration at the cut, P(repay | score = cut).</p>
+      </figure>
+
+      <div class="prose">
+        <p>Read what happened. With the same score quality in both groups and one cut, <strong>equalised odds held automatically</strong>. A model that treats everyone identically and is equally accurate for everyone still fails demographic parity and predictive parity, purely because the groups differ in how often they repay. The gap is in the world, not the code. That does not mean it is acceptable. It means it cannot be fixed by "making the model more accurate".</p>
+      </div>
+
+      <h3 class="sub" id="m-impossible">Why you cannot have them all</h3>
+      <div class="prose">
+        <p>The mathematical heart is a short identity (Chouldechova, 2017). For any group with base rate <i>p</i> (the share who would repay), the confusion-table rates are tied together:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>FPR</mtext><mo>=</mo><mfrac><mi>p</mi><mrow><mn>1</mn><mo>−</mo><mi>p</mi></mrow></mfrac><mo>·</mo><mfrac><mrow><mn>1</mn><mo>−</mo><mtext>PPV</mtext></mrow><mtext>PPV</mtext></mfrac><mo>·</mo><mtext>TPR</mtext></math>
+        <p class="where">FPR is the share of bad applicants approved, PPV (predictive value) the share of approved who repay, TPR the share of good applicants approved. Take two groups with different <i>p</i>. If you force PPV and TPR to be equal across them, the first factor <i>p</i>/(1−<i>p</i>) differs, so FPR <strong>must</strong> differ. Equal predictive value, equal opportunity and equal false-positive rates are incompatible unless <i>p</i> is equal or the model is perfect. Kleinberg, Mullainathan and Raghavan (2016) proved the matching result for scores: calibration within groups and equal error rates cannot both hold except in those same two special cases.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Example with numbers. Group A: 85% would repay. Group B: 70%. Suppose we insist that 90% of approvals repay (PPV) and 80% of good applicants are approved (TPR) in both groups. Then FPR for A is (0.85/0.15) × (0.1/0.9) × 0.8 ≈ 50%, and for B it is (0.70/0.30) × (0.1/0.9) × 0.8 ≈ 21%. Half the bad applicants in group A get approved but only a fifth in group B. To equalise the error rates instead, the PPVs would have to differ. The arithmetic leaves no third way.</p>
+        <p>The simulation below lets you pull each lever. Group B's cut moves while A's stays put, so you are doing what any real mitigation does: giving different groups different treatment to equalise one statistic.</p>
+      </div>
+
+      <figure class="figure" id="fig-trade">
+        <div class="fig-head"><span class="fig-title">Fix one fairness gap and another opens</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> start with <b>One cut</b>. Switch to <b>Equal approval rates</b>: the approval gap closes, but group B now gets more bad applicants approved (FPR up) and its approvals repay less often. Switch to <b>Equal repayment among approved</b>: PPV closes but approval and error gaps open the other way. Note the profit line. The last button sets each group's profit-best cut, which uses group-specific cuts but not to equalise anything. Then raise the score quality to the maximum and see how little is left to trade.</p>
+        <div class="btns" role="group" aria-label="Fairness rule">
+          <button class="btn sm" type="button" data-m="same" aria-pressed="true">One cut (equal error rates)</button>
+          <button class="btn sm" type="button" data-m="parity" aria-pressed="false">Equal approval rates</button>
+          <button class="btn sm" type="button" data-m="ppv" aria-pressed="false">Equal repayment among approved</button>
+          <button class="btn sm" type="button" data-m="best" aria-pressed="false">Profit-best cut per group</button>
+        </div>
+        <div class="chart-wrap" id="trade-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--accent)"></i>Group A (85% would repay)</span>
+          <span><i class="sq" style="background:var(--warn);opacity:.85"></i>Group B (70% would repay)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s2-d">Score quality <output for="s2-d"></output></label><input type="range" id="s2-d" min="0.5" max="4.5" step="0.1" value="1.5"></div>
+          <div class="ctl"><label for="s2-t">Group A's cut <output for="s2-t"></output></label><input type="range" id="s2-t" min="-0.5" max="2.5" step="0.05" value="0.6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st2-ap-b"><div class="k">Approval-rate gap</div><div class="v" id="st2-ap"></div><div class="s">A minus B, points</div></div>
+          <div class="stat" id="st2-tpr-b"><div class="k">Good-applicant approval gap (TPR)</div><div class="v" id="st2-tpr"></div><div class="s">A minus B, points</div></div>
+          <div class="stat" id="st2-fpr-b"><div class="k">Bad-applicant approval gap (FPR)</div><div class="v" id="st2-fpr"></div><div class="s">A minus B, points</div></div>
+          <div class="stat" id="st2-ppv-b"><div class="k">Repay-among-approved gap (PPV)</div><div class="v" id="st2-ppv"></div><div class="s">A minus B, points</div></div>
+          <div class="stat"><div class="k">Expected profit per 1,000 applicants</div><div class="v" id="st2-pr"></div><div class="s" id="st2-pr-s"></div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: same score model as Simulation 1, 500 applicants from each group. Group A 85% would repay, group B 70%. An approved applicant who repays earns AED 3,000; an approved applicant who defaults loses AED 12,000; a rejected applicant is worth zero. That makes 80% the break-even repayment chance. Gaps under 2 points are green, under 5 amber. Exact expected values. Thresholds are found by bisection; "equal repayment" is clamped if B cannot reach A's level.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three lessons from playing with it.</p>
+        <ul>
+          <li><strong>Every fairness rule has a price somewhere else.</strong> It is not that engineers have failed to find the clever fix. The constraints genuinely conflict. Which gap you accept is a values choice that belongs to the business, risk and legal functions, with data scientists making the trade-off visible.</li>
+          <li><strong>The right definition depends on the decision.</strong> For credit pricing and provisioning, calibration within groups matters: a stated probability of default must mean the same thing for everybody or the capital numbers are wrong (B4.1). For a benefit that qualified people are being denied, equal opportunity speaks to the harm. For a harmful intervention such as freezing an account, the false-positive rate is the harm, so equalise <em>that</em>. There is no universal answer.</li>
+          <li><strong>When the score is nearly perfect the conflict disappears,</strong> which is why "just improve the model" feels right. In real banking data the score never reaches that quality, so the conflict stays.</li>
+        </ul>
+        <p>Corbett-Davies and co-authors (2023) press a further point: forcing a statistical equality is often at odds with what the decision-maker is trying to achieve, and can harm the very group it was meant to protect. The honest position is to show the trade-off curve and decide with open eyes, not to treat any one definition as sacred.</p>
+      </div>
+
+      <h3 class="sub" id="m-mitigate">What you can actually do about it</h3>
+      <div class="prose">
+        <p>Mitigation methods fall into three groups by where in the pipeline they act.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Stage</th><th>Idea</th><th>Typical tools</th><th>Catch</th></tr></thead>
+          <tbody>
+            <tr><td><b>Before training</b></td><td>Fix the data: reweight or relabel examples, remove features that act as proxies, collect better labels.</td><td>Reweighing, feature audits</td><td>Treats symptoms if the real problem is the label. Slow and manual.</td></tr>
+            <tr><td><b>During training</b></td><td>Add a fairness constraint or penalty to the loss, so the model trades accuracy for a smaller gap.</td><td>Constrained optimisation, adversarial debiasing, Fairlearn reductions</td><td>Needs the protected attribute at training time; harder to explain to validators.</td></tr>
+            <tr><td><b>After training</b></td><td>Keep the model, change the decision rule: group-specific thresholds chosen to hit equal opportunity or equalised odds (Hardt, Price and Srebro, 2016).</td><td>Threshold optimisers, calibration per group</td><td>Uses the protected attribute <em>at decision time</em>. In many jurisdictions that is itself disparate treatment. Legal review first.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>That last catch is the one that surprises engineers. Group-specific cuts, as in Simulation 2, are the cleanest mathematical fix and may be unlawful to <em>apply</em> because they treat people differently by a protected attribute. Whether and how the attribute can be used, even to measure fairness, depends on the jurisdiction and the specific regulation. Do not assume the answer for the UAE or Saudi Arabia: ask Legal and Compliance, and see how the central bank and consumer-protection rules treat it. Many banks collect protected attributes only for <em>auditing</em> and keep them out of decisions.</p>
+        <p>Measurement has its own practical problem: you often do not have the attribute. Banks may not hold religion or ethnicity, and some attributes cannot lawfully be inferred. Proxy-based estimation of group membership (from names, say) introduces its own errors and sensitivities. Be explicit about what you measured and how.</p>
+      </div>
+
+      <h3 class="sub" id="m-sources">Sources of bias: data, labels, proxies</h3>
+      <div class="prose">
+        <p>Everything above assumed the data told the truth about who really would repay. Often it does not. Suresh and Guttag (2019) catalogue where bias enters a machine-learning pipeline. Four entry points matter most in banking.</p>
+        <ul>
+          <li><strong>Historical bias.</strong> The world itself was unequal and the data records it faithfully. If women were historically offered smaller credit limits and so show lower balances and less credit history, a model trained on that history learns to expect less from women. The data is accurate, and the pattern is still a problem.</li>
+          <li><strong>Representation bias.</strong> Some groups are thin in the data. A model fitted mainly on salaried nationals has little to go on for self-employed expatriates, so its scores there are noisier and its error rates differ. Thin files and thin-file customers are a standard example.</li>
+          <li><strong>Label and measurement bias.</strong> The target is often not the thing you care about but a <em>record</em> of it. "Defaulted" is only observed for people who were given credit. "Fraud" means "fraud that someone investigated and confirmed". Obermeyer and colleagues (2019) found a widely used US healthcare algorithm used past spending as a stand-in for health need, and because less had been spent on Black patients with the same illness, it systematically under-ranked their need. The model was accurate at predicting cost; cost was the wrong label.</li>
+          <li><strong>Proxies.</strong> Remove gender and the model can still find it: occupation, employer, shopping categories, device type, the length of a name field, even the time of day an application is made. Postcode was historically a proxy for race in US redlining. In the Gulf, nationality, employer category and residential area can similarly stand in for protected groups. Dropping the column ("unawareness") does not work when the information survives in the others.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-proxy">
+        <div class="fig-head"><span class="fig-title">Drop the column, keep the bias</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> keep the strength per feature small (8 points) and add features. Each one is almost useless at telling the groups apart, and the model never sees the group column. Yet as you add features, the model can recover the group with rising accuracy and the approval gap grows. Alone, no feature looks suspicious. Together they are the group.</p>
+        <div class="chart-wrap" id="proxy-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--accent)"></i>Group A: how many favourable features</span>
+          <span><i class="sq" style="background:var(--warn);opacity:.85"></i>Group B</span>
+          <span><i style="background:var(--ink)"></i>Approval cut (more than half)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-k">Number of weak proxy features <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="40" step="1" value="8"></div>
+          <div class="ctl"><label for="s-dl">How far each feature leans toward a group <output for="s-dl"></output></label><input type="range" id="s-dl" min="0.02" max="0.2" step="0.01" value="0.08"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Approval rate, group A</div><div class="v" id="st3-a"></div><div class="s">protected column never used</div></div>
+          <div class="stat"><div class="k">Approval rate, group B</div><div class="v" id="st3-b"></div><div class="s">same rule</div></div>
+          <div class="stat" id="st3-gap-b"><div class="k">Gap</div><div class="v" id="st3-gap"></div><div class="s">points</div></div>
+          <div class="stat" id="st3-acc-b"><div class="k">Can an auditor guess the group from the features?</div><div class="v" id="st3-acc"></div><div class="s">50% means no</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: a book split 50/50 between groups. Each of k independent yes/no features is "favourable" with probability 0.5 + the lean in group A and 0.5 − the lean in group B. Assumed: because the groups really differ in repayment, the model learns that more favourable features means safer, and approves anyone with more than half favourable. Guess accuracy is the best possible group guess from the features, 0.5 × the sum over counts of the larger of the two group probabilities. Exact binomial calculations.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The accuracy at which you can <em>predict the protected attribute from the other inputs</em> is the practical test for proxies. Train a quick classifier from features to group. If it beats chance by a wide margin, the features jointly encode the group, and removing the column was cosmetic. This test also tells you something useful in the other direction: if you can <em>not</em> recover the group, at least no model can exploit it through those features.</p>
+        <p>Proxies are not always a mistake to eliminate. Income genuinely predicts repayment and also correlates with nationality. The question is whether the feature has a legitimate, documented business reason and whether a less discriminatory alternative would do the job as well. Regulators in several jurisdictions frame it that way. That makes feature selection a documented decision, not a statistical default.</p>
+      </div>
+
+      <h3 class="sub" id="m-loop">Labels that record who was looked at</h3>
+      <div class="prose">
+        <p>The most damaging data problem in fraud and AML work is the quiet one. Confirmed cases only exist where someone investigated. If customers in group B are reviewed more often, whether through a historic rule, a local branch practice or an earlier model, more of their genuine cases get found, and the recorded rate comes out higher even if the true rate is identical. The next model learns "group B is riskier", sends more alerts there, which produces more labels there, and so on. This is a <strong>feedback loop</strong>, studied formally by Ensign and colleagues (2018) in predictive policing, and its relative in credit is the selective labels problem (Lakkaraju et al., 2017): you observe repayment only for those you approved (see reject inference, B4.5).</p>
+      </div>
+
+      <figure class="figure" id="fig-loop">
+        <div class="fig-head"><span class="fig-title">A biased label that grows each time you retrain</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> true suspicious-activity rates are identical in both groups. Set the starting review imbalance to 1.5 times and the sharpness to 1.0: the model inherits the bias but it stays put. Now raise the sharpness (the more a model concentrates alerts on whoever looks riskiest, the closer to 2) and watch the share of alerts going to group B climb well past its 30% share of customers, round after round.</p>
+        <div class="chart-wrap" id="loop-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--warn);opacity:.85"></i>Group B's share of alerts after each retraining round</span>
+          <span><i style="background:var(--muted)"></i>Group B's share of customers, and of true cases</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-r">Group B reviewed this much more than A at the start <output for="s-r"></output></label><input type="range" id="s-r" min="1" max="3" step="0.1" value="1.5"></div>
+          <div class="ctl"><label for="s-g">Sharpness: how strongly alerts follow the model's risk ranking <output for="s-g"></output></label><input type="range" id="s-g" min="1" max="2" step="0.05" value="1.3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Group B's share of customers and true cases</div><div class="v">30%</div><div class="s">identical true rate in both</div></div>
+          <div class="stat" id="st4-0-b"><div class="k">Share of alerts, round 0</div><div class="v" id="st4-0"></div><div class="s">from the initial review pattern</div></div>
+          <div class="stat" id="st4-6-b"><div class="k">Share of alerts, round 6</div><div class="v" id="st4-6"></div><div class="s">after six retrainings</div></div>
+          <div class="stat"><div class="k">Alerts per customer, B against A</div><div class="v" id="st4-ratio"></div><div class="s">at round 6</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated and stylised, not a model of any real system. Both groups truly have the same rate. Labels arise only on reviewed customers, so the recorded rate per customer is proportional to the review rate. Each retraining sets the next review rate in proportion to (recorded risk ratio)<sup>sharpness</sup>. At sharpness 1 the ratio is preserved; above 1 it compounds, so after t rounds the ratio is r<sup>(sharpness^t)</sup>. Group B is 30% of customers.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The remedy is not in the model at all. It lies in the process: send a small <strong>random sample</strong> of unflagged customers to review in every group, so you have an unbiased estimate of the true rate; track alert rates and confirmed-case rates <em>by group</em> over time; and compare the model against a rule-based baseline (C1.2) that does not learn from past review patterns. F3.5 made the same point about label delay, and F2.6 about selection bias: a label reflects both what happened <em>and</em> who looked.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Fairness uses almost everything you have already learned, in a harder setting where the numbers carry moral weight.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F7.1 – F7.4 · Precision, recall, calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">The same confusion table, split by group</a></span><p>Every fairness definition is a per-group precision, recall or calibration. If you can read a confusion table you can read a fairness report.</p></div>
+        <div class="link-card"><span class="code">F1.4 · Conditional probability</span><span class="t"><a href="f1-probability-bayes-distributions.html">Directions of conditioning</a></span><p>The impossibility result is Bayes' rule in action: different base rates plus an imperfect test mean positive predictive value and error rates cannot both be equal.</p></div>
+        <div class="link-card"><span class="code">F2.6 · Selection bias</span><span class="t"><a href="f2-confounding-simpson-selection.html">Labels exist where someone looked</a></span><p>Simulation 4 is selection bias with a feedback loop. Also see Simpson's paradox: an aggregate fairness gap can reverse inside each segment.</p></div>
+        <div class="link-card"><span class="code">F9.3 · Causal inference</span><span class="t"><a href="f9-causal-inference.html">What counterfactual fairness needs</a></span><p>"Would the decision differ if she were a man?" is a causal question. It cannot be answered from a table of correlations.</p></div>
+        <div class="link-card"><span class="code">F8.1 · F8.2 · Explanations</span><span class="t"><a href="f8-global-versus-local-explanations.html">Finding the proxy</a></span><p>Global importance and per-decision attribution are how you discover which inputs carry the bias, and how you give an applicant a reason.</p></div>
+        <div class="link-card"><span class="code">F3.5 · Imbalanced data and label delay</span><span class="t"><a href="f3-imbalanced-data.html">Few positives per group</a></span><p>Fairness gaps are estimated on subgroups with even fewer positives. Put intervals on every gap.</p></div>
+        <div class="link-card"><span class="code">B4 · Scorecards and reject inference</span><span class="t"><a href="b4-pd-lgd-ead-and-expected.html">Credit models under scrutiny</a></span><p>Scorecards are the most audited place for fairness in the bank. Reject inference (<a href="b4-ifrs-9-staging-and-expected.html">B4.5</a>) is the selective-labels problem under another name.</p></div>
+        <div class="link-card"><span class="code">B1 · B2 · B3 · Fraud, AML, KYC</span><span class="t"><a href="b2-transaction-monitoring-rules-versus-ml.html">Where false positives hurt people</a></span><p>A false positive in fraud or AML means a frozen card or a closed account. Equalising false-positive rates matters most here. See also <a href="b3-customer-due-diligence-and-risk.html">risk rating</a> and <a href="b1-delayed-labels-and-feedback-loops.html">feedback loops</a>.</p></div>
+        <div class="link-card"><span class="code">G2.5 · G3 · Oversight and validation</span><span class="t"><a href="g2-privacy-basics-minimisation-consent-anonymisation.html">Contestability, documentation, review</a></span><p>A fairness analysis is part of the model documentation that <a href="g3-independent-validation.html">independent validation</a> reviews, and customers need a way to contest a decision.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Personal finance, cards and mortgages.</strong> Approval, limit and pricing models. Gender, age, nationality and employer category are the usual segments to test. The Apple Card limits dispute of 2019 shows how fast the question escalates when customers compare outcomes publicly.</li>
+          <li><strong>Fraud and AML alerts.</strong> Disproportionate friction for certain nationalities or names. Name-matching in sanctions screening can have systematically higher false-positive rates on transliterated Arabic names. Measure it.</li>
+          <li><strong>KYC and eKYC.</strong> Face matching and liveness models can differ in error rates by skin tone, age or gender, which determines who gets onboarded without a branch visit.</li>
+          <li><strong>Collections and marketing.</strong> Who gets the soft offer and who gets the hard call. Often outside the formal model-risk process and therefore under-tested.</li>
+          <li><strong>Staff copilots and customer chatbots.</strong> Language models may answer in Arabic and English with different quality, tone or willingness. This is a fairness question that classical tables do not capture.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The definitions and impossibility results are about a decade old and stable. What is moving is how regulators turn "fairness" into obligations, how language models complicate measurement, and how sceptical researchers are of simple parity metrics.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Regulatory items checked on 6 November 2026 with a light search; coverage was mostly secondary sources. Research items are from memory and were not re-checked. Verify dates against the official texts before relying on them.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2012</span><div><div class="t">Individual fairness</div><p>Dwork and colleagues formalised "similar individuals treated similarly" as a Lipschitz condition on the model.</p><div class="src">Dwork et al., ITCS, 2012</div></div></li>
+        <li><span class="yr">2016–17</span><div><div class="t">The impossibility results</div><p>ProPublica's analysis of the COMPAS risk tool reported unequal false-positive rates by race; the vendor answered that scores were equally calibrated. Kleinberg et al. and Chouldechova then proved both could hold only in special cases. Hardt, Price and Srebro introduced equalised odds and the post-processing fix.</p><div class="src">Kleinberg et al., 2016; Chouldechova, 2017; Hardt et al., NeurIPS 2016</div></div></li>
+        <li><span class="yr">2018–19</span><div><div class="t">Taxonomies and label bias</div><p>Multicalibration asks for calibration on many overlapping subgroups at once. Suresh and Guttag organised bias into a lifecycle taxonomy; Obermeyer et al. showed a deployed health algorithm biased through its label.</p><div class="src">Hébert-Johnson et al., ICML 2018; Suresh &amp; Guttag, 2019; Obermeyer et al., Science, 2019</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">A textbook and a critique</div><p>Barocas, Hardt and Narayanan published the standard text, <em>Fairness and Machine Learning</em>. Corbett-Davies et al. argued that popular definitions can conflict with the decision-maker's true objective.</p><div class="src">fairmlbook.org; Corbett-Davies et al., JMLR, 2023</div></div></li>
+        <li><span class="yr">Feb 2026</span><div><div class="t">UAE central bank guidance on AI</div><p>The Central Bank of the UAE issued a guidance note on the responsible use of AI and machine learning by licensed financial institutions. Law-firm summaries describe an emphasis on fairness and non-discrimination (direct or indirect) and on keeping responsibility with the bank when vendors supply the model. Sources differ on the issue date (11 or 23 February) and on how binding it is: it is described as guidance that interprets existing consumer-protection requirements and is likely to enter supervisory dialogue. I did not read the full text; read it yourself.</p><div class="src">CBUAE press release via WAM; Hadef &amp; Partners briefing</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">EU AI Act: credit scoring in the high-risk category, and a delay</div><p>Creditworthiness assessment of individuals is a high-risk use under the EU AI Act, with requirements on data governance and bias examination. The Commission proposed in November 2025 to delay the high-risk obligations; reports say a political agreement in May 2026 moved the date for these stand-alone high-risk systems from August 2026 to December 2027. I found no confirmation of formal adoption, so treat the dates as provisional. Gulf banks with EU business or EU-influenced group policy feel this indirectly.</p><div class="src">Winston &amp; Taylor summary of the Digital Omnibus agreement (secondary source)</div></div></li>
+        <li><span class="yr">Now</span><div><div class="t">Language models and generative systems</div><p>Fairness testing is shifting to prompts, names and languages: swap a name or a language and see whether the answer, the tone or the refusal changes. Standards for this are immature, and no accepted single metric exists. Not re-checked for this lesson.</p><div class="src">Active research area; no single reference</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is in banking, in my reading (verify against your own bank's practice):</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Excluding protected attributes from model inputs</b></td><td>Standard in credit scorecards and a common policy rule.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Approval-rate and adverse-impact checks by segment</b></td><td>A table of approval and default rates by age, gender or nationality, reviewed at validation.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Proxy and "less discriminatory alternative" review</b></td><td>Feature rationale documented; alternatives compared for accuracy and disparity.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Open-source fairness toolkits in validation</b></td><td>Fairlearn, AIF360 or Aequitas used to compute gap metrics and test mitigation.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Constrained training and post-processing</b></td><td>Fairness-constrained models and group thresholds. Legal limits on using the attribute restrict deployment.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Fairness testing of LLM assistants</b></td><td>Counterfactual prompt pairs across names and languages.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Choose the fairness criterion that matches the harm of the decision, say openly which others you are giving up, audit labels and proxies before metrics, keep a random sample to see what the model cannot, and let legal and compliance own the question of what may be used.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in bank analyses and in AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">"We removed the protected attribute, so the model is fair"</div><p>Proxies reconstruct it. The model is only blind in the narrowest sense.</p><div class="spot"><b>Spot it</b>Ask for a quick model that predicts the group from the inputs. Compare its accuracy with chance. Check the top features for postcode, employer type, device or name-derived fields.</div></li>
+        <li><div class="t">Reporting one fairness metric</div><p>"Approval rates are within 3 points." Meanwhile false-positive rates differ by a factor of two.</p><div class="spot"><b>Spot it</b>Ask for approval rate, TPR, FPR and PPV by group in one table. If only one appears, ask why the others were left out.</div></li>
+        <li><div class="t">Believing a metric can be driven to zero for free</div><p>"We tuned thresholds to equalise everything." The identity says that cannot hold unless the base rates match.</p><div class="spot"><b>Spot it</b>Ask which fairness criteria are satisfied and which are not. A claim that all hold, with different base rates and an imperfect model, is wrong or hiding something.</div></li>
+        <li><div class="t">Gaps without intervals</div><p>A 4-point TPR gap measured on 40 positives in a small group is noise.</p><div class="spot"><b>Spot it</b>Ask for the number of positives per group and a bootstrap interval on each gap (F2.2).</div></li>
+        <li><div class="t">Trusting the label</div><p>"Confirmed fraud" or "default" are records of observation, not truth.</p><div class="spot"><b>Spot it</b>Ask how the label is produced, who decides what to investigate, and whether outcome rates differ by group for reasons that match the review rates, not the behaviour.</div></li>
+        <li><div class="t">Feedback loops left unmonitored</div><p>The model sends more alerts to a group, generating more confirmed cases there, which justifies the model.</p><div class="spot"><b>Spot it</b>Plot alert share and confirmed-case share by group across retraining cycles. Look for a random-review baseline.</div></li>
+        <li><div class="t">Averaging away a subgroup</div><p>Fair on gender, fair on nationality, but unfair on female expatriates.</p><div class="spot"><b>Spot it</b>Check intersections, as long as the groups are big enough to measure.</div></li>
+        <li><div class="t">Fairness checked once, at launch</div><p>Customer mix, products and fraud patterns drift. The gap that was acceptable in March is not in December.</p><div class="spot"><b>Spot it</b>Ask for fairness metrics in the ongoing monitoring pack (F7.7, G3.5), with thresholds that trigger a review.</div></li>
+        <li><div class="t">Applying a mitigation that is itself not allowed</div><p>Group-specific cutoffs introduced by a data science team without legal sign-off.</p><div class="spot"><b>Spot it</b>Ask whether Legal has approved use of the attribute in the decision, and whether the approach appears in the model documentation.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“There isn't one measure of fairness. We can make approval rates equal, or make mistakes equally likely, or make a score mean the same for everyone. When the groups really differ in repayment, we cannot do all three; that is mathematics, not a gap in our work. So I'd like us to decide which harm we most want to prevent for this product, and I'll show you what that costs on the others and in profit. I'd also like us to check that our records of past outcomes are not themselves skewed by who we reviewed.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd report per-group approval rate, TPR, FPR, PPV and calibration with bootstrap intervals, and say which criterion the product is held to and why. I'd test for proxies by predicting group membership from the features, review label provenance for selection and measurement bias, and keep a random review sample so label feedback loops are visible. Any mitigation that uses the protected attribute in the decision goes to Legal first. Monitoring includes these gaps by segment after launch.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just make the model blind to gender and nationality?”</summary><div class="ans"><p>We should, as a rule of conduct, but it isn't sufficient. Other inputs such as employer, postcode, device or spending categories can jointly encode the attribute, and the model will use them if the groups differ in outcomes. I'd test whether the group can be predicted from the inputs, and keep the attribute in a separate, restricted dataset for auditing.</p></div></details>
+        <details class="reveal"><summary>“Which fairness metric should we use?”</summary><div class="ans"><p>The one that matches the harm. For credit pricing and provisioning, calibration within groups. For a good thing that qualified people are denied, equal opportunity. For a burden like a frozen account, equal false-positive rates. I'd report all of them, name the one we are held to, and show the others so no one is surprised.</p></div></details>
+        <details class="reveal"><summary>“Can't we tune it until every group has the same error rates and the same approval rate?”</summary><div class="ans"><p>Not if the groups' true outcome rates differ and the model is imperfect. There's an identity linking the rates: with unequal base rates, equal precision and equal true-positive rate force unequal false-positive rates. We can choose where the inequality falls, but not remove it.</p></div></details>
+        <details class="reveal"><summary>“Group A is approved 8 points more often. Is the model biased?”</summary><div class="ans"><p>It shows a disparity, not yet proof of bias. I'd check whether the groups differ in true repayment, whether the model is equally accurate for both, whether labels and inputs are measured equally well, and whether a less disparate model would do as well. If the gap is driven by a feature with a weak business rationale or by a biased label, it is a problem to fix. If it reflects real differences in risk, it is a decision for the business to justify and document.</p></div></details>
+        <details class="reveal"><summary>“We have no data on religion or ethnicity. How can we test fairness?”</summary><div class="ans"><p>With care. Test on attributes we hold and may lawfully use for auditing, such as gender, age band and nationality. For others, proxy-based estimation is imprecise and sensitive, so I'd involve Legal and Privacy and be explicit about the error in the estimate. Testing outcomes on observable segments such as region or product is still useful as a signal.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the identity in Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A model approves 65% of group B and 73% of group A. Does it pass the four-fifths rule, and does that mean it is fair?</summary><div class="ans"><p>65 ÷ 73 = 0.89, above 0.8, so it passes that screen. It does not mean fair: the rule looks only at approval rates, ignores error rates and calibration, and comes from US employment guidance. It is a flag, not a verdict.</p></div></details>
+        <details class="reveal"><summary>2. Group A has 85% who would repay, group B 70%. You require PPV = 90% and TPR = 80% in both. What are the false-positive rates?</summary><div class="ans"><p>FPR = p/(1−p) × (1−PPV)/PPV × TPR. A: 5.667 × 0.1111 × 0.8 ≈ 50%. B: 2.333 × 0.1111 × 0.8 ≈ 21%. They differ, so equalised odds fails.</p></div></details>
+        <details class="reveal"><summary>3. Why did equalised odds hold automatically in Simulation 1?</summary><div class="ans"><p>The score had identical quality in both groups and one cut was used, so TPR and FPR depend only on the cut and score quality, and are the same. Base rates enter approval rates and PPV but not TPR or FPR. In real data scores are rarely equally good across groups, so this would not be automatic.</p></div></details>
+        <details class="reveal"><summary>4. A team says "equal opportunity is satisfied: among those who repaid, approval is the same in both groups". What might still be wrong?</summary><div class="ans"><p>You only see repayment for the people you approved, so the "would have repaid" group is partly unobserved (selective labels). Also, the metric ignores false positives: one group might have many more bad loans approved. And the label may be a flawed record of the truth.</p></div></details>
+        <details class="reveal"><summary>5. Why can a model that never sees nationality still approve nationals more often?</summary><div class="ans"><p>If nationals and expatriates differ in features such as employer type, tenure, residential area or device and also in repayment history, the model will learn those features. Jointly they identify the group. Simulation 3: many weak features add up to an accurate group guess.</p></div></details>
+        <details class="reveal"><summary>6. True fraud rates are equal across two customer groups, but one group is confirmed as fraud twice as often. Give two likely causes besides a real difference.</summary><div class="ans"><p>The group is reviewed or investigated more (more detection), or the alert rule or an older model fires more often on that group, creating more confirmed cases. A third: different reporting behaviour by customers. Fix by sampling randomly for review in both groups to estimate the true rates.</p></div></details>
+        <details class="reveal"><summary>7. Is applying a lower approval cut to a disadvantaged group acceptable because it makes the model fairer?</summary><div class="ans"><p>It may reduce a statistical gap, but it uses the protected attribute in the decision, which in many jurisdictions is itself restricted. It also trades off other criteria (Simulation 2). I would not assume it is allowed: Legal and Compliance must approve, and the choice of criterion must be documented.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>S. Barocas, M. Hardt, A. Narayanan. <a href="https://fairmlbook.org/">Fairness and Machine Learning: Limitations and Opportunities</a>. MIT Press, 2023. The standard text; free online.</li>
+        <li>C. Dwork, M. Hardt, T. Pitassi, O. Reingold, R. Zemel. <a href="https://arxiv.org/abs/1104.3913">Fairness Through Awareness</a>. ITCS, 2012.</li>
+        <li>J. Kleinberg, S. Mullainathan, M. Raghavan. <a href="https://arxiv.org/abs/1609.05807">Inherent Trade-Offs in the Fair Determination of Risk Scores</a>. 2016.</li>
+        <li>M. Hardt, E. Price, N. Srebro. <a href="https://arxiv.org/abs/1610.02413">Equality of Opportunity in Supervised Learning</a>. NeurIPS, 2016.</li>
+        <li>A. Chouldechova. <a href="https://arxiv.org/abs/1703.00056">Fair Prediction with Disparate Impact: A Study of Bias in Recidivism Prediction Instruments</a>. Big Data, 2017.</li>
+        <li>M. Kusner, J. Loftus, C. Russell, R. Silva. <a href="https://arxiv.org/abs/1703.06856">Counterfactual Fairness</a>. NeurIPS, 2017.</li>
+        <li>J. Angwin, J. Larson, S. Mattu, L. Kirchner. <a href="https://www.propublica.org/article/machine-bias-risk-assessments-in-criminal-sentencing">Machine Bias</a>. ProPublica, 2016.</li>
+        <li>H. Suresh, J. Guttag. <a href="https://arxiv.org/abs/1901.10002">A Framework for Understanding Sources of Harm throughout the Machine Learning Life Cycle</a>. 2019.</li>
+        <li>Z. Obermeyer, B. Powers, C. Vogeli, S. Mullainathan. <a href="https://doi.org/10.1126/science.aax2342">Dissecting racial bias in an algorithm used to manage the health of populations</a>. Science, 2019.</li>
+        <li>H. Lakkaraju, J. Kleinberg, J. Leskovec, J. Ludwig, S. Mullainathan. <a href="https://doi.org/10.1145/3097983.3098066">The Selective Labels Problem</a>. KDD, 2017.</li>
+        <li>D. Ensign et al. <a href="https://arxiv.org/abs/1706.09847">Runaway Feedback Loops in Predictive Policing</a>. FAT*, 2018.</li>
+        <li>S. Corbett-Davies, J. Gaebler, H. Nilforoshan, R. Shroff, S. Goel. <a href="https://arxiv.org/abs/1808.00023">The Measure and Mismeasure of Fairness</a>. JMLR, 2023.</li>
+        <li>U. Hébert-Johnson, M. Kim, O. Reingold, G. Rothblum. <a href="https://arxiv.org/abs/1711.08513">Multicalibration</a>. ICML, 2018.</li>
+        <li><a href="https://fairlearn.org/">Fairlearn documentation</a>. Metrics, mitigation and user guide.</li>
+        <li>Central Bank of the UAE. <a href="https://www.centralbank.ae/media/mykn5fue/cbuae-issues-guidance-note-to-protect-consumers-and-ensure-responsible-use-of-artificial-intelligence-in-the-financial-sector-en.pdf">Press release: guidance note on responsible use of AI in the financial sector</a>. February 2026. Read the full note on the CBUAE rulebook.</li>
+        <li><a href="https://www.winstontaylor.com/insights/ai-act-rules-on-high-risk-ai-delayed-as-ai-digital-omnibus-agreed">AI Act rules on high-risk AI delayed as AI Digital Omnibus agreed</a>. Winston &amp; Taylor (secondary source; check the official text).</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in G2: privacy, model cards and human oversight (G2.3 – G2.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const Q = x => 1 - L.normCdf(x), SIG = L.sigmoid, LOGIT = L.logit;
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  const pts = v => (v >= 0 ? "+" : "−") + Math.abs(100 * v).toFixed(1);
+  const aed = v => (v < 0 ? "−" : "") + "AED " + L.fmtInt(Math.abs(Math.round(v)));
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, v, lo, hi) { el.className = "stat " + (Math.abs(v) < lo ? "ok" : Math.abs(v) < hi ? "warn" : "bad"); }
+  const PA = 0.85;
+  // per-group rates at cut t for score separation d and repay share p
+  function gm(p, d, t) {
+    const tpr = Q(t - d), fpr = Q(t), sel = p * tpr + (1 - p) * fpr;
+    return { sel, tpr, fpr, ppv: sel > 1e-12 ? p * tpr / sel : 1, cal: SIG(LOGIT(p) + d * t - d * d / 2) };
+  }
+  function pairBars(box, rows, label) {
+    const W = Math.max(300, box.clientWidth), bh = 13, rowH = 2 * bh + 16, H = rows.length * rowH + 28;
+    const m = { l: 128, r: 52, t: 6 };
+    const svg = mk(box, W, H, label), X = L.scale(0, 1, m.l, W - m.r);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - 22, class: "grid" }, svg);
+      tx(svg, X(v), H - 6, (v * 100) + "%", { "text-anchor": "middle" });
+    });
+    rows.forEach((r, i) => {
+      const y = m.t + i * rowH + 6;
+      tx(svg, m.l - 8, y + bh + 4, r.n, { "text-anchor": "end", class: "lbl-ink" });
+      L.svg("rect", { x: X(0), y, width: Math.max(0, X(r.a) - X(0)), height: bh, rx: 2, class: "ba" }, svg);
+      L.svg("rect", { x: X(0), y: y + bh + 1, width: Math.max(0, X(r.b) - X(0)), height: bh, rx: 2, class: "bb" }, svg);
+      tx(svg, X(r.a) + 5, y + bh - 2, pct(r.a, 0), { class: "lbl-strong" });
+      tx(svg, X(r.b) + 5, y + 2 * bh - 1, pct(r.b, 0), { class: "lbl-strong" });
+    });
+  }
+  const rowsOf = (a, b) => [
+    { n: "Approval rate", a: a.sel, b: b.sel },
+    { n: "Good applicants approved", a: a.tpr, b: b.tpr },
+    { n: "Bad applicants approved", a: a.fpr, b: b.fpr },
+    { n: "Approved who repay", a: a.ppv, b: b.ppv }
+  ];
+
+  // ===================== Simulation 1 =====================
+  const S1 = { pb: 0.70, d: 1.5, t: 0.6 };
+  const defsBox = $("defs-chart");
+  function renderDefs() {
+    const a = gm(PA, S1.d, S1.t), b = gm(S1.pb, S1.d, S1.t);
+    const rows = rowsOf(a, b); rows.push({ n: "Chance a score at the cut repays", a: a.cal, b: b.cal });
+    pairBars(defsBox, rows, "Fairness measures by group");
+    const ratio = b.sel / a.sel;
+    $("s1-verdict").innerHTML = "<ul>" +
+      "<li>Good and bad applicants are approved at the same rates in both groups (gaps " + pts(a.tpr - b.tpr) + " and " + pts(a.fpr - b.fpr) + " points): <b>equalised odds holds</b> because the score is equally good for both.</li>" +
+      "<li>Approval rate gap: <b>" + pts(a.sel - b.sel) + "</b> points; group B is approved at <b>" + pct(ratio, 0) + "</b> of A's rate (" + (ratio >= 0.8 ? "passes" : "fails") + " the four-fifths screen).</li>" +
+      "<li>Repay rate among approved: gap <b>" + pts(a.ppv - b.ppv) + "</b> points; a score at the cut means a <b>" + pct(a.cal, 0) + "</b> repayment chance in A but <b>" + pct(b.cal, 0) + "</b> in B.</li></ul>";
+  }
+  L.bind("s-pb", v => pct(v, 0), v => { S1.pb = v; renderDefs(); });
+  L.bind("s-d", v => v.toFixed(1), v => { S1.d = v; renderDefs(); });
+  L.bind("s-t", v => v.toFixed(2), v => { S1.t = v; renderDefs(); });
+
+  // ===================== Simulation 2 =====================
+  const PB = 0.70, S2 = { d: 1.5, tA: 0.6, mode: "same" };
+  const tradeBox = $("trade-chart");
+  function bisect(f, lo, hi, dec) { // find x where f(x)=0, f monotone; dec=true if decreasing
+    let a = lo, b = hi;
+    for (let i = 0; i < 60; i++) { const m = (a + b) / 2; if ((f(m) > 0) === dec) a = m; else b = m; }
+    return (a + b) / 2;
+  }
+  const tBest = (p, d) => (LOGIT(0.8) - LOGIT(p) + d * d / 2) / d;
+  const prof = (p, d, t) => { const g = gm(p, d, t); return 500 * (p * g.tpr * 3000 - (1 - p) * g.fpr * 12000); };
+  function cutsFor() {
+    const d = S2.d; let tA = S2.tA, tB = S2.tA, note = "";
+    if (S2.mode === "parity") tB = bisect(t => gm(PB, d, t).sel - gm(PA, d, tA).sel, -8, 8 + d, true);
+    else if (S2.mode === "ppv") {
+      const target = gm(PA, d, tA).ppv;
+      tB = bisect(t => gm(PB, d, t).ppv - target, -8, 8 + d, false);
+      if (target < PB + 1e-6) note = "clamp";
+    } else if (S2.mode === "best") { tA = tBest(PA, d); tB = tBest(PB, d); }
+    return { tA, tB, note };
+  }
+  function renderTrade() {
+    const c = cutsFor(), a = gm(PA, S2.d, c.tA), b = gm(PB, S2.d, c.tB);
+    pairBars(tradeBox, rowsOf(a, b), "Fairness measures by group under the chosen rule");
+    const gAp = a.sel - b.sel, gT = a.tpr - b.tpr, gF = a.fpr - b.fpr, gP = a.ppv - b.ppv;
+    $("st2-ap").textContent = pts(gAp); cls($("st2-ap-b"), gAp, 0.02, 0.05);
+    $("st2-tpr").textContent = pts(gT); cls($("st2-tpr-b"), gT, 0.02, 0.05);
+    $("st2-fpr").textContent = pts(gF); cls($("st2-fpr-b"), gF, 0.02, 0.05);
+    $("st2-ppv").textContent = pts(gP); cls($("st2-ppv-b"), gP, 0.02, 0.05);
+    const pr = prof(PA, S2.d, c.tA) + prof(PB, S2.d, c.tB), best = prof(PA, S2.d, tBest(PA, S2.d)) + prof(PB, S2.d, tBest(PB, S2.d));
+    $("st2-pr").textContent = aed(pr);
+    $("st2-pr-s").textContent = Math.abs(best - pr) < 1 ? "this is the best possible" : "best possible: " + aed(best) + " (cost of this rule " + aed(best - pr) + ")";
+    const cutTxt = Math.abs(c.tA - c.tB) < 1e-6 ? "One cut at <b>" + c.tA.toFixed(2) + "</b>." : "Group A's cut <b>" + c.tA.toFixed(2) + "</b>, group B's cut <b>" + c.tB.toFixed(2) + "</b>.";
+    const say = {
+      same: "Equal error rates by construction; approval and repayment among approved differ because the groups differ.",
+      parity: "B's cut drops so approval rates match. B now approves more bad applicants than A (FPR gap " + pts(gF) + ") and fewer of B's approvals repay (PPV gap " + pts(gP) + ").",
+      ppv: c.note === "clamp" ? "A's PPV is so low that B cannot match it even at the lowest cut, so B's cut is at the floor. Raise A's cut." : "B's cut rises until B's approvals repay as often as A's. B now rejects more good applicants (TPR gap " + pts(gT) + ") and approves fewer overall (gap " + pts(gAp) + ").",
+      best: "Each group at the cut where the marginal applicant is break-even (80% repay chance). That ignores A's slider. Note it maximises profit and equalises none of the four gaps."
+    }[S2.mode];
+    $("s2-verdict").innerHTML = cutTxt + " " + say + (S2.d >= 3.5 ? " At this score quality the gaps are small whatever you choose: with a near-perfect score the trade-off all but disappears." : "");
+  }
+  L.bind("s2-d", v => v.toFixed(1), v => { S2.d = v; renderTrade(); });
+  L.bind("s2-t", v => v.toFixed(2), v => { S2.tA = v; renderTrade(); });
+  document.querySelectorAll("[data-m]").forEach(btn => btn.addEventListener("click", () => {
+    S2.mode = btn.dataset.m;
+    document.querySelectorAll("[data-m]").forEach(o => o.setAttribute("aria-pressed", String(o === btn)));
+    renderTrade();
+  }));
+
+  // ===================== Simulation 3 =====================
+  const S3 = { k: 8, dl: 0.08 };
+  const proxyBox = $("proxy-chart");
+  function binom(k, q) { const p = [Math.pow(1 - q, k)]; for (let c = 0; c < k; c++) p.push(p[c] * (k - c) / (c + 1) * q / (1 - q)); return p; }
+  function renderProxy() {
+    const k = S3.k, pA = binom(k, 0.5 + S3.dl), pB = binom(k, 0.5 - S3.dl), cut = Math.floor(k / 2) + 1;
+    let aA = 0, aB = 0, acc = 0;
+    for (let c = 0; c <= k; c++) { if (c >= cut) { aA += pA[c]; aB += pB[c]; } acc += 0.5 * Math.max(pA[c], pB[c]); }
+    const W = Math.max(300, proxyBox.clientWidth), H = 230, m = { l: 40, r: 10, t: 14, b: 40 };
+    const svg = mk(proxyBox, W, H, "How many favourable features each group has");
+    const mx = Math.max(...pA, ...pB), y = L.scale(0, mx * 1.1, H - m.b, m.t), x = L.scale(0, k + 1, m.l, W - m.r), bw = (x(1) - x(0));
+    [0, 0.5, 1].forEach(f => { const v = mx * 1.1 * f; L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (100 * v).toFixed(0) + "%", { "text-anchor": "end" }); });
+    for (let c = 0; c <= k; c++) {
+      L.svg("rect", { x: x(c) + 1, y: y(pA[c]), width: Math.max(1, bw / 2 - 1), height: y(0) - y(pA[c]), class: "ba" }, svg);
+      L.svg("rect", { x: x(c) + bw / 2, y: y(pB[c]), width: Math.max(1, bw / 2 - 1), height: y(0) - y(pB[c]), class: "bb" }, svg);
+      if (k <= 12 || c % 5 === 0) tx(svg, x(c) + bw / 2, H - m.b + 14, String(c), { "text-anchor": "middle" });
+    }
+    L.svg("line", { x1: x(cut), x2: x(cut), y1: m.t, y2: H - m.b, class: "cut-line" }, svg);
+    tx(svg, x(cut) + 4, m.t + 10, "approve from here", { class: "lbl-ink" });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Number of favourable features", { "text-anchor": "middle" });
+    $("st3-a").textContent = pct(aA, 0); $("st3-b").textContent = pct(aB, 0);
+    const gap = aA - aB; $("st3-gap").textContent = (100 * gap).toFixed(0); cls($("st3-gap-b"), gap, 0.05, 0.15);
+    $("st3-acc").textContent = pct(acc, 0); $("st3-acc-b").className = "stat " + (acc < 0.6 ? "ok" : acc < 0.75 ? "warn" : "bad");
+    $("s3-verdict").innerHTML = "Each feature alone lets you guess the group right <b>" + pct(0.5 + S3.dl, 0) + "</b> of the time. Together, <b>" + k + "</b> of them let an auditor guess right <b>" + pct(acc, 0) + "</b> of the time, and a model that never saw the group column approves group A at <b>" + pct(aA, 0) + "</b> against <b>" + pct(aB, 0) + "</b> for B.";
+  }
+  L.bind("s-k", v => String(v), v => { S3.k = v; renderProxy(); });
+  L.bind("s-dl", v => "±" + (100 * v).toFixed(0) + " points", v => { S3.dl = v; renderProxy(); });
+
+  // ===================== Simulation 4 =====================
+  const S4 = { r: 1.5, g: 1.3 };
+  const loopBox = $("loop-chart");
+  const shareB = rho => 0.3 * rho / (0.3 * rho + 0.7);
+  function renderLoop() {
+    const rhos = []; let rho = S4.r;
+    for (let t = 0; t <= 6; t++) { rhos.push(Math.min(rho, 1e4)); rho = Math.pow(rho, S4.g); }
+    const W = Math.max(300, loopBox.clientWidth), H = 240, m = { l: 44, r: 10, t: 14, b: 40 };
+    const svg = mk(loopBox, W, H, "Group B's share of alerts after each retraining round");
+    const y = L.scale(0, 1, H - m.b, m.t), x = L.scale(0, 7, m.l, W - m.r), bw = x(1) - x(0);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" }); });
+    rhos.forEach((r, t) => {
+      const s = shareB(r);
+      L.svg("rect", { x: x(t) + 6, y: y(s), width: bw - 12, height: y(0) - y(s), rx: 3, class: "bb" }, svg);
+      tx(svg, x(t) + bw / 2, y(s) - 5, pct(s, 0), { "text-anchor": "middle", class: "lbl-strong" });
+      tx(svg, x(t) + bw / 2, H - m.b + 14, "round " + t, { "text-anchor": "middle" });
+    });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(0.3), y2: y(0.3), class: "ref-line" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Retraining round (0 = initial review pattern)", { "text-anchor": "middle" });
+    const s0 = shareB(rhos[0]), s6 = shareB(rhos[6]);
+    $("st4-0").textContent = pct(s0, 0); $("st4-0-b").className = "stat " + (s0 < 0.34 ? "ok" : "warn");
+    $("st4-6").textContent = pct(s6, 0); $("st4-6-b").className = "stat " + (s6 < 0.34 ? "ok" : s6 < 0.5 ? "warn" : "bad");
+    $("st4-ratio").textContent = rhos[6] >= 100 ? "100×+" : rhos[6].toFixed(1) + "×";
+    $("s4-verdict").innerHTML = S4.r < 1.05
+      ? "No initial imbalance: reviews are even, the labels are fair, and nothing compounds. Raise the first slider."
+      : S4.g < 1.02
+        ? "The model learns the imbalance in the labels and repeats it: group B gets <b>" + pct(s0, 0) + "</b> of alerts against a <b>30%</b> share of customers and cases, round after round. Not growing, but not self-correcting either."
+        : "Group B gets <b>" + pct(s0, 0) + "</b> of alerts at the start and <b>" + pct(s6, 0) + "</b> after six retrainings, while its share of true cases never moved from 30%. Every round the data looks like confirmation.";
+  }
+  L.bind("s-r", v => v.toFixed(1) + "×", v => { S4.r = v; renderLoop(); });
+  L.bind("s-g", v => v.toFixed(2), v => { S4.g = v; renderLoop(); });
+
+  function renderAll() { renderDefs(); renderTrade(); renderProxy(); renderLoop(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

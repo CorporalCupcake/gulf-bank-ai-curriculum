@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Where the Model Runs: Hybrid and On-Premises Deployment, and Training Across Many GPUs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict.ok { background: var(--ok-soft); } .verdict.warn { background: var(--warn-soft); } .verdict.bad { background: var(--bad-soft); }
+  .bar-0 { fill: var(--neutral); }
+  .bar-1 { fill: var(--warn); fill-opacity: .8; }
+  .bar-2 { fill: var(--accent); fill-opacity: .7; }
+  .bar-3 { fill: var(--accent); }
+  .cv-ideal { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-alt { stroke: var(--warn); stroke-width: 2.6; fill: none; }
+  .cv-rule { stroke: var(--bad); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .opt-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .wl-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+  .wl-desc { font-size: 14px; color: var(--muted); max-width: var(--measure); margin: 6px 0 0; }
+  pre { overflow-x: auto; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track P · Production, data and platforms</span>
+    <span>Module P4 · Cloud and compute</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>P4.3 · P4.4</span>
+        <span class="pill n">First 90 days</span>
+        <span class="star">★ Priority</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Where the Model Runs: Hybrid and On-Premises Deployment, and Training Across Many GPUs</h1>
+      <p class="dek">Why data residency and regulator approval often decide where a model may run, what hybrid really means in practice, when owning GPUs beats renting them, and how training is split across machines when one GPU is not enough.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>In a Gulf bank the question "where may this data and this model live?" is answered by classification, regulation and latency before cost, so the normal answer is hybrid (sensitive and latency-critical work inside the bank or in an approved in-country environment, bursty or non-sensitive work where compute is elastic), and when you do need many GPUs, data parallelism with sharded memory is the workhorse, limited by network bandwidth rather than by arithmetic.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A data scientist joins a bank and finds an excellent open-weight language model, a free afternoon and a cloud account. She wants to fine-tune the model on call-centre transcripts. Then three questions arrive, usually in this order, usually from people she has not met yet.</p>
+        <ul>
+          <li><strong>From information security:</strong> do the transcripts contain customer names, account numbers or voices? (Yes.) Where would the GPUs be?</li>
+          <li><strong>From compliance and legal:</strong> is that provider approved as an outsourcing arrangement? May this data leave the country? Who holds the encryption keys?</li>
+          <li><strong>From infrastructure:</strong> there are four GPUs on-premises, shared with fraud. Which week do you want them?</li>
+        </ul>
+        <p>None of these is about model quality. All of them decide whether the project happens. That is the point of this lesson. In a regulated bank, <em>where</em> a workload runs is a design decision made early, with constraints that come from outside the data science team. It is not an afterthought you hand to DevOps once the model works.</p>
+        <p>The second half of the lesson is the mirror image. Sometimes the constraint is not that you cannot use big compute but that one machine is not enough. A model, or the data it trains on, does not fit on one GPU, or training would take a month. Then you split the work across many GPUs. The simplest split, <strong>data parallelism</strong>, gives every GPU a full copy of the model and a different slice of the data, and averages the gradients. It is easy to describe and easy to get slightly wrong, and the thing that limits it is mostly <em>moving numbers between machines</em>, not computing.</p>
+        <p>Both halves share one idea: <strong>compute is cheap compared with moving data and getting permission to move it.</strong> Data has gravity (it is slow, risky and sometimes illegal to move), and gradients have a bandwidth bill. Good design puts the compute next to the data and pays for movement only where it must.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Three questions settle most placement decisions: how sensitive is the data, how fast must the answer come back, and how steady is the load? Sensitive and fast and steady says on-premises. Public or pseudonymised, slow and bursty says rent elastic compute in an approved place. Most banks end up with both and a clear rule for which workload goes where.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-why">What forces a workload to stay put (P4.3)</h3>
+      <div class="prose">
+        <p>Five forces decide placement. They are listed roughly in the order they bite.</p>
+        <ul>
+          <li><strong>Data classification.</strong> Banks label data (public, internal, confidential, restricted). Card numbers, account balances, identity documents, AML case files and customer voice sit at the top. Policy ties each label to allowed environments. This is the first filter and it is internal, so you can read it.</li>
+          <li><strong>Residency and transfer law.</strong> Both the UAE and Saudi Arabia have personal-data protection laws with conditions on cross-border transfer, and financial regulators add their own expectations for banks. The UAE has a central-bank outsourcing regime and cloud guidance for licensed institutions. Saudi Arabia has SAMA rules on outsourcing and cyber security, a national cybersecurity authority (NCA) set of controls including ones for cloud, and a communications regulator framework for cloud services. Free zones such as DIFC and ADGM have their own data-protection regimes. <strong>I am describing the shape from memory: the exact clauses, thresholds and approval steps change and differ between entities, so always get the current text from your compliance or legal team (Part 4 has primary links).</strong></li>
+          <li><strong>Outsourcing and exit.</strong> Even where data may sit in a cloud, using a provider is usually a material outsourcing that needs notification or approval, an exit plan, audit rights and concentration-risk thinking. A model that depends on one external API is a dependency the regulator can ask about.</li>
+          <li><strong>Latency and coupling.</strong> A fraud score inside a card authorisation has tens of milliseconds, and the path runs through payment switches and core systems that live in the bank's data centres. A round trip to a distant region eats the budget and adds a failure mode in the most critical path the bank has.</li>
+          <li><strong>Economics and supply.</strong> GPUs are scarce, power and cooling are real, and the bank may already own capacity. Whether owning beats renting depends on utilisation (below).</li>
+        </ul>
+        <p>Notice that the first four are <em>constraints</em> (a workload either satisfies them or does not) and only the last is a trade-off. This is why a cost model alone gives wrong answers in a bank.</p>
+      </div>
+
+      <h3 class="sub" id="m-patterns">The placement patterns, and a way to choose</h3>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Pattern</th><th>What it is</th><th>Strength</th><th>Cost or catch</th></tr></thead>
+          <tbody>
+            <tr><td><b>On-premises</b></td><td>The bank's own racks, GPUs and network, sometimes in a co-location facility it leases.</td><td>Full control of data, keys and latency; no outsourcing question; can be air-gapped.</td><td>Capital cost, procurement lead times for GPUs, you run the platform, fixed capacity.</td></tr>
+            <tr><td><b>In-country public cloud region</b></td><td>A hyperscaler region inside the UAE or Saudi Arabia, under a bank-approved contract.</td><td>Elastic capacity, managed services, residency satisfied for data kept in region.</td><td>Needs approval; control plane and support access may sit outside the country; GPU supply in region can be tight.</td></tr>
+            <tr><td><b>Sovereign or local cloud</b></td><td>A national or locally operated cloud (for example Core42 in the UAE; see <a href="a11-sovereign-ai-g42-and-core42.html">A11</a>).</td><td>Operated and often owned locally; designed to answer residency and sovereignty questions.</td><td>Smaller service catalogue; check contract, certifications and where staff and support sit.</td></tr>
+            <tr><td><b>Hybrid</b></td><td>On-premises plus cloud, joined by private links, with a rule for which workload runs where.</td><td>Each workload gets the cheapest place that satisfies its constraints.</td><td>Two platforms to secure, monitor and keep consistent; data movement and identity are the hard parts.</td></tr>
+            <tr><td><b>External API or foreign region</b></td><td>Calling a hosted model or using a region outside the country.</td><td>Best models, no infrastructure.</td><td>Usually not allowed for restricted data; needs a gateway, redaction and contractual terms (<a href="a15-ai-gateways-guardrails-and-token.html">A15</a>).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The next simulation is a decision aid, not a rulebook. Pick a workload, then pick a place, and read the reasoning. The point is the reasoning pattern: constraints first, then comfort, then cost.</p>
+      </div>
+
+      <figure class="figure" id="fig-place">
+        <div class="fig-head"><span class="fig-title">Where would you run it?</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> choose each of the six workloads in turn and test all four places before reading the verdicts. Notice that the "public content" chatbot is the easy case on paper and still gets a warning for external APIs, because the <em>conversations</em> are not public.</p>
+        <div class="wl-row" id="wl-btns" role="group" aria-label="Workload"></div>
+        <p class="wl-desc" id="wl-desc"></p>
+        <div class="opt-row" id="opt-btns" role="group" aria-label="Place to run it"></div>
+        <div class="verdict" id="s1-verdict" aria-live="polite"></div>
+        <p class="sim-note">Simulated: a hand-written judgement table for six illustrative workloads. It reflects common bank practice and the reasoning in this lesson, not any regulation or any specific bank's policy. Real answers depend on your own classification policy, contracts and approvals.</p>
+      </figure>
+
+      <h3 class="sub" id="m-stack">What "on-prem ML" actually requires</h3>
+      <div class="prose">
+        <p>Running models inside the bank is not just buying servers. The platform pieces are the same ones cloud gives you for free, and you assemble them yourself:</p>
+        <ul>
+          <li><strong>A scheduler for scarce GPUs.</strong> Usually Kubernetes with GPU support, or Slurm, with quotas and queues so fraud inference is never starved by a student's experiment. GPUs are the expensive, contended resource; treat them like a budget.</li>
+          <li><strong>Internal mirrors.</strong> Production networks often have no internet. Python packages, container images and model weights must come from internal mirrors that security has scanned. This sounds dull and is the first thing that stalls a new team. Pinning versions and weights hashes (see <a href="p2-the-model-lifecycle-from-experiment.html">P2</a>) is also a supply-chain control.</li>
+          <li><strong>A model registry and serving layer.</strong> The same lifecycle as in the cloud: tracked experiments, registered versions, staged promotion, rollback, and serving for batch or real time (<a href="p2-deployment-patterns-batch-real-time.html">P2.2</a>). For language models, a serving engine with batching and a KV cache (<a href="m1-context-windows-and-the-kv.html">M1</a>).</li>
+          <li><strong>Data access that follows the rules.</strong> Features and training sets pulled through governed paths with lineage (<a href="p1-lineage-and-metadata.html">P1</a>), not copied to a laptop.</li>
+          <li><strong>Observability and key management.</strong> Monitoring for the model and for the GPU fleet, and keys held in the bank's hardware security modules. Who holds the keys is often the question regulators actually care about.</li>
+        </ul>
+        <p>Two practical consequences. First, open-weight models (several strong ones now exist, including Arabic-focused ones, see <a href="a14-arabic-llms-jais-allam-falcon.html">A14</a>) are what makes on-premises language-model work possible at all. Second, model size drives the hardware bill, so compression (<a href="p3-quantization-pruning-and-distillation.html">P3</a>) is a direct lever: a model quantised to 4-bit can fit on one GPU where the full-precision version needed four.</p>
+      </div>
+
+      <h3 class="sub" id="m-hybrid">What makes hybrid work, and what makes it hurt</h3>
+      <div class="prose">
+        <p>Hybrid has a good side and a hard side. The good side is a clean rule per workload. The hard side is everything that crosses the boundary:</p>
+        <ul>
+          <li><strong>Data gravity.</strong> Moving terabytes between on-premises and a cloud region is slow, costs egress fees in one direction, and each copy is another thing to secure and delete. Prefer moving the <em>code</em> to the data.</li>
+          <li><strong>Crossing safely.</strong> What may cross is usually data that has been reduced: aggregated, pseudonymised with keys kept on-premises, or synthetic. Be precise: pseudonymised data is still personal data under most regimes (<a href="g2-privacy-basics-minimisation-consent-anonymisation.html">G2</a>). Techniques such as clean rooms and differential privacy (<a href="a11-differential-privacy-clean-rooms-homomorphic.html">A11</a>) are for the cases where it must be shared more widely.</li>
+          <li><strong>Two environments drifting apart.</strong> If the model is trained in the cloud and served on-premises, the libraries, hardware and feature code must match, or you get training-serving skew (<a href="p1-feature-stores-and-online-offline.html">P1</a>). The usual fix is one container image, built once, promoted through stages.</li>
+          <li><strong>Network and identity.</strong> Private links, one identity provider, consistent logging. A hybrid system that cannot be audited end to end is the worst of both worlds.</li>
+          <li><strong>Failure domains.</strong> If real-time scoring depends on a cloud link, a link outage becomes a fraud-control outage. Critical paths usually need a local fallback, even if it is a simpler model.</li>
+        </ul>
+        <p>The pattern that appears most often, for good reasons, is a <strong>split by phase</strong>: train or fine-tune where compute is elastic and the data allows (including in-country cloud on pseudonymised or approved data), and serve inside the bank next to the systems that call the model. Training is bursty and tolerant of delay; serving is steady and latency-bound. They have opposite needs, so they often live in different places.</p>
+      </div>
+
+      <h3 class="sub" id="m-econ">Own or rent? Utilisation decides</h3>
+      <div class="prose">
+        <p>A GPU you own costs the same whether it works or sleeps. A GPU you rent costs only while you hold it. So the question is not "which is cheaper per hour?" but "how much of the time will the owned GPU do useful work?". Cost per <em>useful</em> hour for an owned server is its fixed yearly cost divided by the hours it actually works:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>cost per useful hour</mtext><mo>=</mo><mfrac><mrow><mtext>capex</mtext><mo>/</mo><mtext>life</mtext><mo>+</mo><mtext>yearly running cost</mtext></mrow><mrow><mtext>GPUs</mtext><mo>×</mo><mn>8760</mn><mo>×</mo><mi>u</mi></mrow></mfrac></math>
+        <p class="where"><i>u</i> is utilisation, the fraction of the year's hours the GPUs do useful work; 8760 is the hours in a year. Capex is spread over the server's useful life. Running cost covers power, cooling, space, support and the share of staff who run it. Break-even is the <i>u</i> at which this equals the rented price per hour. Below it, renting is cheaper; above it, owning is.</p>
+      </div>
+
+      <figure class="figure" id="fig-econ">
+        <div class="fig-head"><span class="fig-title">The break-even utilisation</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> start at 30% utilisation: owning costs more than renting at list price. Raise utilisation until the curve crosses the cloud line. Then add a 40% committed-use discount and see the break-even jump beyond 100%, meaning owning never wins on cost alone. Then remember Simulation 1: for some workloads cost is irrelevant because renting is not allowed.</p>
+        <div class="chart-wrap" id="econ-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Owned server, cost per useful GPU hour</span>
+          <span><i style="background:var(--warn)"></i>Rented GPU hour</span>
+          <span><i style="background:var(--bad)"></i>Break-even utilisation</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-util">Utilisation of the owned GPUs <output for="s-util"></output></label><input type="range" id="s-util" min="5" max="100" step="1" value="30"></div>
+          <div class="ctl"><label for="s-capex">Price of an 8-GPU server <output for="s-capex"></output></label><input type="range" id="s-capex" min="800" max="3000" step="100" value="1500"></div>
+          <div class="ctl"><label for="s-disc">Committed-use discount on rented GPUs <output for="s-disc"></output></label><input type="range" id="s-disc" min="0" max="60" step="5" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Owned, per useful GPU hour</div><div class="v" id="st2-own"></div><div class="s">at this utilisation</div></div>
+          <div class="stat"><div class="k">Rented, per GPU hour</div><div class="v" id="st2-rent"></div><div class="s" id="st2-rent-s"></div></div>
+          <div class="stat" id="st2-be-b"><div class="k">Break-even utilisation</div><div class="v" id="st2-be"></div><div class="s">owning wins above this</div></div>
+          <div class="stat"><div class="k">Yearly cost, this one server</div><div class="v" id="st2-yr"></div><div class="s" id="st2-yr-s"></div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated and illustrative: an 8-GPU server with a 4-year life, yearly running cost of 20% of its price, and a list rental price of AED 14.70 per GPU-hour (roughly USD 4). These are round teaching numbers, not quotes. Real prices vary by GPU generation and contract, and the owned side leaves out procurement delay. Exact arithmetic on those inputs.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What the picture hides, and what to say about it:</p>
+        <ul>
+          <li><strong>Utilisation is the lie in every on-prem business case.</strong> Real clusters idle at nights, between projects and while waiting for data. 60 to 70% sustained is good. Ask for measured utilisation of the existing fleet before agreeing to buy more.</li>
+          <li><strong>Mixed workloads change it.</strong> Real-time inference must be provisioned for peak and idles off-peak. Pairing steady serving with queued, interruptible training on the same GPUs raises utilisation and moves the break-even in owning's favour.</li>
+          <li><strong>The rented side has extra costs too</strong>: egress, storage, managed-service premiums, and the effort of getting a provider approved. The owned side has a delay: ordering GPUs can take months.</li>
+          <li><strong>Many bank models need no GPU.</strong> Tabular fraud and credit models (gradient boosting) train on CPUs in minutes. GPUs matter for deep learning and language models. Check the need before buying the hardware.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-dp">Training on many GPUs: data parallelism (P4.4)</h3>
+      <div class="prose">
+        <p>Now the second topic. You have a model and a lot of data, and one GPU is too slow. The idea behind data parallelism fits in four lines.</p>
+        <ol>
+          <li>Put an identical copy of the model on each of <i>N</i> GPUs (workers).</li>
+          <li>Give each worker a different slice of the batch. With 32 examples per worker, the global batch is 32 × <i>N</i>.</li>
+          <li>Each worker computes the gradient on its slice (see <a href="f1-gradients-optimisation.html">F1.3</a>).</li>
+          <li><strong>All-reduce:</strong> average the gradients across workers, so every worker holds the same average. Each then takes the same optimiser step, and the copies stay identical.</li>
+        </ol>
+        <p>Why this is exactly correct: the gradient of an average loss is the average of the gradients. Averaging the workers' gradients gives precisely the gradient of one big batch of 32 × <i>N</i> examples, computed in parallel. So data parallelism is not an approximation to training with a big batch; it <em>is</em> training with a big batch, done faster.</p>
+        <p>The averaging step is where the cost lives. The standard method, <em>ring all-reduce</em>, arranges the workers in a ring and passes chunks of the gradient round it twice. Each worker sends and receives about twice the gradient's size, nearly regardless of <i>N</i> (Patarasuk and Yuan, 2009):</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>t</mi><mtext>comm</mtext></msub><mo>≈</mo><mfrac><mrow><mn>2</mn><mo stretchy="false">(</mo><mi>N</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo></mrow><mi>N</mi></mfrac><mo>·</mo><mfrac><mi>B</mi><mi>bw</mi></mfrac></math>
+        <p class="where"><i>B</i> is the gradient size in bytes (2 bytes per parameter in 16-bit), <i>bw</i> the bandwidth of the slowest link in the ring. The factor 2(<i>N</i>−1)/<i>N</i> is below 2 and barely changes as <i>N</i> grows. Adding GPUs does not make the all-reduce much slower <em>in itself</em>, but when workers span several machines, the slowest link in the ring becomes the network between machines, and that is typically 10 to 30 times slower than the links inside one machine. This ignores latency, which matters for small messages.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Libraries hide the mechanics. In PyTorch, a data-parallel job is a few lines on top of ordinary training code, launched by a tool that starts one process per GPU:</p>
+<pre><code># launched with: torchrun --nproc_per_node=8 train.py
+import torch, torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+
+dist.init_process_group("nccl")            # workers find each other
+rank = dist.get_rank()
+torch.cuda.set_device(rank % torch.cuda.device_count())
+model = DDP(MyModel().cuda())               # wraps the model: same weights everywhere
+
+sampler = DistributedSampler(dataset)       # each rank sees a different slice
+for epoch in range(epochs):
+    sampler.set_epoch(epoch)                # different shuffle each epoch
+    for x, y in DataLoader(dataset, batch_size=32, sampler=sampler):
+        loss = loss_fn(model(x.cuda()), y.cuda())
+        loss.backward()                     # gradients are all-reduced during this call
+        opt.step(); opt.zero_grad()</code></pre>
+        <p>Note the comment on <code>backward()</code>. The library starts reducing the gradients of the last layers while earlier layers are still computing theirs. This <strong>overlap</strong> hides part of the communication behind computation, and it is why well-built data parallelism can scale almost linearly on a fast network.</p>
+      </div>
+
+      <figure class="figure" id="fig-scale">
+        <div class="fig-head"><span class="fig-title">How far does data parallelism scale?</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> with the defaults, scaling is almost perfect up to 8 GPUs (one machine, fast links), then the curve bends at 16 when the ring has to cross the network. Turn overlap off and the bend gets worse. Then lower the network speed to 25 Gb/s, or make the model bigger, and watch efficiency fall: the cure is a faster network or less to send, not more GPUs.</p>
+        <div class="btns" role="group" aria-label="Overlap">
+          <button class="btn" type="button" id="b-ov" aria-pressed="true">Overlap communication with compute: on</button>
+        </div>
+        <div class="chart-wrap" id="scale-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>Perfect scaling</span>
+          <span><i style="background:var(--accent)"></i>This setup</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Number of GPUs (8 per machine) <output for="s-n"></output></label><input type="range" id="s-n" min="0" max="8" step="1" value="5"></div>
+          <div class="ctl"><label for="s-par">Model size, billions of parameters <output for="s-par"></output></label><input type="range" id="s-par" min="-1" max="1" step="0.05" value="0"></div>
+          <div class="ctl"><label for="s-cmp">Compute per step on one GPU <output for="s-cmp"></output></label><input type="range" id="s-cmp" min="0.2" max="2" step="0.1" value="0.5"></div>
+          <div class="ctl"><label for="s-net">Network between machines <output for="s-net"></output></label><input type="range" id="s-net" min="25" max="800" step="25" value="100"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Global batch</div><div class="v" id="st3-gb"></div><div class="s">32 examples per GPU</div></div>
+          <div class="stat"><div class="k">Time to average gradients</div><div class="v" id="st3-comm"></div><div class="s" id="st3-comm-s"></div></div>
+          <div class="stat" id="st3-eff-b"><div class="k">Scaling efficiency</div><div class="v" id="st3-eff"></div><div class="s">compute time ÷ step time</div></div>
+          <div class="stat"><div class="k">Speed-up over one GPU</div><div class="v" id="st3-sp"></div><div class="s" id="st3-sp-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: ring all-reduce time from the formula above, 16-bit gradients, 300 GB/s between GPUs inside a machine and the slider's speed (in gigabits per second, divided by 8) once the job spans machines. Overlap hides 70% of the communication, but a step can never be faster than the communication itself. Real jobs use hierarchical reductions, which do better than this simple ring, and add latency and stragglers, which do worse. Exact arithmetic on those assumptions.</p>
+      </figure>
+
+      <div class="prose">
+        <p>One more consequence of the "global batch" idea. If you go from 1 GPU to 64 and keep the learning rate, you are now training with a batch 64 times larger, and the optimiser behaves differently: fewer steps per epoch, less gradient noise. A standard rule is to scale the learning rate with the batch size and <strong>warm it up</strong> over the first few epochs (Goyal et al., 2017). Beyond some batch size there are diminishing returns: you pay for 64 GPUs and need nearly as many epochs. So data parallelism buys speed up to a point, not unlimited speed.</p>
+      </div>
+
+      <h3 class="sub" id="m-shard">When the model does not fit: sharding the memory (ZeRO and FSDP)</h3>
+      <div class="prose">
+        <p>Plain data parallelism has a hidden waste: every GPU holds a full copy of everything. For a model trained in 16-bit with the Adam optimiser, the usual accounting is about <strong>16 bytes per parameter</strong>: 2 for the weights, 2 for the gradients, and 12 for the optimiser's full-precision copy of the weights plus its two running averages (Rajbhandari et al., 2020). A 7-billion-parameter model needs about 112 GB before counting activations. No single 80 GB GPU can hold that, yet 8 GPUs together hold 640 GB, and they are all storing the same 112 GB.</p>
+        <p>ZeRO (Zero Redundancy Optimizer) removes the redundancy in stages, and PyTorch's <strong>FSDP</strong> (fully sharded data parallel) is the native version of the last stage:</p>
+        <ul>
+          <li><strong>Stage 1</strong> shards the optimiser state across the <i>N</i> GPUs. Cheap, big saving.</li>
+          <li><strong>Stage 2</strong> also shards the gradients.</li>
+          <li><strong>Stage 3</strong> (what FSDP does) also shards the parameters. Each GPU owns 1/<i>N</i> of the weights, and gathers a layer's full weights just in time for its forward or backward pass, then drops them. Memory falls to roughly 16/<i>N</i> bytes per parameter, at the price of extra communication (about 1.5 times the traffic of plain data parallelism).</li>
+        </ul>
+        <p>The trade is memory for communication. The maths of training is unchanged; it is still the same big-batch gradient step.</p>
+      </div>
+
+      <figure class="figure" id="fig-mem">
+        <div class="fig-head"><span class="fig-title">What fits on an 80 GB GPU?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> set 7 billion parameters on 8 GPUs. Plain data parallelism needs 112 GB per GPU and fails; stage 1 and 2 land at 38 and 26 GB; stage 3 needs 14 GB. Now push the model to 70 billion and add GPUs until stage 3 fits. Real runs also need room for activations, so you want to stay well under the line.</p>
+        <div class="chart-wrap" id="mem-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-mp">Model size, billions of parameters <output for="s-mp"></output></label><input type="range" id="s-mp" min="-0.3" max="1.85" step="0.05" value="0.85"></div>
+          <div class="ctl"><label for="s-mn">Number of GPUs sharing the state <output for="s-mn"></output></label><input type="range" id="s-mn" min="0" max="8" step="1" value="3"></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: state memory only, using 16 bytes per parameter (16-bit weights and gradients, 12 bytes of 32-bit optimiser state for Adam) divided across GPUs according to the stage. Activations, buffers, fragmentation and framework overhead are not included and often add a third or more. Offloading to CPU memory, which DeepSpeed and FSDP support, is not shown. Exact arithmetic.</p>
+      </figure>
+
+      <h3 class="sub" id="m-other">Other ways to split, and what a bank actually needs</h3>
+      <div class="prose">
+        <p>Data parallelism needs the model to fit on a GPU, or to be sharded as above. For the very largest models, other splits are layered on top: <strong>tensor parallelism</strong> splits individual matrix multiplications across GPUs (needs very fast links, so it stays inside one machine), <strong>pipeline parallelism</strong> puts different layers on different GPUs and streams micro-batches through, and <strong>expert parallelism</strong> places the experts of a mixture-of-experts model on different devices (<a href="r1-mixture-of-experts-at-scale.html">R1</a>). Frontier labs combine all of them. Megatron-LM is the reference for combining them (Narayanan et al., 2021).</p>
+        <p>What a bank usually needs is much more modest, and saying so with confidence is part of sounding senior:</p>
+        <ul>
+          <li><strong>Tabular models</strong> (fraud, credit, churn): gradient-boosted trees on CPUs, or one GPU. No distributed training.</li>
+          <li><strong>Fine-tuning an open-weight model</strong> on bank text: usually parameter-efficient methods (LoRA and relatives) on 1 to 8 GPUs, often with sharding so the base model fits. A single node is the common case. Keep the base model in 16-bit or quantised and train small adapters (<a href="m2-prompting-versus-rag-versus-fine.html">M2.2</a> covers when fine-tuning is the right tool).</li>
+          <li><strong>Pretraining a large model from scratch</strong>: rarely a bank's job. Sovereign national efforts do it (A11, A14); a bank consumes the result.</li>
+        </ul>
+        <p>The advice that saves the most money: <strong>measure single-GPU throughput first, fix the data loader and the batch size, and only then add GPUs.</strong> A job starved by slow data loading or small batches wastes ten GPUs as surely as it wastes one.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Placement and parallelism touch most of the platform track and several of the governance ones.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">P4.1 – P4.2 · Cloud building blocks</span><span class="t"><a href="p4-cloud-building-blocks-compute-storage.html">The parts you rent or rebuild</a></span><p>Compute, storage, networks and identity are the pieces a hybrid design either rents or recreates on-premises. Read it first if the vocabulary is new.</p></div>
+        <div class="link-card"><span class="code">P3 · Quantization, pruning, distillation</span><span class="t"><a href="p3-quantization-pruning-and-distillation.html">Smaller models, smaller hardware bill</a></span><p>Compression is the main way to make an on-premises GPU budget stretch. It also changes the memory sums in Simulation 4.</p></div>
+        <div class="link-card"><span class="code">P2.2 · Deployment patterns</span><span class="t"><a href="p2-deployment-patterns-batch-real-time.html">Batch versus real time</a></span><p>Latency needs decide whether a model can live far from the system calling it. Batch scoring has far more freedom of placement than real-time scoring.</p></div>
+        <div class="link-card"><span class="code">P1 · Platforms and lineage</span><span class="t"><a href="p1-feature-stores-and-online-offline.html">Consistency across environments</a></span><p>Hybrid training and serving rely on identical features in both places. <a href="p1-lineage-and-metadata.html">Lineage</a> proves which data went where.</p></div>
+        <div class="link-card"><span class="code">G2 · Privacy basics</span><span class="t"><a href="g2-privacy-basics-minimisation-consent-anonymisation.html">What may cross the boundary</a></span><p>Pseudonymised is not anonymous. The privacy lesson defines the data that placement rules have to treat as personal.</p></div>
+        <div class="link-card"><span class="code">A11 · Sovereign AI and privacy tech</span><span class="t"><a href="a11-sovereign-ai-g42-and-core42.html">The local cloud option</a></span><p>National cloud and AI infrastructure, plus <a href="a11-differential-privacy-clean-rooms-homomorphic.html">clean rooms and differential privacy</a> for sharing data without moving it.</p></div>
+        <div class="link-card"><span class="code">A12 · Regulator expectations</span><span class="t"><a href="a12-cbuae-sama-and-sdaia-expectations.html">What CBUAE, SAMA and SDAIA expect</a></span><p>The supervisory view on outsourcing, third-party risk and AI. Use it with your compliance team's reading of the current text.</p></div>
+        <div class="link-card"><span class="code">G1 · Threat modelling</span><span class="t"><a href="g1-threat-modelling-an-ai-system.html">Every boundary is an attack surface</a></span><p>A hybrid design has more trust boundaries: model weights, mirrors, private links and keys. Threat-model each.</p></div>
+        <div class="link-card"><span class="code">A15 · AI gateways and token costs</span><span class="t"><a href="a15-ai-gateways-guardrails-and-token.html">Controlled calls to external models</a></span><p>When an external API is allowed for some workloads, a gateway enforces redaction, logging and cost limits.</p></div>
+        <div class="link-card"><span class="code">F1.3 · F5.1 · Gradients and backpropagation</span><span class="t"><a href="f1-gradients-optimisation.html">Why averaging gradients is exact</a></span><p>Data parallelism rests on the gradient of an average being the average of the gradients. <a href="f5-neurons-layers-and-backpropagation.html">Backpropagation</a> is what produces the gradients that get reduced.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Real-time card fraud.</strong> Scoring beside the authorisation switch, usually on-premises, with training elsewhere or on spare capacity (<a href="b1-transaction-and-card-fraud-detection.html">B1</a>, <a href="p5-designing-a-real-time-fraud.html">P5.1</a>).</li>
+          <li><strong>Internal copilots and credit memos.</strong> Customer financials in prompts push these towards on-premises or sovereign hosting of an open-weight or in-country hosted model (<a href="b7-internal-copilots-for-staff.html">B7</a>, <a href="a10-llms-for-credit-memos-and.html">A10</a>).</li>
+          <li><strong>Call-centre analytics.</strong> Voice and transcripts are among the most sensitive data the bank holds; Arabic-capable models (A14) fine-tuned in a controlled environment.</li>
+          <li><strong>Regulatory and group reporting.</strong> Banks with parent or subsidiary entities in several countries face conflicting residency rules, so the same model may need separate deployments per jurisdiction.</li>
+          <li><strong>Stress testing and simulation.</strong> Bursty, CPU-heavy, tolerant of delay: the textbook case for elastic compute where permitted.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Placement: hyperscalers and national providers have built in-country regions across the Gulf, regulators have tightened and clarified cloud expectations, and sovereign AI infrastructure is now a national priority. Training: sharded data parallelism is the standard answer for models that do not fit, and it is built into the main frameworks.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Searches checked on 6 November 2026. They returned mostly secondary sources (vendor blogs, compliance checklists), so items below that I could not tie to a primary source are marked as reported. Verify before relying on them.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2017</span><div><div class="t">Large-batch training with a scaling rule</div><p>Training with a batch of 8,192 images on 256 GPUs, with a linear learning-rate scaling rule and warm-up, matched small-batch accuracy. The recipe behind most data-parallel training since.</p><div class="src">Goyal et al., arXiv 1706.02677, 2017</div></div></li>
+        <li><span class="yr">2019–21</span><div><div class="t">Splitting models across devices</div><p>Megatron-LM showed how to split transformer layers across GPUs; later work combined tensor, pipeline and data parallelism to reach thousands of GPUs.</p><div class="src">Shoeybi et al., arXiv 1909.08053; Narayanan et al., SC 2021</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">ZeRO: remove redundant copies</div><p>Sharding optimiser state, gradients and then parameters across data-parallel workers, so memory per GPU falls as GPUs are added. Became DeepSpeed.</p><div class="src">Rajbhandari et al., SC 2020 (arXiv 1910.02054)</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">Data-parallel PyTorch, with overlap</div><p>Describes how the library buckets gradients and overlaps their reduction with the backward pass, giving near-linear scaling on up to 256 GPUs in the paper's tests.</p><div class="src">Li et al., PyTorch Distributed, VLDB 2020</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">FSDP in PyTorch</div><p>Industry-grade fully sharded data parallel, built into the framework, the native counterpart to ZeRO stage 3. Reported experience: it has since been revised (FSDP2, using a per-parameter design) and secondary sources describe it as the default recommendation for fine-tuning on a handful of GPUs, with DeepSpeed still favoured where its offloading features matter. Check the PyTorch documentation for the current API.</p><div class="src">Zhao et al., VLDB 2023 (arXiv 2304.11277); PyTorch docs</div></div></li>
+        <li><span class="yr">2023–26</span><div><div class="t">In-country regions and sovereign AI in the Gulf</div><p>Hyperscalers operate regions in the UAE and Saudi Arabia, with more announced; secondary sources report that Microsoft's Saudi Arabia East region is due for production use from Q4 2026 and that some providers' regions in the UAE are still being built. Local providers such as Core42 offer sovereign cloud and AI infrastructure. I could not confirm any of this from a primary source this session, so check each provider's region page and the bank's approved-provider list.</p><div class="src">Provider region pages; see Sources</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Regulators spell out cloud expectations</div><p>Secondary sources describe binding cloud expectations from the central banks, including residency for customer and transaction data and attention to disaster-recovery sites. I could not read the primary texts here and will not quote clauses. Take the current wording from the CBUAE rulebook, SAMA's published rules, and your compliance team.</p><div class="src">CBUAE rulebook; SAMA; NCA (see Sources)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in Gulf banking specifically (my judgement from public information, not a survey):</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Real-time scoring on-premises</b></td><td>Fraud and credit decisioning served in the bank's own data centre next to core systems.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Hybrid: train in approved cloud, serve inside</b></td><td>Elastic training on approved data, models promoted to on-premises serving through one container image.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Sharded fine-tuning of open-weight models on a few GPUs</b></td><td>LoRA or full fine-tuning with FSDP or DeepSpeed on one multi-GPU node.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Self-hosted language models for sensitive text</b></td><td>Open-weight models served with a batching engine inside the bank or a sovereign cloud.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Confidential computing for AI</b></td><td>Hardware-isolated enclaves, including on GPUs, so a provider cannot read data in use. Promising for approving cloud use; maturity and regulatory acceptance still vary.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Multi-node training of large models from scratch</b></td><td>Done by national AI programmes and labs; rarely by a commercial bank itself.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Decide placement from classification, regulation and latency; compare cost only among options that are allowed; and when training needs many GPUs, shard the memory, overlap the communication, and check the network before buying more accelerators.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These are the recurring ways placement and distributed-training plans go wrong, with the quickest check for each.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Choosing the platform by cost before checking the constraints</div><p>A neat spreadsheet shows the cloud is 30% cheaper, for a workload that may not legally or contractually run there.</p><div class="spot"><b>Spot it</b>Ask who classified the data and who approved the provider. If the answer is "not yet", the cost comparison is premature.</div></li>
+        <li><div class="t">Treating pseudonymised data as safe to export</div><p>Customer IDs are hashed, so the dataset is shipped abroad for training. Hashes of account numbers can be reversed by enumeration, and linkage with other data re-identifies people.</p><div class="spot"><b>Spot it</b>Ask whether anyone holds a key or table that maps back, and whether Legal has classified the data as personal data.</div></li>
+        <li><div class="t">Real-time scoring that depends on a distant link</div><p>The model sits in a cloud region and the authorisation path calls it. A network blip becomes declined cards or missed fraud.</p><div class="spot"><b>Spot it</b>Look for the timeout and the fallback in the design. If there is no local fallback, the critical path has a new single point of failure.</div></li>
+        <li><div class="t">Training and serving in different environments</div><p>The model is trained in one place with one library version and served in another. Predictions differ slightly and no one knows why.</p><div class="spot"><b>Spot it</b>Replay a sample of rows through both and compare scores. Check that one container image is promoted through stages.</div></li>
+        <li><div class="t">The utilisation fantasy</div><p>A business case for buying GPUs assumes 90% use. The fleet runs at 25%.</p><div class="spot"><b>Spot it</b>Ask for measured utilisation of the existing GPUs by week, and for the queue time that justifies new ones.</div></li>
+        <li><div class="t">Adding GPUs to a job that is bound elsewhere</div><p>Throughput barely moves with more GPUs because data loading, a small batch or the network is the bottleneck.</p><div class="spot"><b>Spot it</b>Check GPU utilisation during training. If it keeps dropping to zero between steps, the data loader or the all-reduce is the problem. Compare 1, 8 and 16 GPUs on throughput per GPU.</div></li>
+        <li><div class="t">Changing the batch size and forgetting the learning rate</div><p>Scaling from 1 to 32 GPUs, the loss behaves differently or training diverges, and people blame the framework.</p><div class="spot"><b>Spot it</b>The global batch is per-GPU batch × GPUs. Check that the learning rate was rescaled and warmed up, and that results at small scale are reproduced.</div></li>
+        <li><div class="t">Running out of memory late</div><p>The model fits for the first steps, then fails with out-of-memory on a long sequence or large batch because activations were not counted.</p><div class="spot"><b>Spot it</b>Budget for activations and test with the longest realistic input. Use activation checkpointing or smaller micro-batches.</div></li>
+        <li><div class="t">Silent divergence between workers</div><p>A bug (different random seeds, different data order that is not intended, a layer excluded from the reduction) leaves worker copies unequal and training quietly degrades.</p><div class="spot"><b>Spot it</b>Periodically checksum parameters across ranks. Log the loss from every rank for a short test run and check they agree.</div></li>
+        <li><div class="t">Unreproducible and unsaved distributed runs</div><p>A week-long job dies at day six and there is no checkpoint.</p><div class="spot"><b>Spot it</b>Confirm that checkpoints are sharded, saved regularly, restorable on a different number of GPUs, and recorded in the registry.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Where a model runs is decided by three things before cost: how sensitive the data is, what our regulators and policies allow, and how fast the answer must come back. Card scoring stays next to our payment systems. Heavy training and experiments can use approved elastic capacity where the data allows. Owning GPUs only pays if we keep them busy more than about two thirds of the time, so I'd bring you measured utilisation before we buy.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or platform architect</span>
+          <blockquote>“I'd split by phase: train or fine-tune where compute is elastic and the data classification and approvals allow, serve inside the bank behind one promoted container image so training and serving can't drift, with a local fallback on any critical path. For multi-GPU work I'd start with one node and sharded data parallelism, FSDP or ZeRO-3, with communication overlapped, and I'd measure per-GPU throughput as I scale, because past one machine the inter-node network is usually the limit. For fine-tuning, LoRA on a quantised base model usually removes the need for multi-node.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not put everything in the cloud? It's cheaper and faster to start.”</summary><div class="ans"><p>For some workloads it is. But for restricted data, transfer rules and outsourcing approval may rule it out regardless of price, and for real-time scoring the latency and the failure mode matter. I'd classify each workload and put it in the cheapest place that satisfies its constraints, which for a bank is usually a mix. Cost comparison comes after constraints, not before.</p></div></details>
+        <details class="reveal"><summary>“Why not keep everything on-premises and avoid the compliance work?”</summary><div class="ans"><p>You can, and for the most sensitive workloads you should. The costs are capital, procurement delay for GPUs, and fixed capacity: you pay for peak whether or not you use it. Bursty work, like experiments and stress tests, is where elastic capacity pays off, if it is permitted. And on-premises still brings its own compliance work: patching, access control, audit.</p></div></details>
+        <details class="reveal"><summary>“Can we send pseudonymised data to a foreign cloud for training?”</summary><div class="ans"><p>I would not assume so. Pseudonymised data is generally still personal data, since someone holds the key, and cross-border and outsourcing rules likely apply. That is a question for Legal and Compliance with the current UAE or Saudi text in front of them. What I can do is design so the question rarely arises: train in-country, or use aggregated and synthetic data where it is enough.</p></div></details>
+        <details class="reveal"><summary>“We have 64 GPUs now, so training should be 64 times faster, right?”</summary><div class="ans"><p>Only if communication and data loading keep up. Gradients must be averaged every step; inside a machine that is fast, but across machines the network is much slower, so efficiency drops unless the communication is overlapped with compute and the network is fast. Also the effective batch is 64 times larger, so the learning rate needs rescaling and there are diminishing returns. I'd measure throughput at 8, 16 and 32 and decide from the curve.</p></div></details>
+        <details class="reveal"><summary>“The model doesn't fit on one GPU. Do we need a cluster?”</summary><div class="ans"><p>Not necessarily. First reduce what must fit: quantise, use 16-bit, fine-tune with adapters. Then shard the state across the GPUs in one machine with FSDP or ZeRO. A cluster is only needed when one machine's memory or time budget is exceeded even after that, which for fine-tuning at a bank is unusual.</p></div></details>
+        <details class="reveal"><summary>“What happens if the cloud link goes down?”</summary><div class="ans"><p>For anything on a critical path, nothing should depend on it. Real-time scoring is served locally, possibly with a simpler fallback model, and the link is used for training, batch jobs and non-critical services. I'd test the failure on purpose and write down the degraded mode.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones use only the formulas in Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Name the five forces that decide where a workload may run, and say which are constraints and which a trade-off.</summary><div class="ans"><p>Data classification, residency and transfer law, outsourcing and exit requirements, latency and coupling, and economics and supply. The first four are constraints (pass or fail). Only economics is a trade-off, so cost is compared among the options that remain.</p></div></details>
+        <details class="reveal"><summary>2. An 8-GPU server costs AED 1.5 million with a 4-year life and 20% yearly running costs. Renting costs AED 14.70 per GPU-hour. What is the break-even utilisation?</summary><div class="ans"><p>Yearly cost = 1,500,000 ÷ 4 + 300,000 = AED 675,000. Hours available = 8 × 8,760 = 70,080. Cost per useful hour at full use = 9.63. Break-even <i>u</i> = 9.63 ÷ 14.70 ≈ <strong>65.5%</strong>. Below that, renting is cheaper; above, owning is.</p></div></details>
+        <details class="reveal"><summary>3. Why is data parallelism exactly equivalent to training with a bigger batch?</summary><div class="ans"><p>Because the loss is an average over examples, its gradient is the average of per-example gradients. Averaging the per-worker averages (equal slice sizes) gives the gradient of the whole 32 × <i>N</i> batch. The parallelism changes who computes it, not what is computed.</p></div></details>
+        <details class="reveal"><summary>4. A 1-billion-parameter model has 16-bit gradients. About how long does a ring all-reduce take over a 12.5 GB/s link with 64 workers?</summary><div class="ans"><p>Gradient size B = 2 GB. Factor 2 × 63 ÷ 64 = 1.97. Time ≈ 1.97 × 2 ÷ 12.5 ≈ <strong>0.32 s</strong>. If compute per step is 0.5 s, then without overlap the step is 0.82 s and efficiency about 61%. Overlap can hide much of the 0.32 s.</p></div></details>
+        <details class="reveal"><summary>5. Why does scaling often bend sharply from 8 to 16 GPUs?</summary><div class="ans"><p>Eight GPUs fit in one machine, linked by very fast connections. At 16 the ring crosses the network between machines, which is often an order of magnitude slower, so the slowest link in the ring sets the all-reduce time.</p></div></details>
+        <details class="reveal"><summary>6. How much memory per GPU for the model state of a 7B-parameter model with Adam, mixed precision, on 8 GPUs, under plain data parallelism and under ZeRO-3/FSDP?</summary><div class="ans"><p>Plain: 16 bytes × 7B = 112 GB per GPU, which does not fit in 80 GB. ZeRO-3/FSDP: 16 ÷ 8 = 2 bytes per parameter, so 14 GB per GPU, before activations. The saving is paid for with about 1.5 times the communication.</p></div></details>
+        <details class="reveal"><summary>7. Give two reasons a team might train in an in-country cloud region but serve on-premises.</summary><div class="ans"><p>Training is bursty and tolerates delay, so elastic capacity suits it, while serving is steady and latency-sensitive and sits next to core systems. Also, real-time scoring should not depend on an external link. The cost is keeping the two environments consistent, usually through one container image and the same feature code.</p></div></details>
+        <details class="reveal"><summary>8. Your fine-tuning job goes from 1 to 8 GPUs and is only 2.5 times faster. List three things to check before buying more GPUs.</summary><div class="ans"><p>GPU utilisation between steps (a data-loader bottleneck shows as idle gaps), per-GPU batch size (too small and communication dominates), whether communication overlaps with compute and which link the reduction is using. Also check that sharding is not adding avoidable traffic and that the learning rate was rescaled.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>S. Rajbhandari, J. Rasley, O. Ruwase, Y. He. <a href="https://arxiv.org/abs/1910.02054">ZeRO: Memory Optimizations Toward Training Trillion Parameter Models</a>. SC, 2020. The source of the 16 bytes per parameter accounting.</li>
+        <li>Y. Zhao et al. <a href="https://arxiv.org/abs/2304.11277">PyTorch FSDP: Experiences on Scaling Fully Sharded Data Parallel</a>. VLDB, 2023.</li>
+        <li>S. Li et al. <a href="https://arxiv.org/abs/2006.15704">PyTorch Distributed: Experiences on Accelerating Data Parallel Training</a>. VLDB, 2020.</li>
+        <li>P. Goyal et al. <a href="https://arxiv.org/abs/1706.02677">Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour</a>. 2017. Linear scaling rule and warm-up.</li>
+        <li>P. Patarasuk, X. Yuan. <a href="https://doi.org/10.1016/j.jpdc.2008.09.002">Bandwidth optimal all-reduce algorithms for clusters of workstations</a>. J. Parallel and Distributed Computing, 2009. The ring all-reduce analysis.</li>
+        <li>M. Shoeybi et al. <a href="https://arxiv.org/abs/1909.08053">Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism</a>. 2019.</li>
+        <li>D. Narayanan et al. <a href="https://arxiv.org/abs/2104.04473">Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM</a>. SC, 2021.</li>
+        <li>Hugging Face. <a href="https://huggingface.co/spaces/nanotron/ultrascale-playbook">The Ultra-Scale Playbook: Training LLMs on GPU Clusters</a>. A practical guide to the parallelism axes.</li>
+        <li>PyTorch. <a href="https://docs.pytorch.org/docs/stable/distributed.html">Distributed communication package documentation</a> and the FSDP tutorials. Check these for current APIs.</li>
+        <li>E. Hu et al. <a href="https://arxiv.org/abs/2106.09685">LoRA: Low-Rank Adaptation of Large Language Models</a>. 2021. Why fine-tuning rarely needs a cluster.</li>
+        <li>Central Bank of the UAE. <a href="https://rulebook.centralbank.ae">CBUAE Rulebook</a>. The primary source for outsourcing and related requirements; read the current text.</li>
+        <li>Amazon Web Services. <a href="https://aws.amazon.com/financial-services/security-compliance/compliance-center/ae">Compliance centre for the UAE</a>. A provider's mapping to the CBUAE outsourcing requirements; useful for the structure of such a mapping, not a substitute for the regulation.</li>
+        <li>Saudi Central Bank (SAMA). <a href="https://www.sama.gov.sa">Published rules and frameworks</a> on outsourcing and cyber security. National Cybersecurity Authority: <a href="https://nca.gov.sa">Essential and Cloud Cybersecurity Controls</a>.</li>
+        <li>UAE Government. <a href="https://u.ae/en/about-the-uae/digital-uae/data/data-protection-laws">Data protection laws</a>. Overview of the federal personal data protection law and related regimes.</li>
+        <li>Confidential Computing Consortium. <a href="https://confidentialcomputing.io">Introduction and resources</a>. Background on hardware-isolated computation.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in P5: Designing a real-time fraud system (P5.1)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: placement
+  // =====================================================================
+  const PLACES = ["On-premises", "In-country cloud region", "Sovereign or local cloud", "External API or foreign region"];
+  const RATE = { ok: "Fits", warn: "Possible, with conditions", bad: "Avoid" };
+  const WL = [
+    { n: "Real-time card fraud scoring", d: "Scores each card authorisation in under about 30 ms. Inputs include card and account data. Restricted data, tightly coupled to the payment switch.",
+      v: [["ok", "Sits next to the authorisation switch, so latency, data control and failure behaviour are all in your hands. Plan capacity for peak and have a fallback model."],
+          ["warn", "Only if the provider is approved for this data, the network path gives stable low latency and a local fallback exists. You are putting a link in the most critical path the bank has."],
+          ["warn", "Same questions as an in-country region: approval, card-data security scope, latency, fallback. Locality helps; it does not remove the coupling problem."],
+          ["bad", "Restricted card data and a latency-critical path leaving the country. Avoid, whatever certifications the vendor holds."]] },
+    { n: "Training a churn model on pseudonymised data", d: "Batch job over three years of customer behaviour. Customer IDs hashed, keys held by the bank. Gradient boosting; hours, not days.",
+      v: [["ok", "Data is already inside. Tabular models need CPUs or one GPU, so spare capacity is enough."],
+          ["ok", "Good fit once approved: elastic compute for tuning runs, released afterwards. Pseudonymised data is still personal data, so keep keys on-premises and minimise columns."],
+          ["ok", "Similar to the in-country region; check the provider's approval status and contract."],
+          ["bad", "Pseudonymised is not anonymous. Cross-border transfer and outsourcing rules probably apply. Avoid unless Legal and Compliance clear it in writing."]] },
+    { n: "Public FAQ chatbot (public content only)", d: "Answers questions from the bank's public website in Arabic and English. The knowledge base is public. Customers type their own questions.",
+      v: [["warn", "Works, but you carry GPU cost and operations for content that is not sensitive. Worth it only if you already have spare capacity or want one standard stack."],
+          ["ok", "Natural fit: public content, elastic demand, in-country."],
+          ["ok", "Fine, and good if you want an Arabic-capable hosted model close to home."],
+          ["warn", "The content is public but the conversations are not: customers paste account numbers and complaints. Redact before sending, check retention and training terms, and put a gateway in front."]] },
+    { n: "Internal policy copilot", d: "Staff ask questions over internal policies and procedures (classified internal, not customer data). Retrieval over documents, a language model on top.",
+      v: [["ok", "Straightforward if you have GPU capacity and a serving stack; full control of documents and logs."],
+          ["ok", "Good fit when approved. Check that prompts are not retained or used to train the provider's models."],
+          ["ok", "Good fit; the same checks on retention and access."],
+          ["warn", "Depends on classification of the documents, contract terms (no training on your data, retention) and approval. Some policies are confidential even without customer data."]] },
+    { n: "LLM drafting credit memos from customer financials", d: "Reads financial statements and customer documents, drafts memos for relationship managers. Confidential customer data in every prompt.",
+      v: [["ok", "Open-weight model on bank GPUs gives the strongest control. Measure the quality gap against hosted models honestly."],
+          ["warn", "Possible with an in-country hosted model if approved, prompts are not retained or trained on, and keys and logs are controlled. A heavy approval path."],
+          ["ok", "Designed for this: local hosting of capable models. Verify contract, model licence and where support staff sit."],
+          ["bad", "Confidential customer financials to an external or foreign service. Avoid unless explicitly approved under a specific arrangement."]] },
+    { n: "Fine-tuning an open-weight model on call-centre transcripts", d: "Several days of GPU time. Transcripts contain names, account details and voices (as text). Needs redaction and, for a 7B model, sharded training.",
+      v: [["warn", "Strongest control, but needs multi-GPU capacity and platform skills. May compete with production for GPUs. Sharded training (Part 2) may be needed."],
+          ["warn", "Rent GPUs for days then release, if approved and in-country GPU supply allows. Redact first; keep the resulting adapter weights under the same classification as the data."],
+          ["ok", "Often the practical route when in-country GPU supply is limited, subject to approval and a contract that covers data and weights."],
+          ["bad", "Raw customer conversations leaving the country. Avoid."]] }
+  ];
+  let curW = 0, curP = -1;
+  function renderPlace() {
+    const wb = $("wl-btns"), ob = $("opt-btns");
+    wb.innerHTML = ""; ob.innerHTML = "";
+    WL.forEach((w, i) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = w.n;
+      b.setAttribute("aria-pressed", String(i === curW));
+      b.addEventListener("click", () => { curW = i; curP = -1; renderPlace(); });
+      wb.appendChild(b);
+    });
+    $("wl-desc").textContent = WL[curW].d;
+    PLACES.forEach((p, i) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = p;
+      b.setAttribute("aria-pressed", String(i === curP));
+      b.addEventListener("click", () => { curP = i; renderPlace(); });
+      ob.appendChild(b);
+    });
+    const v = $("s1-verdict");
+    if (curP < 0) { v.className = "verdict"; v.innerHTML = "Pick a place above. Decide first, then read the reasoning."; return; }
+    const [c, t] = WL[curW].v[curP];
+    v.className = "verdict " + c;
+    v.innerHTML = "<b>" + RATE[c] + ".</b> " + t;
+  }
+  renderPlace();
+
+  // =====================================================================
+  // Simulation 2: own or rent
+  // =====================================================================
+  const S2 = { u: 30, cap: 1500, disc: 0 };
+  const PRICE = 14.7, LIFE = 4, RUN = 0.2, GPUS = 8, HRS = 8760;
+  const econBox = $("econ-chart");
+  const own = (u, cap) => (cap * 1000 / LIFE + cap * 1000 * RUN) / (GPUS * HRS * u);
+  function renderEcon() {
+    const rent = PRICE * (1 - S2.disc / 100), be = own(1, S2.cap) / rent;
+    const W = Math.max(300, econBox.clientWidth), H = 280, m = { l: 48, r: 14, t: 14, b: 44 };
+    const svg = mk(econBox, W, H, "Cost per useful GPU hour against utilisation");
+    const YM = 60, x = L.scale(0.05, 1, m.l, W - m.r), y = L.scale(0, YM, H - m.b, m.t);
+    [0, 15, 30, 45, 60].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, v, { "text-anchor": "end" });
+    });
+    [0.25, 0.5, 0.75, 1].forEach(v => tx(svg, x(v), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" }));
+    const pts = [];
+    for (let u = 0.05; u <= 1.0001; u += 0.01) pts.push([x(u), y(Math.min(YM, own(u, S2.cap)))]);
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(rent), y2: y(rent), class: "cv-alt" }, svg);
+    L.svg("path", { d: L.path(pts), class: "cv-curve" }, svg);
+    if (be <= 1) {
+      L.svg("line", { x1: x(be), x2: x(be), y1: m.t, y2: H - m.b, class: "cv-rule" }, svg);
+      tx(svg, Math.min(x(be) + 5, W - 110), m.t + 12, "break-even " + pct(be), { class: "lbl-warn" });
+    } else tx(svg, W - m.r - 4, m.t + 12, "owning never wins on cost at this price", { class: "lbl-warn", "text-anchor": "end" });
+    L.svg("circle", { cx: x(S2.u / 100), cy: y(Math.min(YM, own(S2.u / 100, S2.cap))), r: 5.5, class: "cv-now" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Utilisation of owned GPUs", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "AED per useful GPU hour", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const o = own(S2.u / 100, S2.cap), fixed = S2.cap * 1000 / LIFE + S2.cap * 1000 * RUN, rentYr = rent * GPUS * HRS * S2.u / 100;
+    $("st2-own").textContent = "AED " + o.toFixed(1);
+    $("st2-rent").textContent = "AED " + rent.toFixed(2); $("st2-rent-s").textContent = S2.disc ? "after " + S2.disc + "% discount" : "list price";
+    $("st2-be").textContent = be <= 1 ? pct(be, 1) : "never"; cls($("st2-be-b"), be <= 0.7 ? "ok" : be <= 1 ? "warn" : "bad");
+    $("st2-yr").textContent = "AED " + L.fmtInt(fixed); $("st2-yr-s").textContent = "owned; renting the same work: AED " + L.fmtInt(rentYr);
+    $("s2-verdict").innerHTML = (o < rent
+      ? "At <b>" + S2.u + "%</b> utilisation owning is cheaper: AED " + o.toFixed(1) + " against " + rent.toFixed(2) + " per useful hour."
+      : "At <b>" + S2.u + "%</b> utilisation <b>renting is cheaper</b>: owning costs AED " + o.toFixed(1) + " per useful hour against " + rent.toFixed(2) + ".")
+      + (be <= 1 ? " Break-even is " + pct(be, 1) + ". Measured utilisation in most clusters is the number that decides this." : " At this discount, owning cannot win on cost; its case rests on residency, latency or control.");
+  }
+  L.bind("s-util", v => v + "%", v => { S2.u = v; renderEcon(); });
+  L.bind("s-capex", v => "AED " + (v / 1000).toFixed(1) + " m", v => { S2.cap = v; renderEcon(); });
+  L.bind("s-disc", v => v + "%", v => { S2.disc = v; renderEcon(); });
+
+  // =====================================================================
+  // Simulation 3: data-parallel scaling
+  // =====================================================================
+  const S3 = { k: 5, p: 0, c: 0.5, net: 100, ov: true };
+  const scaleBox = $("scale-chart");
+  const BWI = 300;
+  function stepTime(N) {
+    const B = 2 * Math.pow(10, S3.p) * 1e9;               // 16-bit gradients, bytes
+    const bw = (N <= 8 ? BWI : Math.min(BWI, S3.net / 8)) * 1e9;
+    const comm = N === 1 ? 0 : 2 * (N - 1) / N * B / bw;
+    const step = S3.ov ? Math.max(S3.c + comm * 0.3, comm) : S3.c + comm;
+    return { comm, step, eff: S3.c / step, sp: N * S3.c / step };
+  }
+  const nFmt = k => String(Math.pow(2, k));
+  function renderScale() {
+    const N = Math.pow(2, S3.k), r = stepTime(N);
+    const W = Math.max(300, scaleBox.clientWidth), H = 280, m = { l: 48, r: 14, t: 14, b: 44 };
+    const svg = mk(scaleBox, W, H, "Speed-up against number of GPUs");
+    const x = L.scale(0, 8, m.l, W - m.r), y = L.scale(0, 256, H - m.b, m.t);
+    [0, 64, 128, 192, 256].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, v, { "text-anchor": "end" });
+    });
+    for (let k = 0; k <= 8; k += 2) tx(svg, x(k), H - m.b + 16, Math.pow(2, k), { "text-anchor": "middle" });
+    L.svg("line", { x1: x(0), y1: y(1), x2: x(8), y2: y(256), class: "cv-ideal" }, svg);
+    const pts = []; for (let k = 0; k <= 8; k++) pts.push([x(k), y(stepTime(Math.pow(2, k)).sp)]);
+    L.svg("path", { d: L.path(pts), class: "cv-curve" }, svg);
+    L.svg("circle", { cx: x(S3.k), cy: y(r.sp), r: 5.5, class: "cv-now" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Number of GPUs", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Speed-up over one GPU", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    $("st3-gb").textContent = L.fmtInt(32 * N);
+    $("st3-comm").textContent = N === 1 ? "none" : (r.comm * 1000).toFixed(0) + " ms";
+    $("st3-comm-s").textContent = N === 1 ? "single GPU" : (N <= 8 ? "inside one machine" : "across machines");
+    $("st3-eff").textContent = pct(r.eff, 0); cls($("st3-eff-b"), r.eff >= 0.85 ? "ok" : r.eff >= 0.6 ? "warn" : "bad");
+    $("st3-sp").textContent = r.sp.toFixed(1) + "×"; $("st3-sp-s").textContent = "perfect would be " + N + "×";
+    $("s3-verdict").innerHTML = N === 1 ? "One GPU: no communication, nothing to lose. Raise the GPU count."
+      : r.eff >= 0.85 ? "Efficiency is <b>" + pct(r.eff, 0) + "</b>: communication is mostly hidden behind compute, so the GPUs are earning their cost."
+      : N > 8 && r.eff < 0.85 ? "Efficiency is <b>" + pct(r.eff, 0) + "</b>: the ring crosses the network between machines and each step waits <b>" + (r.comm * 1000).toFixed(0) + " ms</b> for gradients. Faster network, overlap, a bigger per-GPU batch or a smaller gradient would help; more GPUs would not."
+      : "Efficiency is <b>" + pct(r.eff, 0) + "</b> even inside one machine: the model is large relative to the compute per step.";
+  }
+  L.bind("s-n", k => nFmt(k) + " GPUs", v => { S3.k = v; renderScale(); });
+  L.bind("s-par", v => Math.pow(10, v).toFixed(2) + " B", v => { S3.p = v; renderScale(); });
+  L.bind("s-cmp", v => v.toFixed(1) + " s", v => { S3.c = v; renderScale(); });
+  L.bind("s-net", v => v + " Gb/s", v => { S3.net = v; renderScale(); });
+  $("b-ov").addEventListener("click", e => {
+    S3.ov = !S3.ov; e.currentTarget.setAttribute("aria-pressed", String(S3.ov));
+    e.currentTarget.textContent = "Overlap communication with compute: " + (S3.ov ? "on" : "off"); renderScale();
+  });
+
+  // =====================================================================
+  // Simulation 4: memory sharding
+  // =====================================================================
+  const S4 = { p: 0.85, k: 3 };
+  const memBox = $("mem-chart");
+  function renderMem() {
+    const P = Math.pow(10, S4.p), N = Math.pow(2, S4.k);
+    const rows = [["Plain data parallel", 16], ["ZeRO-1: shard optimiser", 4 + 12 / N], ["ZeRO-2: + gradients", 2 + 14 / N], ["ZeRO-3 / FSDP: + weights", 16 / N]]
+      .map(([n, b]) => ({ n, gb: b * P }));
+    const W = Math.max(300, memBox.clientWidth), H = 210, m = { l: 150, r: 70, t: 10, b: 28 };
+    const svg = mk(memBox, W, H, "Memory per GPU under four strategies");
+    const AX = 160, X = L.scale(0, AX, m.l, W - m.r);
+    [0, 40, 80, 120, 160].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(v), H - m.b + 16, v + " GB", { "text-anchor": "middle" });
+    });
+    const bh = 26, gap = (H - m.t - m.b - 4 * bh) / 5;
+    rows.forEach((r, i) => {
+      const y = m.t + gap * (i + 1) + bh * i, w = Math.min(AX, r.gb);
+      L.svg("rect", { x: X(0), y, width: X(w) - X(0), height: bh, rx: 3, class: "bar-" + i }, svg);
+      tx(svg, m.l - 8, y + bh / 2 + 4, r.n, { "text-anchor": "end", class: "lbl-ink" });
+      const lab = (r.gb >= 100 ? L.fmtInt(r.gb) : r.gb.toFixed(1)) + " GB" + (r.gb > AX ? " (off scale)" : "");
+      const inside = X(w) + 6 + 70 > W;
+      tx(svg, inside ? X(w) - 6 : X(w) + 6, y + bh / 2 + 5, lab, { class: "lbl-strong", "text-anchor": inside ? "end" : "start", style: inside ? "fill:var(--surface) !important" : "" });
+    });
+    L.svg("line", { x1: X(80), x2: X(80), y1: m.t, y2: H - m.b, class: "cv-rule" }, svg);
+    tx(svg, X(80) + 4, m.t + 10, "80 GB GPU", { class: "lbl-warn" });
+    const fits = rows.filter(r => r.gb <= 56).map(r => r.n), tight = rows.filter(r => r.gb > 56 && r.gb <= 80).map(r => r.n);
+    $("s4-verdict").innerHTML = "<b>" + P.toFixed(P < 10 ? 1 : 0) + " B parameters on " + N + " GPU" + (N > 1 ? "s" : "") + ".</b> "
+      + (fits.length ? "Comfortably under 80 GB (leaving room for activations): " + fits.join("; ") + "." : "Nothing leaves comfortable room for activations at this size.")
+      + (tight.length ? " Within 80 GB but tight: " + tight.join("; ") + "." : "")
+      + (N === 1 ? " With one GPU there is nothing to shard; compress the model or fine-tune adapters instead." : "");
+  }
+  L.bind("s-mp", v => { const p = Math.pow(10, v); return (p < 10 ? p.toFixed(1) : Math.round(p)) + " B"; }, v => { S4.p = v; renderMem(); });
+  L.bind("s-mn", k => nFmt(k) + " GPUs", v => { S4.k = v; renderMem(); });
+
+  function renderAll() { renderEcon(); renderScale(); renderMem(); }
+  renderAll();
+  let rt; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

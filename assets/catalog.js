@@ -78,6 +78,16 @@ window.CATALOG = [
   {file: "p2-the-model-lifecycle-from-experiment.html", module: "P2", title: "The Model Lifecycle, and Knowing Exactly Which Model Is Running", codes: ["P2.1","P2.2"], label: "P2.1 · P2.2", tier: "d", minutes: 38},
   {file: "p2-deployment-patterns-batch-real-time.html", module: "P2", title: "Releasing and Watching Models: Batch, Real-Time, Shadow, Canary and Monitoring", codes: ["P2.3","P2.4"], label: "P2.3 · P2.4", tier: "d", minutes: 40, star: true},
   {file: "p2-prompt-versioning-and-llm-tracing.html", module: "P2", title: "Seeing and Gating an LLM System: Prompt Versions, Traces and Evals in CI", codes: ["P2.5","P2.6"], label: "P2.5 · P2.6", tier: "n", minutes: 38},
+  {file: "p3-quantization-pruning-and-distillation.html", module: "P3", title: "Smaller, Faster, Cheaper: Quantization, Pruning, Distillation, Latency Budgets and LLM Serving", codes: ["P3.1","P3.2","P3.3"], label: "P3.1 – P3.3", tier: "n", minutes: 45},
+  {file: "p4-cloud-building-blocks-compute-storage.html", module: "P4", title: "Cloud Building Blocks and GPUs: What You Are Really Renting", codes: ["P4.1","P4.2"], label: "P4.1 · P4.2", tier: "d", minutes: 40},
+  {file: "p4-hybrid-and-on-premises-deployment.html", module: "P4", title: "Where the Model Runs: Hybrid and On-Premises Deployment, and Training Across Many GPUs", codes: ["P4.3","P4.4"], label: "P4.3 · P4.4", tier: "n", minutes: 40, star: true},
+  {file: "p5-designing-a-real-time-fraud.html", module: "P5", title: "Designing the Two Classic AI Systems: A Real-Time Fraud Scorer and an Enterprise RAG Assistant", codes: ["P5.1","P5.2"], label: "P5.1 · P5.2", tier: "d", minutes: 45, star: true},
+  {file: "p5-designing-batch-propensity-and-campaign.html", module: "P5", title: "Batch Scoring, Fallbacks and Cost: Designing AI Systems That Run Every Day", codes: ["P5.3","P5.4","P5.5"], label: "P5.3 – P5.5", tier: "n", minutes: 40},
+  {file: "g1-threat-modelling-an-ai-system.html", module: "G1", title: "Threat Modelling an AI System, and the Basics That Stop Most Incidents", codes: ["G1.1","G1.2"], label: "G1.1 · G1.2", tier: "d", minutes: 40},
+  {file: "g1-data-poisoning.html", module: "G1", title: "Attacks on the Model Itself: Poisoning, Evasion and Extraction", codes: ["G1.3","G1.4","G1.5"], label: "G1.3 – G1.5", tier: "n", minutes: 40},
+  {file: "g2-fairness-definitions-and-their-trade.html", module: "G2", title: "Fairness in Lending and Fraud Models: Competing Definitions and Where Bias Comes From", codes: ["G2.1","G2.2"], label: "G2.1 · G2.2", tier: "d", minutes: 45, star: true},
+  {file: "g2-privacy-basics-minimisation-consent-anonymisation.html", module: "G2", title: "Privacy, Documentation and Oversight: Removing Names Is Not Anonymisation", codes: ["G2.3","G2.4","G2.5"], label: "G2.3 – G2.5", tier: "d", minutes: 40},
+  {file: "g3-what-counts-as-a-model.html", module: "G3", title: "What Counts as a Model: The Inventory and the Governed Lifecycle", codes: ["G3.1","G3.2"], label: "G3.1 · G3.2", tier: "d", minutes: 40, star: true},
   {file: "a1-know-your-agent.html", module: "A1", title: "Know Your Agent: How AI Agents Get Permission to Pay", codes: ["A1.1","A1.2","A1.3","A1.4","A1.5"], label: "A1.1 – A1.5", tier: "n", star: true, fast: true, minutes: 40}
 ];
 

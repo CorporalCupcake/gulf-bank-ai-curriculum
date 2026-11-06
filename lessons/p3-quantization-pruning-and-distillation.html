@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Smaller, Faster, Cheaper: Quantization, Pruning, Distillation, Latency Budgets and LLM Serving</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+
+  .w-orig { fill: var(--neutral); fill-opacity: .85; }
+  .w-q { fill: var(--accent); }
+  .w-stem { stroke: var(--neutral); stroke-width: 1; stroke-opacity: .6; }
+  .w-lvl { stroke: var(--accent); stroke-width: 1; stroke-opacity: .3; }
+  .c-a { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .c-b { stroke: var(--ink); stroke-width: 2.2; fill: none; }
+  .c-c { stroke: var(--warn); stroke-width: 2.2; fill: none; }
+  .c-d { stroke: var(--bad); stroke-width: 2.2; fill: none; stroke-dasharray: 5 3; }
+  .c-now { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; }
+  .c-bud { stroke: var(--bad); stroke-width: 1.8; }
+  .hb { fill: var(--neutral); fill-opacity: .6; }
+  .hb.late { fill: var(--bad); fill-opacity: .6; }
+  .dead { fill: var(--warn); fill-opacity: .12; }
+  .seg-btns { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track P · Production, data and platforms</span>
+    <span>Module P3 · Efficiency and serving</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>P3.1 · P3.2 · P3.3</span>
+        <span class="pill n">First 90 days</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Smaller, Faster, Cheaper: Quantization, Pruning, Distillation, Latency Budgets and LLM Serving</h1>
+      <p class="dek">How a model is squeezed to fit a smaller machine and what that costs in accuracy, how a fraud score survives a 30-millisecond budget, and why one GPU can serve hundreds of chatbot users at once.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Running a model is mostly about moving numbers through memory, not about arithmetic, so you make it cheaper by storing fewer or smaller numbers (quantization, pruning, distillation), by never waiting on the slowest part of a request (latency budgets) and by keeping the GPU busy with many users at once (batching).</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Picture a chef in a tiny kitchen. The chef cooks very fast. The slow part is the walk to the cold store to fetch ingredients. If the chef cooks one plate at a time, most of the shift is spent walking. If the chef cooks forty plates from one trip, the walk is shared and the kitchen becomes efficient.</p>
+        <p>A modern GPU is that chef. An 8-billion-parameter language model stored at 16 bits is 16 GB of weights. To produce <em>one</em> token, the GPU must read all 16 GB from its memory. At about 3.35 TB/s of memory bandwidth (the figure for NVIDIA's H100 SXM) that read alone takes about 5 ms. The arithmetic on those weights takes a fraction of that. So the GPU waits for memory, not for maths. This is called being <strong>memory-bound</strong>, and it explains nearly everything in this lesson.</p>
+      </div>
+      <div class="prose">
+        <p>Three families of tricks follow from it.</p>
+        <ul>
+          <li><strong>Move fewer bytes.</strong> Store each weight in 8 or 4 bits instead of 16 (<em>quantization</em>), remove weights that barely matter (<em>pruning</em>), or train a smaller model to imitate a big one (<em>distillation</em>). The model is cheaper to hold, to move and often to run.</li>
+          <li><strong>Never wait on the slowest piece.</strong> A fraud decision has a fixed time window, and the model is only one of many steps. The <em>latency budget</em> is how you divide that window, and the dangerous part is the slow tail, not the average.</li>
+          <li><strong>Share each trip to memory.</strong> Read the weights once and use them for many users' requests together (<em>batching</em>). That is how one GPU serves a whole call-centre's worth of assistants.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Compression is a trade, not a free lunch. Every method gives back some accuracy in exchange for memory, speed or cost. The professional move is to measure that loss on your own task, with your own data, instead of trusting a headline such as "4-bit loses almost nothing". And in real-time systems, the number that matters is the slow 1%, not the average.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-quant">Quantization: fewer bits per weight</h3>
+      <div class="prose">
+        <p>A weight is normally stored as a 16-bit floating-point number (FP16 or BF16, see F6.5). <strong>Quantization</strong> replaces it with a small integer plus a shared scale. With 8 bits you have 256 levels; with 4 bits, only 16. To rebuild an approximate weight, multiply the integer by the scale.</p>
+        <p>The simplest scheme, <em>symmetric absmax rounding</em>, works like this. Take a block of weights. Find the largest magnitude, call it <i>m</i>. Divide the range −<i>m</i> to +<i>m</i> into evenly spaced levels. Round every weight to its nearest level.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>s</mi><mo>=</mo><mfrac><mrow><mo>max</mo><mo stretchy="false">|</mo><mi>w</mi><mo stretchy="false">|</mo></mrow><mrow><msup><mn>2</mn><mrow><mi>b</mi><mo>−</mo><mn>1</mn></mrow></msup><mo>−</mo><mn>1</mn></mrow></mfrac><mo>,</mo><mspace width="1em"></mspace><mover><mi>w</mi><mo>^</mo></mover><mo>=</mo><mi>s</mi><mo>·</mo><mo>round</mo><mo stretchy="false">(</mo><mi>w</mi><mo>/</mo><mi>s</mi><mo stretchy="false">)</mo></math>
+        <p class="where"><i>b</i> is the number of bits and <i>s</i> the step between levels. At 4 bits there are 7 steps each side of zero. The rounding error on a weight is at most half a step, so the error is proportional to the <em>largest weight in the block</em>. That one fact explains the rest of this section.</p>
+      </div>
+
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>Outliers are the enemy.</strong> If one weight in a block is 15 times larger than the rest, the step <i>s</i> has to stretch to cover it, and the ordinary weights, which are small, all get rounded to zero or to a single level. Large language models are known for such outliers, particularly in a few activation channels, which is why naive 8-bit and 4-bit conversion once ruined models that looked fine in FP16 (Dettmers et al., 2022). The standard cure is to use <strong>many small blocks</strong>, each with its own scale, called <em>group-wise</em> quantization. A block of 128 weights costs one extra 16-bit scale, so a "4-bit" model really uses about 4.125 bits per weight. An outlier then ruins only its own block.</p>
+      </div>
+
+      <figure class="figure" id="fig-quant">
+        <div class="fig-head"><span class="fig-title">Rounding weights to a few levels</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> set 4 bits, one scale for the whole tensor, outliers off. Then switch the outliers on: nearly every grey dot collapses to zero. Now change to groups of 128 and the damage shrinks to the one block that holds the outlier. Finally slide the bits to 3 and 2 and watch the error climb steeply.</p>
+        <div class="chart-wrap" id="q-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral);opacity:.85"></i>Original weight</span>
+          <span><i class="sq" style="background:var(--accent)"></i>After quantization</span>
+          <span><i style="background:var(--accent);opacity:.4"></i>Available levels (first block)</span>
+        </div>
+        <div class="seg-btns" role="group" aria-label="Scale granularity">
+          <button class="btn" type="button" data-g="0" aria-pressed="false">One scale for the tensor</button>
+          <button class="btn" type="button" data-g="128" aria-pressed="true">Groups of 128</button>
+          <button class="btn" type="button" data-g="32" aria-pressed="false">Groups of 32</button>
+          <button class="btn" type="button" id="b-out" aria-pressed="false">Outliers: off</button>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-bits">Bits per weight <output for="s-bits"></output></label><input type="range" id="s-bits" min="2" max="8" step="1" value="4"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="q-err-b"><div class="k">Relative error of the weights</div><div class="v" id="q-err"></div><div class="s">size of the error against the size of the weights</div></div>
+          <div class="stat"><div class="k">Weights rounded to zero</div><div class="v" id="q-zero"></div><div class="s">information fully lost</div></div>
+          <div class="stat"><div class="k">Real bits per weight</div><div class="v" id="q-bpw"></div><div class="s">including the scales</div></div>
+          <div class="stat"><div class="k">8B model / 70B model</div><div class="v" id="q-mem"></div><div class="s">weights only, GB</div></div>
+        </div>
+        <p class="verdict" id="q-verdict"></p>
+        <p class="sim-note">Simulated: 4,096 weights drawn from a normal distribution with standard deviation 0.02 (a fixed random seed). With outliers on, three weights are set to about 15 standard deviations. The chart shows the first 96 weights, with an outlier at position 20. Rounding is exact symmetric absmax as in the formula. The relative error is the root-mean-square error divided by the root-mean-square weight. It measures the weights, not the accuracy of a real model.</p>
+      </figure>
+
+      <div class="prose">
+        <p>That is the simplest method, <em>round to nearest</em>. Smarter methods keep the same storage but choose better integers.</p>
+        <ul>
+          <li><strong>GPTQ</strong> quantizes a layer one column at a time and adjusts the remaining unrounded weights to cancel the error just introduced, using second-order information from a small calibration set (Frantar et al., 2022).</li>
+          <li><strong>AWQ</strong> notices that about 1% of weights matter far more because they multiply large activations. It scales those channels up before rounding so they keep precision (Lin et al., 2024).</li>
+          <li><strong>SmoothQuant</strong> shifts the difficulty from activations to weights with a per-channel rescaling, so that both can be held in 8 bits (Xiao et al., 2023).</li>
+        </ul>
+        <p>Details at 2–3 bits (QuIP, AQLM, rotations) are in <a href="r12-very-low-bit-quantization-gptq.html">the edge lesson on very low-bit quantization</a>. Four distinctions you will use in meetings:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Choice</th><th>Options</th><th>Why it matters</th></tr></thead>
+          <tbody>
+            <tr><td><b>What is quantized</b></td><td>Weights only (W4A16), weights and activations (W8A8, FP8, W4A4)</td><td>Weight-only saves memory and speeds up memory-bound decoding. Quantizing activations as well speeds up the arithmetic too, which matters for long inputs and big batches. It is harder to do without losing accuracy.</td></tr>
+            <tr><td><b>When</b></td><td>Post-training (PTQ) or quantization-aware training (QAT)</td><td>PTQ takes minutes to hours on a calibration set and is the default. QAT trains with rounding in the loop and recovers more accuracy at 4 bits and below, at the price of a training run.</td></tr>
+            <tr><td><b>Format</b></td><td>INT8, INT4, FP8, FP4 variants (MXFP4, NVFP4)</td><td>Floating-point formats spend bits on range, so they cope with outliers better. The speed-up needs hardware that supports the format natively.</td></tr>
+            <tr><td><b>What stays high precision</b></td><td>KV cache, embeddings, last layer, norms</td><td>The KV cache (M1.5) can dominate memory at long context. It is often quantized separately, and the sensitive layers are commonly left at 16 bits.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Two honest caveats. First, "memory saved" and "faster" are different things. A 4-bit model on a GPU without native 4-bit support may unpack to 16-bit inside the kernel, giving you memory savings with little speed-up. Second, quantization error does not show up evenly. Averages such as perplexity barely move while a rarely used skill, such as arithmetic, a low-resource language like Arabic dialects, or long-context retrieval, degrades first. So always evaluate on your own task.</p>
+      </div>
+
+      <h3 class="sub" id="m-prune">Pruning: removing what barely matters</h3>
+      <div class="prose">
+        <p>Pruning sets some weights to zero and, ideally, skips them. The oldest and most common rule is <strong>magnitude pruning</strong>: remove the weights closest to zero. Small weights contribute little to the output, so removing them costs little. Han and colleagues (2015) showed that many networks can lose 80–90% of their weights this way with a short retraining, and the "lottery ticket" line of research (Frankle and Carbin, 2019) asked why.</p>
+        <p>The catch is the difference between <em>sparse</em> and <em>fast</em>. Setting weights to zero in an arbitrary pattern ("unstructured" sparsity) leaves the matrix the same shape. Normal GPU kernels multiply the zeros anyway, so nothing speeds up unless specialised sparse kernels exist. There are three levels of structure, each giving more real speed and costing more accuracy:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Type</th><th>What is removed</th><th>Real speed-up</th><th>Accuracy cost</th></tr></thead>
+          <tbody>
+            <tr><td><b>Unstructured</b></td><td>Individual weights anywhere</td><td>Little, unless sparse kernels are used. Memory savings need a sparse storage format.</td><td>Lowest</td></tr>
+            <tr><td><b>Semi-structured (2:4)</b></td><td>In every group of 4 consecutive weights, exactly 2 are zero</td><td>NVIDIA's sparse tensor cores (Ampere onward) can use this pattern. Up to about 2x on the matrix multiplications themselves; end-to-end gains are smaller.</td><td>Moderate, usually recovered by short fine-tuning</td></tr>
+            <tr><td><b>Structured</b></td><td>Whole neurons, attention heads or layers</td><td>Real, on any hardware, because the matrices shrink</td><td>Highest, needs retraining or distillation to recover</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>For large language models, retraining is expensive, so one-shot methods dominate. <strong>SparseGPT</strong> prunes a GPT-scale model in hours and holds quality at around 50% sparsity (Frantar and Alistarh, 2023). <strong>Wanda</strong> scores each weight by its magnitude <em>times the typical size of the input it multiplies</em>, which needs no weight update at all (Sun et al., 2024). A small weight on a huge input can matter more than a large weight on a tiny one. The simulation shows exactly this.</p>
+      </div>
+
+      <figure class="figure" id="fig-prune">
+        <div class="fig-head"><span class="fig-title">What each pruning rule costs in output error</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> slide the sparsity to 50%. Random pruning damages the layer badly, magnitude pruning far less, and the activation-aware rule less again. Push to 80–90% and watch every curve climb. Structured pruning (whole rows) is the one that gives genuine speed-up anywhere, and it is the worst per weight removed.</p>
+        <div class="chart-wrap" id="p-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Random</span>
+          <span><i style="background:var(--warn)"></i>Smallest magnitude</span>
+          <span><i style="background:var(--accent)"></i>Magnitude × input size (Wanda-style)</span>
+          <span><i style="background:var(--ink)"></i>Whole rows (structured)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-sp">Share of weights removed <output for="s-sp"></output></label><input type="range" id="s-sp" min="0" max="0.95" step="0.05" value="0.5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Random</div><div class="v" id="p-r"></div><div class="s">output error</div></div>
+          <div class="stat"><div class="k">Magnitude</div><div class="v" id="p-m"></div><div class="s">output error</div></div>
+          <div class="stat"><div class="k">Magnitude × input</div><div class="v" id="p-w"></div><div class="s">output error</div></div>
+          <div class="stat"><div class="k">Whole rows</div><div class="v" id="p-s"></div><div class="s">output error</div></div>
+          <div class="stat"><div class="k">2:4 pattern (always 50%)</div><div class="v" id="p-24"></div><div class="s">output error, input-aware</div></div>
+        </div>
+        <p class="verdict" id="p-verdict"></p>
+        <p class="sim-note">Simulated: one 64×64 layer with heavy-tailed random weights and input features whose typical sizes vary by a factor of several. Output error is the expected relative size of the change in the layer's output, computed exactly from the weights and the feature sizes (assuming independent features). One layer, no retraining, so real networks differ: they recover some loss when fine-tuned and show interactions between layers. The 2:4 row keeps the two best-scoring weights in every group of four, using the input-aware score.</p>
+      </figure>
+
+      <h3 class="sub" id="m-distill">Distillation: teaching a small model to imitate a big one</h3>
+      <div class="prose">
+        <p>Quantization and pruning edit a model. <strong>Distillation</strong> builds a new, smaller one. A large <em>teacher</em> model is run on lots of inputs. A small <em>student</em> is trained to reproduce the teacher's outputs, not just the labelled answers.</p>
+        <p>Why would that beat training the student on the original labels? Because the teacher's full output carries more information than the label. Take a transaction-category classifier with five classes. The label for one transaction says "legitimate" (a one-hot vector). The teacher's probabilities say "legitimate 91%, card-testing 7.5%, account takeover 1%...", which tells the student that this transaction <em>resembles card-testing more than a mule account</em>. Hinton and colleagues (2015) called this <em>dark knowledge</em>: the relative sizes of the small probabilities.</p>
+        <p>The small probabilities are tiny, so the method softens the teacher's outputs with a <strong>temperature</strong> <i>T</i>. Divide the logits by <i>T</i> before the softmax. Higher <i>T</i> flattens the distribution and makes the hidden structure visible.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Class</th><th>Teacher logit</th><th>Probability, T = 1</th><th>Probability, T = 4</th></tr></thead>
+          <tbody>
+            <tr><td>Legitimate</td><td>7.0</td><td>91.2%</td><td>45.1%</td></tr>
+            <tr><td>Card testing</td><td>4.5</td><td>7.5%</td><td>24.1%</td></tr>
+            <tr><td>Account takeover</td><td>2.5</td><td>1.0%</td><td>14.6%</td></tr>
+            <tr><td>Merchant fraud</td><td>1.0</td><td>0.2%</td><td>10.1%</td></tr>
+            <tr><td>Mule account</td><td>−1.0</td><td>0.03%</td><td>6.1%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The student's loss is a blend: cross-entropy against the true label (F6.1) plus the divergence (F1.7) between its own softened outputs and the teacher's softened outputs, with the second term usually scaled by <i>T</i>² so the two gradients stay comparable. For language models, the same idea has several forms:</p>
+        <ul>
+          <li><strong>Logit (soft-label) distillation.</strong> Match the teacher's whole next-token distribution at every position. It gives a very rich signal, but you need the teacher's logits, which a closed API does not give you.</li>
+          <li><strong>Sequence-level distillation.</strong> Have the teacher <em>write</em> answers (or reasoning traces) and fine-tune the student on them as ordinary text. This works with any API and is how many small reasoning models were produced in 2025. It is also where the licence terms of the teacher matter.</li>
+          <li><strong>Pruning plus distillation.</strong> Prune a large model into a smaller shape, then retrain it by distilling from the original. This was used to derive small models from larger ones with a fraction of the usual training tokens (Muralidharan et al., 2024; Meta's Llama 3.2 1B and 3B models were announced as made this way).</li>
+        </ul>
+        <p>Compared with quantization, distillation costs a training run but gives a model that is smaller in <em>every</em> sense: fewer parameters, less compute per token, a smaller KV cache. It can also be specialised. A 1B model distilled for one narrow job, such as classifying complaints in Arabic and English, can match a general 70B model on that job, and will lose on everything else.</p>
+      </div>
+
+      <h3 class="sub" id="m-latency">Latency budgets in real-time scoring</h3>
+      <div class="prose">
+        <p>A card payment is approved or declined while the customer waits at the till. The fraud score is one step inside a chain with a fixed deadline: the network call, fetching features (F3.4), the model, rules, and the response. Where the whole decision must land inside tens of milliseconds, the team writes a <strong>latency budget</strong>: a number of milliseconds for each stage that adds up to less than the deadline, with a plan for what happens when a stage is late. The exact deadline is set by your card scheme, processor and payments team, so ask for the real figure rather than assuming one.</p>
+        <p>Three ideas make budgets work.</p>
+        <ul>
+          <li><strong>Percentiles, not averages.</strong> If the mean is 12 ms but the 99th percentile (p99) is 60 ms, then one request in a hundred blows the deadline. At 100 payments a second, that is one customer a second. The budget must be met at p99 or p99.9.</li>
+          <li><strong>Waiting for the slowest of several calls.</strong> If a score needs ten feature lookups in parallel, the request is as slow as the slowest of the ten. If each lookup is slow 1% of the time, the chance at least one of ten is slow is 1 − 0.99<sup>10</sup> ≈ <strong>9.6%</strong>. Dean and Barroso (2013) called this "the tail at scale": fan-out turns rare slowness into common slowness. If the lookups are made one after another instead, delays add up.</li>
+          <li><strong>A fallback when the clock runs out.</strong> When a stage exceeds its slice, the system must still answer: approve on a cheap rule, use a smaller model, or score on the features that did arrive. Which fallback is used is a business and risk decision, and it must be logged so that monitoring (P2.4) sees it.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-lat">
+        <div class="fig-head"><span class="fig-title">One request, four stages, one deadline</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start with 1 lookup and a 30 ms deadline: almost everything is on time. Raise the number of feature lookups to 10 and watch the red tail grow while the median hardly moves. Switch the lookups to "one after another" and it worsens. Then swap in a heavier model and see how much of the budget it eats.</p>
+        <div class="chart-wrap" id="l-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral);opacity:.6"></i>Within the deadline</span>
+          <span><i class="sq" style="background:var(--bad);opacity:.6"></i>Past the deadline (fallback needed)</span>
+          <span><i style="background:var(--bad)"></i>Deadline</span>
+        </div>
+        <div class="seg-btns" role="group" aria-label="Lookup mode">
+          <button class="btn" type="button" data-mode="par" aria-pressed="true">Lookups in parallel</button>
+          <button class="btn" type="button" data-mode="seq" aria-pressed="false">Lookups one after another</button>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Feature lookups per request <output for="s-n"></output></label><input type="range" id="s-n" min="1" max="12" step="1" value="4"></div>
+          <div class="ctl"><label for="s-m">Model time (typical) <output for="s-m"></output></label><input type="range" id="s-m" min="0" max="3" step="1" value="1"></div>
+          <div class="ctl"><label for="s-dl">Deadline for the whole decision <output for="s-dl"></output></label><input type="range" id="s-dl" min="15" max="100" step="5" value="30"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Median (p50)</div><div class="v" id="l-p50"></div><div class="s">typical request</div></div>
+          <div class="stat" id="l-p99-b"><div class="k">p99</div><div class="v" id="l-p99"></div><div class="s">slowest 1%</div></div>
+          <div class="stat" id="l-late-b"><div class="k">Past the deadline</div><div class="v" id="l-late"></div><div class="s" id="l-late-s"></div></div>
+          <div class="stat"><div class="k">Chance a lookup is in its slow 1%</div><div class="v" id="l-any"></div><div class="s">at least one of the lookups</div></div>
+        </div>
+        <p class="verdict" id="l-verdict"></p>
+        <p class="sim-note">Simulated: 20,000 requests from a fixed random seed, so the numbers are Monte Carlo estimates good to roughly a percentage point, not exact. Each stage's time is lognormal: network about 5 ms typical, rules about 2 ms, each feature lookup about 2 ms with a long tail, and the model at the chosen typical time (1, 4, 15 or 40 ms). The stage times are invented to show shape, not measured from any bank system.</p>
+      </figure>
+
+      <div class="prose">
+        <p>How teams buy back milliseconds, in rough order of how often it works:</p>
+        <ul>
+          <li><strong>Precompute features.</strong> Keep running totals and counters ready in an online store (<a href="p1-feature-stores-and-online-offline.html">P1.3</a>) so the request does one lookup, not twelve queries.</li>
+          <li><strong>Co-locate and keep connections warm.</strong> Putting the model next to the feature store, and reusing connections, removes network time. A cold start or a garbage-collection pause is a classic source of p99 spikes.</li>
+          <li><strong>Use a smaller or simpler model on the hot path.</strong> A gradient-boosted tree model (F4.4) scores in well under a millisecond on a CPU. A large neural net or an LLM may not fit. A common pattern is a fast model for everything and a slow, stronger one only for the uncertain middle band, or run asynchronously after approval.</li>
+          <li><strong>Compress.</strong> This is where Part 2's first three topics earn their keep: a quantized or distilled model runs in less time and fits a cheaper machine.</li>
+          <li><strong>Hedge and time out.</strong> Send a duplicate request to a second replica if the first is slow, and cut off anything that exceeds its slice.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-serving">LLM serving and batching engines</h3>
+      <div class="prose">
+        <p>A language model produces text one token at a time. Each new token needs a full pass through the model, and each pass starts with reading all the weights from memory. That is the memory-bound problem from Part 1. The key observation: reading the weights once costs the same whether the GPU is multiplying them by one user's data or by sixty-four users' data. So <strong>batch</strong> many users together and share the read.</p>
+        <p>This is the whole economics of serving. Per-user speed barely changes as the batch grows, but total throughput rises almost in proportion, until one of two limits is hit. One limit is compute (the arithmetic finally becomes the bottleneck). The other, often reached first, is <strong>memory for the KV cache</strong> (M1.5): each user's running conversation needs its own cache, and it grows with their context length.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>t</mi><mtext>step</mtext></msub><mo>≈</mo><mo>max</mo><mo stretchy="false">(</mo><mfrac><mrow><mtext>weights</mtext><mo>+</mo><mi>B</mi><mo>·</mo><mtext>KV per user</mtext></mrow><mtext>memory bandwidth</mtext></mfrac><mo>,</mo><mspace width="0.5em"></mspace><mfrac><mrow><mn>2</mn><mo>·</mo><mtext>parameters</mtext><mo>·</mo><mi>B</mi></mrow><mtext>compute speed</mtext></mfrac><mo stretchy="false">)</mo></math>
+        <p class="where"><i>B</i> is the batch size. For an 8B model in FP16, the weights are 16 GB and the left-hand term is about 4.8 ms at <i>B</i> = 1 and barely grows with <i>B</i>. The compute term grows in proportion to <i>B</i> but starts tiny. They cross near <i>B</i> of roughly 300 on an H100, if you take the manufacturer's peak numbers. In practice engines reach perhaps half to two-thirds of those peaks, so use these as shape, not as a benchmark.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Four ideas turned this principle into modern serving engines such as vLLM, SGLang and TensorRT-LLM.</p>
+        <ul>
+          <li><strong>Continuous batching.</strong> Early servers grouped requests into a fixed batch and waited for the longest answer to finish before starting the next group, while shorter answers sat idle. Continuous (or "iteration-level") batching, introduced in Orca (Yu et al., 2022), lets a finished request leave and a waiting one join at every single step. The simulation below puts a number on the waste.</li>
+          <li><strong>PagedAttention.</strong> Storing each user's KV cache as one contiguous block wastes memory through fragmentation and over-reservation. vLLM splits it into small fixed pages, like operating-system virtual memory, so memory is used almost fully and prefix pages (a shared system prompt) can be shared between users. Kwon et al. (2023) reported 2–4x higher throughput than earlier systems at the same latency.</li>
+          <li><strong>Chunked prefill and prefill/decode split.</strong> Reading a long prompt (<em>prefill</em>) is compute-heavy, while generating (<em>decode</em>) is memory-heavy. Mixing them stalls other users. Engines now cut long prompts into chunks, or run the two phases on different GPUs.</li>
+          <li><strong>Speculative decoding.</strong> A small draft model proposes several tokens, and the big model checks them all in one pass, accepting those it agrees with (Leviathan et al., 2023). The output is the same as the big model alone, but faster, because verifying several tokens costs about the same as generating one. The speed-up depends on how often the draft is right, so it is workload-dependent.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-serve">
+        <div class="fig-head"><span class="fig-title">One GPU, many users</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> at batch 1, one user gets a fast stream but the GPU is nearly idle. Move the batch up: total tokens per second climbs while each user's speed barely falls. Then lengthen the context and see the KV cache cap how many users fit. Switch the weights to 4-bit and watch both the speed and the capacity improve. Finally flip static batching on to see its waste.</p>
+        <div class="chart-wrap" id="s-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Total tokens per second (left axis)</span>
+          <span><i style="background:var(--ink)"></i>Tokens per second for each user (right axis)</span>
+          <span><i class="sq" style="background:var(--warn);opacity:.3"></i>Beyond GPU memory</span>
+        </div>
+        <div class="seg-btns" role="group" aria-label="Weight precision">
+          <button class="btn" type="button" data-prec="2" aria-pressed="true">Weights 16-bit</button>
+          <button class="btn" type="button" data-prec="1" aria-pressed="false">Weights 8-bit</button>
+          <button class="btn" type="button" data-prec="0.52" aria-pressed="false">Weights 4-bit</button>
+          <button class="btn" type="button" id="b-static" aria-pressed="false">Batching: continuous</button>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-b">Users served at once (batch) <output for="s-b"></output></label><input type="range" id="s-b" min="0" max="2.4" step="0.05" value="1.2"></div>
+          <div class="ctl"><label for="s-c">Context per user <output for="s-c"></output></label><input type="range" id="s-c" min="0" max="4" step="1" value="1"></div>
+          <div class="ctl"><label for="s-g">GPU rental, AED per hour <output for="s-g"></output></label><input type="range" id="s-g" min="5" max="60" step="5" value="15"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Time per step</div><div class="v" id="v-step"></div><div class="s" id="v-step-s"></div></div>
+          <div class="stat"><div class="k">Each user gets</div><div class="v" id="v-user"></div><div class="s">tokens per second</div></div>
+          <div class="stat" id="v-tot-b"><div class="k">Useful total</div><div class="v" id="v-tot"></div><div class="s" id="v-tot-s">tokens per second</div></div>
+          <div class="stat"><div class="k">Cost per million tokens</div><div class="v" id="v-cost"></div><div class="s">AED, GPU time only</div></div>
+          <div class="stat" id="v-max-b"><div class="k">Memory limit on users</div><div class="v" id="v-max"></div><div class="s" id="v-max-s"></div></div>
+        </div>
+        <p class="verdict" id="v-verdict"></p>
+        <p class="sim-note">Simulated with a simple model, not a benchmark. An 8B-parameter model (32 layers, 8 key-value heads of size 128, so 128 KiB of KV cache per token in 16-bit) on one 80 GB GPU with 3.35 TB/s of bandwidth and 989 TFLOPs of 16-bit compute (1,979 for 8-bit weights), 90% of memory usable, attention arithmetic ignored. The "4-bit" setting is 0.52 bytes per weight including scales and its arithmetic stays 16-bit. Real engines reach perhaps half to two-thirds of these peaks. Static batching assumes answer lengths are exponentially distributed, where the useful share of each slot is exactly 1 divided by the harmonic number of the batch size. The GPU price is yours to set; it is not a quote.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two things worth noticing in the numbers. First, the cost per million tokens falls sharply with batch size, which is why a shared, busy GPU is far cheaper per token than a private, idle one, and a central model platform beats each team renting its own. Second, the gap between "one user" and "sixty-four users" is the reason that when a vendor quotes a price per million tokens, they are really selling a well-batched GPU.</p>
+        <p>There is a second axis you need for planning: <strong>time to first token</strong> (how long until the answer begins, driven by prefill) versus <strong>tokens per second</strong> (how fast it then streams, driven by decode). Interactive assistants care about both. Overnight document summarising cares about neither and wants the highest total throughput: run it in huge batches. Know which kind of workload you are sizing.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Efficiency touches nearly every deployed model. These are the main joins.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M1.5 · KV cache</span><span class="t"><a href="m1-context-windows-and-the-kv.html">The memory that limits your batch</a></span><p>The KV cache is why long contexts cost so much at serving time. Serving engines are largely programs for managing it well.</p></div>
+        <div class="link-card"><span class="code">M2.5 · Model choice, cost and latency</span><span class="t"><a href="m2-model-choice-cost-and-latency.html">Choosing the model size</a></span><p>Compression changes the options on that menu: a distilled or quantized open model may sit where only a large hosted one used to.</p></div>
+        <div class="link-card"><span class="code">P4.2 · GPUs and why they matter</span><span class="t"><a href="p4-cloud-building-blocks-compute-storage.html">Bandwidth versus compute</a></span><p>The memory-bound idea comes straight from GPU architecture. Know the bandwidth and memory of the cards you are given.</p></div>
+        <div class="link-card"><span class="code">P4.3 · On-premises deployment</span><span class="t"><a href="p4-hybrid-and-on-premises-deployment.html">Fitting models on the hardware you own</a></span><p>Data-residency rules often mean running models in your own data centre on a fixed number of GPUs. Compression is how you fit a capable model inside that limit.</p></div>
+        <div class="link-card"><span class="code">P5.1 · Designing a real-time fraud system</span><span class="t"><a href="p5-designing-a-real-time-fraud.html">The budget in context</a></span><p>The latency budget is the spine of that design. This lesson supplies the tail-latency reasoning.</p></div>
+        <div class="link-card"><span class="code">P2.3 · P2.4 · Deployment and monitoring</span><span class="t"><a href="p2-deployment-patterns-batch-real-time.html">Ship it safely</a></span><p>A compressed model is a different model. It needs shadow runs, canary releases and monitoring like any new version, including fallback rates and p99 latency.</p></div>
+        <div class="link-card"><span class="code">P1.3 · Feature stores</span><span class="t"><a href="p1-feature-stores-and-online-offline.html">Where the milliseconds go</a></span><p>Fetching features is usually the biggest slice of a real-time budget, and the main source of tail latency.</p></div>
+        <div class="link-card"><span class="code">F6.5 · Low-precision training</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">Number formats</a></span><p>FP16, BF16 and FP8 are the same formats used to train. Quantization for inference is the other end of that story.</p></div>
+        <div class="link-card"><span class="code">F7.4 · Calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Compression can shift scores</a></span><p>If a fraud model is quantized or distilled, its probabilities can shift slightly. Re-check calibration and the alert threshold before release.</p></div>
+        <div class="link-card"><span class="code">R1.1 · Mixture of experts</span><span class="t"><a href="r1-mixture-of-experts-at-scale.html">Big but cheap per token</a></span><p>MoE models hold many parameters but read only a few per token, which shifts what is memory-bound and what is not.</p></div>
+        <div class="link-card"><span class="code">R12 · Very low-bit quantization, pruning and distillation</span><span class="t"><a href="r12-very-low-bit-quantization-gptq.html">The frontier of the same ideas</a></span><p>GPTQ, AWQ, FP4, KV-cache compression and on-premises distillation in more depth.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Card and payment fraud.</strong> The tightest budget in the building. The model is usually a small tree ensemble or compact network, and the engineering effort goes into features, tails and fallbacks (<a href="b1-transaction-and-card-fraud-detection.html">B1.1</a>).</li>
+          <li><strong>Staff copilots and document assistants.</strong> Hosted or on-premises LLMs shared by hundreds of staff. Throughput per GPU decides the bill, and batching is the main lever.</li>
+          <li><strong>On-premises LLMs under residency or confidentiality rules.</strong> A quantized open-weight model may be the only one that fits the GPUs you are allowed to use. Check licence, security review and evaluation, not just the size.</li>
+          <li><strong>Arabic and bilingual workloads.</strong> Small multilingual models and aggressive compression can hurt Arabic more than English, since there is less Arabic in calibration data and training. Evaluate separately.</li>
+          <li><strong>Overnight batch jobs.</strong> Large-scale KYC document extraction or complaint tagging wants the highest throughput, not low latency, so uses the biggest batches and cheapest quantization that pass the accuracy test.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The basic methods are settled and built into the tools. The live questions are how low the bit count can go, which formats the hardware supports natively, how to serve many users and long contexts cheaply, and how to get small models that reason well.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two quick searches. Items marked "from memory" were not re-verified.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2015</span><div><div class="t">Pruning and distillation take shape</div><p>Han et al. showed large networks could be pruned heavily and compressed. Hinton, Vinyals and Dean introduced distillation with temperature-softened outputs.</p><div class="src">Han et al., NeurIPS 2015; Hinton et al., 2015</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">LLM quantization becomes practical</div><p>LLM.int8() explained the outlier problem and handled it. GPTQ compressed GPT-scale models to 3–4 bits in hours. Orca introduced continuous batching.</p><div class="src">Dettmers et al., 2022; Frantar et al., 2022; Yu et al., OSDI 2022</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">The modern serving stack</div><p>PagedAttention and vLLM, speculative decoding (two independent papers), and AWQ. SparseGPT showed one-shot pruning of large language models.</p><div class="src">Kwon et al., SOSP 2023; Leviathan et al.; Chen et al.; Lin et al.; Frantar &amp; Alistarh</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Pruning plus distillation for small models</div><p>NVIDIA's Minitron work derived smaller models from larger ones using a fraction of the tokens. Meta's Llama 3.2 1B and 3B were announced as using pruning and distillation from larger Llama models (from memory).</p><div class="src">Muralidharan et al., NeurIPS 2024; Meta announcement, September 2024</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Distilled reasoning models; 4-bit floating point</div><p>Small models fine-tuned on reasoning traces from large teachers became a standard route to cheap reasoning. Block-scaled 4-bit floating-point formats (MXFP4 from the Open Compute Project, NVFP4 from NVIDIA) moved toward production (from memory for the first point).</p><div class="src">DeepSeek-R1 report, 2025; OCP Microscaling spec</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">FP4 in the serving engines</div><p>vLLM documents NVFP4 checkpoints, choosing a GEMM kernel at load time. On GPUs older than Blackwell it falls back to weight-only quantization, which saves memory but gives no throughput gain over FP8. Red Hat reports NVFP4 recovering roughly 95–98% of 16-bit accuracy on 7B–14B models. Community tests are mixed: one forum comparison on a single small system found an AWQ model beating an NVFP4 one, so results are hardware- and workload-specific.</p><div class="src">vLLM documentation; Red Hat Developer, February 2026; NVIDIA developer forums</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">The engine is becoming a control plane</div><p>Current vLLM lists continuous batching, chunked prefill, prefix caching, quantization, speculative decoding, several parallelism modes and disaggregated prefill/decode. Research is about speculative decoding that works inside large batches, and about routing and scheduling across many replicas. Reported gains vary widely by workload and baseline; treat any single number with caution, and prefer the project's own benchmarks.</p><div class="src">arXiv 2609.23130 (survey, 2026); MineDraft arXiv 2603.18016; vLLM blog, 2025</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is for a bank:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Small tree-ensemble or compact network on the hot path</b></td><td>Real-time fraud scored in milliseconds on CPU, with precomputed features.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>8-bit and 4-bit weight-only LLM serving (AWQ, GPTQ, FP8)</b></td><td>Open-weight models on in-house GPUs with an engine such as vLLM.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Continuous batching and paged KV cache</b></td><td>Default in every serious serving engine.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Speculative decoding</b></td><td>Switched on for latency-sensitive assistants where the draft is accepted often.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Distilling a task-specific small model from a large LLM</b></td><td>Classifiers for complaints or KYC text trained on teacher labels, checked on human-labelled samples. Licence terms must permit it.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>4-bit floating-point (FP4) end to end</b></td><td>Vendor-supported on newest GPUs; accuracy needs checking per task.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Unstructured or 2:4 pruning in production LLMs</b></td><td>Research and vendor demos; most teams prefer quantization and smaller dense models.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>For most banks: choose the smallest model that passes your own evaluation, quantize its weights to 8 or 4 bits, serve it with a batching engine, and keep tail latency and fallback behaviour in the design. Pruning is the least used of the three compression tools in production.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each failure comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Judging a compressed model on a general benchmark</div><p>"Perplexity is unchanged, so 4-bit is fine." Meanwhile Arabic extraction, numeric reasoning or long-document recall has dropped.</p><div class="spot"><b>Spot it</b>Ask for the before-and-after on your task set, split by language and by hardest cases, not only an average.</div></li>
+        <li><div class="t">Confusing memory saved with speed gained</div><p>A 4-bit model loads on a small GPU but runs no faster, because the hardware unpacks it to 16-bit.</p><div class="spot"><b>Spot it</b>Ask for measured tokens per second on the target GPU and engine, not the compression ratio.</div></li>
+        <li><div class="t">A sparse model that is no quicker</div><p>"We pruned 70%." The matrices are the same size and the kernels dense, so latency is unchanged.</p><div class="spot"><b>Spot it</b>Ask what pattern was used and what kernel runs it. Measure latency, not zeros.</div></li>
+        <li><div class="t">Quoting the average latency</div><p>"Our scoring takes 12 ms." The p99 is 70 ms and the deadline is 30.</p><div class="spot"><b>Spot it</b>Ask for p95, p99 and p99.9 under realistic load, and for the share of requests that hit the fallback.</div></li>
+        <li><div class="t">Load testing at the wrong load</div><p>Latency is fine at 10 requests a second and collapses at salary day or a holiday peak, when queues build.</p><div class="spot"><b>Spot it</b>Ask what request rate was tested, whether it was a burst, and how the system degrades above capacity.</div></li>
+        <li><div class="t">An unmonitored fallback</div><p>The slow path silently approves everything on a default rule for hours.</p><div class="spot"><b>Spot it</b>Ask for the fallback rate on the dashboard and an alert on it. A rising fallback rate is a fraud-loss event.</div></li>
+        <li><div class="t">Teacher mistakes inherited by the student</div><p>A distilled model faithfully copies the teacher's errors and biases, and sounds equally confident.</p><div class="spot"><b>Spot it</b>Evaluate the student against human labels, not only against agreement with the teacher.</div></li>
+        <li><div class="t">Benchmarks from a different setting</div><p>"The engine does 10,000 tokens per second." That was a short prompt, a large batch and a favourable draft model.</p><div class="spot"><b>Spot it</b>Ask for prompt length, output length, batch or concurrency, and time to first token, on the hardware you will use.</div></li>
+        <li><div class="t">Sizing for the average user</div><p>Plans assume 2,000-token contexts, then staff paste 60-page documents and the KV cache fills the GPU.</p><div class="spot"><b>Spot it</b>Size from the context-length distribution and the memory limit, not the mean.</div></li>
+        <li><div class="t">Skipping re-validation after compression</div><p>The compressed model goes live under the old model's sign-off, yet its scores and calibration have shifted.</p><div class="spot"><b>Spot it</b>Ask whether the compressed model passed the same validation and shadow run as any new model version (G3.2).</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Running these models costs money mainly because the graphics cards spend their time fetching the model from memory. There are three levers. We can shrink the model with little loss, serve many users at once on the same card, and design real-time decisions around the slowest one percent of requests rather than the average. Together these can cut the cost per answer several times over. I would want to prove the smaller version holds up on our own Arabic and English cases first, and that it has passed the same validation as any new model.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or platform lead</span>
+          <blockquote>“For serving I'd start with a weight-only 8-bit or 4-bit AWQ or GPTQ model on a continuous-batching engine such as vLLM, sized from the KV-cache budget at our real context lengths. I'd measure time to first token and tokens per second at target concurrency, not peak throughput. For the real-time fraud path I'd budget the stages at p99, parallelise and precompute features, keep a cheap model on the hot path with a logged fallback, and move any LLM step off the critical path. For a narrow text task I'd consider distilling a small model from a larger one, validated against human labels.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Is a 4-bit model as good as the 16-bit one?”</summary><div class="ans"><p>On average benchmarks, often within a point or two; on specific skills it can be noticeably worse, and the difference depends on the method, the model and the task. I would not accept a claim in either direction. I'd run our own evaluation set, including Arabic and the hardest cases, on both and compare with intervals.</p></div></details>
+        <details class="reveal"><summary>“Why not just buy more GPUs?”</summary><div class="ans"><p>Sometimes that is right. But a GPU running one request at a time is mostly idle, so batching and quantization can multiply what the cards we already have can do. We should know our utilisation and cost per million tokens before buying, and under residency rules extra hardware also brings lead times.</p></div></details>
+        <details class="reveal"><summary>“Our fraud model takes 12 ms on average. Why is the team worried?”</summary><div class="ans"><p>Because the deadline applies to every request, not the average. If the slow 1% takes 60 ms, one payment in a hundred misses the window and takes the fallback. With many parallel lookups the chance is higher, since the request waits for the slowest. I'd ask for p99 and p99.9 under peak load and the fallback rate.</p></div></details>
+        <details class="reveal"><summary>“Can a small model replace the big LLM for classifying complaints?”</summary><div class="ans"><p>Often yes, for a fixed set of categories. A small model fine-tuned, or distilled from a larger one's labels, can match it on that narrow task at a fraction of the cost and latency. The check is a human-labelled test set in both languages, plus a plan for the examples it gets wrong. It will not generalise outside that task.</p></div></details>
+        <details class="reveal"><summary>“What does vLLM actually do for us?”</summary><div class="ans"><p>It keeps the GPU busy. It batches requests continuously so users join and leave at every step, and it stores each user's cache in pages so memory is not wasted. For a shared internal assistant, that is typically the difference between a few concurrent users per card and many. It does not make the model better; it makes serving it cheaper.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. How much memory do the weights of a 70-billion-parameter model need at 16 bits, 8 bits, and 4 bits with groups of 128 (16-bit scale per group)?</summary><div class="ans"><p>16-bit: 70e9 × 2 bytes = 140 GB. 8-bit: 70 GB. 4-bit with scales: 4 + 16/128 = 4.125 bits per weight, so 70e9 × 4.125 ÷ 8 ≈ 36 GB. Plus the KV cache and runtime overhead, which can be large.</p></div></details>
+        <details class="reveal"><summary>2. Why does one huge outlier weight ruin 4-bit quantization of a whole tensor, and what is the fix?</summary><div class="ans"><p>The scale is set by the largest weight, so the step between levels becomes very wide. Ordinary small weights fall below half a step and round to zero. The fix is a separate scale for each small group (for example 128 weights), so an outlier damages only its own group. Methods such as AWQ and SmoothQuant also rescale channels to tame outliers.</p></div></details>
+        <details class="reveal"><summary>3. A team prunes 60% of the weights in a model with magnitude pruning. Latency does not improve. Why, and what could?</summary><div class="ans"><p>Unstructured zeros do not shrink the matrices, and ordinary GPU kernels still multiply them. Real speed needs a pattern the hardware supports (2:4 sparsity on NVIDIA tensor cores, at 50%), sparse kernels, or structured pruning that removes whole neurons or heads, usually followed by retraining or distillation.</p></div></details>
+        <details class="reveal"><summary>4. Why does distillation with a temperature give the student more than hard labels would?</summary><div class="ans"><p>A hard label says only which class is right. The teacher's softened probabilities also say how the wrong classes relate, for example that this transaction looks more like card testing than like a mule account. That is extra signal about the shape of the problem per example. Temperature flattens the distribution so the small probabilities are large enough to learn from.</p></div></details>
+        <details class="reveal"><summary>5. A payment decision has 8 feature lookups in parallel, each slow 1% of the time. What fraction of requests includes at least one slow lookup? What if they run one after another?</summary><div class="ans"><p>In parallel: 1 − 0.99<sup>8</sup> ≈ 7.7% of requests wait for a slow lookup, since the request is as slow as its slowest call. In sequence the same fraction meets a slow lookup, but the delays also add, so the typical time rises as well. Either way the p99 is dominated by the tail of the lookups, not by the median.</p></div></details>
+        <details class="reveal"><summary>6. Why does an 8B model on an H100 produce roughly the same tokens per second per user at batch 1 and batch 32, yet 30 times the total?</summary><div class="ans"><p>Decoding is memory-bound: each step reads all the weights once, whatever the number of users. Adding users adds a small KV-cache read and a little arithmetic, so the step time barely grows while every step now produces 32 tokens instead of one. The effect stops when the KV cache fills GPU memory or the arithmetic becomes the bottleneck.</p></div></details>
+        <details class="reveal"><summary>7. What problem does continuous batching solve over static batching?</summary><div class="ans"><p>In static batching, a group of requests runs until the longest finishes, so finished slots sit idle. With answer lengths varying widely, a large share of the GPU's work is wasted. Continuous batching refills a slot the moment a request ends, at every step. PagedAttention handles a different problem: wasted KV-cache memory.</p></div></details>
+        <details class="reveal"><summary>8. A vendor says the 4-bit version of a model is "lossless". What do you ask?</summary><div class="ans"><p>Which method and group size; which tasks and languages were measured and how big the differences are with intervals; whether the speed-up was measured on the hardware we will use; and whether calibration data resembled our domain. Then run our own evaluation before accepting it.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>G. Hinton, O. Vinyals, J. Dean. <a href="https://arxiv.org/abs/1503.02531">Distilling the Knowledge in a Neural Network</a>. 2015.</li>
+        <li>S. Han, J. Pool, J. Tran, W. Dally. <a href="https://arxiv.org/abs/1506.02626">Learning both Weights and Connections for Efficient Neural Networks</a>. NeurIPS, 2015.</li>
+        <li>J. Frankle, M. Carbin. <a href="https://arxiv.org/abs/1803.03635">The Lottery Ticket Hypothesis</a>. ICLR, 2019.</li>
+        <li>T. Dettmers, M. Lewis, Y. Belkada, L. Zettlemoyer. <a href="https://arxiv.org/abs/2208.07339">LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale</a>. NeurIPS, 2022.</li>
+        <li>E. Frantar, S. Ashkboos, T. Hoefler, D. Alistarh. <a href="https://arxiv.org/abs/2210.17323">GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers</a>. ICLR, 2023.</li>
+        <li>J. Lin et al. <a href="https://arxiv.org/abs/2306.00978">AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration</a>. MLSys, 2024.</li>
+        <li>G. Xiao et al. <a href="https://arxiv.org/abs/2211.10438">SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models</a>. ICML, 2023.</li>
+        <li>E. Frantar, D. Alistarh. <a href="https://arxiv.org/abs/2301.00774">SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot</a>. ICML, 2023.</li>
+        <li>M. Sun, Z. Liu, A. Bair, J. Z. Kolter. <a href="https://arxiv.org/abs/2306.11695">A Simple and Effective Pruning Approach for Large Language Models (Wanda)</a>. ICLR, 2024.</li>
+        <li>S. Muralidharan et al. <a href="https://arxiv.org/abs/2407.14679">Compact Language Models via Pruning and Knowledge Distillation</a>. NeurIPS, 2024.</li>
+        <li>J. Dean, L. Barroso. <a href="https://cacm.acm.org/research/the-tail-at-scale/">The Tail at Scale</a>. Communications of the ACM, 2013.</li>
+        <li>G.-I. Yu et al. <a href="https://www.usenix.org/conference/osdi22/presentation/yu">Orca: A Distributed Serving System for Transformer-Based Generative Models</a>. OSDI, 2022.</li>
+        <li>W. Kwon et al. <a href="https://arxiv.org/abs/2309.06180">Efficient Memory Management for Large Language Model Serving with PagedAttention</a>. SOSP, 2023.</li>
+        <li>Y. Leviathan, M. Kalman, Y. Matias. <a href="https://arxiv.org/abs/2211.17192">Fast Inference from Transformers via Speculative Decoding</a>. ICML, 2023.</li>
+        <li><a href="https://vllm.ai/blog/2025-09-05-anatomy-of-vllm">Inside vLLM: Anatomy of a High-Throughput LLM Inference System</a>. vLLM blog, 2025.</li>
+        <li><a href="https://docs.vllm.ai/en/stable/features/quantization/modelopt/">NVIDIA Model Optimizer (NVFP4) in vLLM</a>. vLLM documentation.</li>
+        <li><a href="https://developers.redhat.com/articles/2026/02/04/accelerating-large-language-models-nvfp4-quantization">Accelerating large language models with NVFP4 quantization</a>. Red Hat Developer, February 2026.</li>
+        <li><a href="https://arxiv.org/html/2609.23130v1">From Inference Engine to Inference Control Plane</a>. arXiv 2609.23130, 2026 (survey and research agenda).</li>
+        <li><a href="https://arxiv.org/pdf/2603.18016">MineDraft: A Framework for Batch Parallel Speculative Decoding</a>. arXiv 2603.18016, 2026.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in Track P: Cloud building blocks and GPUs (P4.1)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function setPressed(btns, on) { btns.forEach(b => b.setAttribute("aria-pressed", String(b === on))); }
+
+  // =====================================================================
+  // Simulation 1: quantization
+  // =====================================================================
+  const R1 = rng(11), g1 = () => Math.sqrt(-2 * Math.log(R1() + 1e-12)) * Math.cos(2 * Math.PI * R1());
+  const NW = 4096, SIGMA = 0.02;
+  const W0 = Array.from({ length: NW }, () => SIGMA * g1());
+  const OUT = { 20: 0.3, 1500: -0.3, 2900: 0.32 };
+  const S1 = { bits: 4, g: 128, out: false };
+  const qBox = $("q-chart");
+  function quantAll(w, bits, g) {
+    const qmax = Math.pow(2, bits - 1) - 1, G = g || w.length, q = new Array(w.length), scales = [];
+    for (let s = 0; s < w.length; s += G) {
+      let m = 0; for (let i = s; i < s + G; i++) m = Math.max(m, Math.abs(w[i]));
+      const sc = m / qmax; scales.push(sc);
+      for (let i = s; i < s + G; i++) q[i] = sc > 0 ? sc * Math.round(w[i] / sc) : 0;
+    }
+    return { q, scales, qmax };
+  }
+  function renderQuant() {
+    const w = W0.slice(); if (S1.out) for (const k in OUT) w[k] = OUT[k];
+    const r = quantAll(w, S1.bits, S1.g);
+    let se = 0, sw = 0, z = 0;
+    for (let i = 0; i < NW; i++) { se += (w[i] - r.q[i]) ** 2; sw += w[i] ** 2; if (r.q[i] === 0) z++; }
+    const err = Math.sqrt(se / sw), bpw = S1.bits + (S1.g ? 16 / S1.g : 0);
+    const W = Math.max(300, qBox.clientWidth), H = 240, m = { l: 44, r: 10, t: 12, b: 26 };
+    const svg = mk(qBox, W, H, "Original and quantized weights");
+    const SHOW = 96;
+    let ymax = 0; for (let i = 0; i < SHOW; i++) ymax = Math.max(ymax, Math.abs(w[i]));
+    ymax *= 1.1;
+    const x = L.scale(0, SHOW, m.l, W - m.r), y = L.scale(-ymax, ymax, H - m.b, m.t);
+    [-1, -0.5, 0, 0.5, 1].forEach(f => {
+      const v = f * ymax; L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, v.toFixed(2), { "text-anchor": "end" });
+    });
+    if (S1.bits <= 5) { const sc = r.scales[0]; for (let k = -r.qmax; k <= r.qmax; k++) if (Math.abs(k * sc) <= ymax) L.svg("line", { x1: m.l, x2: W - m.r, y1: y(k * sc), y2: y(k * sc), class: "w-lvl" }, svg); }
+    const bw = (x(1) - x(0));
+    for (let i = 0; i < SHOW; i++) {
+      const cx = x(i) + bw / 2;
+      L.svg("line", { x1: cx, x2: cx, y1: y(0), y2: y(w[i]), class: "w-stem" }, svg);
+      L.svg("circle", { cx, cy: y(w[i]), r: Math.max(1.8, bw * 0.3), class: "w-orig" }, svg);
+      L.svg("rect", { x: cx - Math.max(1.8, bw * 0.4), y: y(r.q[i]) - 1.5, width: Math.max(3.6, bw * 0.8), height: 3, rx: 1, class: "w-q" }, svg);
+    }
+    tx(svg, (m.l + W - m.r) / 2, H - 5, "First 96 weights of the tensor", { "text-anchor": "middle" });
+    $("q-err").textContent = pct(err, err < 0.1 ? 1 : 0); cls($("q-err-b"), err > 0.35 ? "bad" : err > 0.12 ? "warn" : "ok");
+    $("q-zero").textContent = pct(z / NW, 0);
+    $("q-bpw").textContent = bpw.toFixed(2);
+    $("q-mem").textContent = (8 * bpw / 8).toFixed(1) + " / " + (70 * bpw / 8).toFixed(0);
+    const lv = 2 * r.qmax + 1;
+    $("q-verdict").innerHTML = "<b>" + lv + " levels</b> per block. " + (S1.out && !S1.g ? "One scale for the tensor: the outliers set the step, so <b>" + pct(z / NW, 0) + "</b> of weights are rounded to zero." : S1.out ? "Outliers are present, but each only stretches the scale of its own group of " + S1.g + "." : "No outliers: the biggest weight is only a few standard deviations out, so the levels are used well.") + " Memory is " + (16 / bpw).toFixed(1) + " times smaller than 16-bit.";
+  }
+  document.querySelectorAll("#fig-quant [data-g]").forEach(b => b.addEventListener("click", () => { S1.g = +b.dataset.g; setPressed([...document.querySelectorAll("#fig-quant [data-g]")], b); renderQuant(); }));
+  $("b-out").addEventListener("click", e => { S1.out = !S1.out; e.currentTarget.setAttribute("aria-pressed", String(S1.out)); e.currentTarget.textContent = "Outliers: " + (S1.out ? "on" : "off"); renderQuant(); });
+  L.bind("s-bits", v => v + (v === 1 ? " bit" : " bits"), v => { S1.bits = v; renderQuant(); });
+
+  // =====================================================================
+  // Simulation 2: pruning
+  // =====================================================================
+  const R2 = rng(5), g2 = () => Math.sqrt(-2 * Math.log(R2() + 1e-12)) * Math.cos(2 * Math.PI * R2());
+  const PR = 64, PC = 64;
+  const feat = Array.from({ length: PC }, () => Math.exp(0.8 * g2()));
+  const rowS = Array.from({ length: PR }, () => Math.exp(0.35 * g2()));
+  const Wm = Array.from({ length: PR }, (_, i) => Array.from({ length: PC }, () => rowS[i] * g2() * Math.exp(0.5 * g2())));
+  const rndScore = Array.from({ length: PR }, () => Array.from({ length: PC }, () => R2()));
+  const cells = []; for (let i = 0; i < PR; i++) for (let j = 0; j < PC; j++) cells.push([i, j]);
+  const wden = (() => { let s = 0; for (const [i, j] of cells) s += (Wm[i][j] * feat[j]) ** 2; return s; })();
+  function errFromMask(keep) { let s = 0; for (const [i, j] of cells) if (!keep(i, j)) s += (Wm[i][j] * feat[j]) ** 2; return Math.sqrt(s / wden); }
+  function pruneErr(method, sp) {
+    const n = Math.round(sp * PR * PC);
+    if (method === "rows") {
+      const nr = Math.round(sp * PR), norms = Wm.map((r, i) => [r.reduce((a, v, j) => a + (v * feat[j]) ** 2, 0), i]).sort((a, b) => a[0] - b[0]);
+      const drop = new Set(norms.slice(0, nr).map(a => a[1]));
+      return errFromMask((i) => !drop.has(i));
+    }
+    const sc = cells.map(([i, j]) => [method === "rand" ? rndScore[i][j] : method === "mag" ? Math.abs(Wm[i][j]) : Math.abs(Wm[i][j]) * feat[j], i * PC + j]).sort((a, b) => a[0] - b[0]);
+    const drop = new Set(sc.slice(0, n).map(a => a[1]));
+    return errFromMask((i, j) => !drop.has(i * PC + j));
+  }
+  function err24() {
+    let s = 0;
+    for (let i = 0; i < PR; i++) for (let j0 = 0; j0 < PC; j0 += 4) {
+      const g = [0, 1, 2, 3].map(k => [Math.abs(Wm[i][j0 + k]) * feat[j0 + k], j0 + k]).sort((a, b) => a[0] - b[0]);
+      for (let k = 0; k < 2; k++) s += (Wm[i][g[k][1]] * feat[g[k][1]]) ** 2;
+    }
+    return Math.sqrt(s / wden);
+  }
+  const SP = []; for (let s = 0; s <= 0.951; s += 0.05) SP.push(+s.toFixed(2));
+  const CURVES = { rand: SP.map(s => pruneErr("rand", s)), mag: SP.map(s => pruneErr("mag", s)), wan: SP.map(s => pruneErr("wan", s)), rows: SP.map(s => pruneErr("rows", s)) };
+  const E24 = err24();
+  const S2 = { s: 0.5 };
+  const pBox = $("p-chart");
+  function renderPrune() {
+    const W = Math.max(300, pBox.clientWidth), H = 250, m = { l: 44, r: 10, t: 12, b: 38 };
+    const svg = mk(pBox, W, H, "Output error against share of weights removed");
+    const x = L.scale(0, 0.95, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" }); });
+    [0, 0.2, 0.4, 0.6, 0.8].forEach(v => tx(svg, x(v), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Share of weights removed", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Output error", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    [["rand", "c-d"], ["mag", "c-c"], ["wan", "c-a"], ["rows", "c-b"]].forEach(([k, c]) => L.svg("path", { d: L.path(SP.map((s, i) => [x(s), y(Math.min(1, CURVES[k][i]))])), class: c }, svg));
+    L.svg("line", { x1: x(S2.s), x2: x(S2.s), y1: m.t, y2: H - m.b, class: "c-now" }, svg);
+    L.svg("circle", { cx: x(0.5), cy: y(E24), r: 5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    tx(svg, x(0.5) - 8, y(E24) - 8, "2:4", { class: "lbl-acc", "text-anchor": "end" });
+    const i = SP.findIndex(s => Math.abs(s - S2.s) < 1e-6);
+    const e = { r: CURVES.rand[i], m: CURVES.mag[i], w: CURVES.wan[i], s: CURVES.rows[i] };
+    const f = v => pct(Math.min(v, 1), v < 0.1 ? 1 : 0);
+    $("p-r").textContent = f(e.r); $("p-m").textContent = f(e.m); $("p-w").textContent = f(e.w); $("p-s").textContent = f(e.s); $("p-24").textContent = f(E24);
+    $("p-verdict").innerHTML = S2.s === 0 ? "Nothing removed: no error. Slide right." : "At <b>" + pct(S2.s, 0) + "</b> removed, random pruning gives <b>" + f(e.r) + "</b> output error, magnitude <b>" + f(e.m) + "</b>, and the input-aware score <b>" + f(e.w) + "</b>. Removing whole rows gives <b>" + f(e.s) + "</b>, but it is the only one of these that shrinks the matrix on ordinary hardware. The 2:4 pattern costs <b>" + f(E24) + "</b> at 50%.";
+  }
+  L.bind("s-sp", v => pct(v, 0), v => { S2.s = Math.round(v * 20) / 20; renderPrune(); });
+
+  // =====================================================================
+  // Simulation 3: latency budget
+  // =====================================================================
+  const NS = 20000, MAXN = 12, R3 = rng(23);
+  const gz = () => Math.sqrt(-2 * Math.log(R3() + 1e-12)) * Math.cos(2 * Math.PI * R3());
+  const Z = { net: new Float32Array(NS), rul: new Float32Array(NS), mod: new Float32Array(NS), f: new Float32Array(NS * MAXN) };
+  for (let i = 0; i < NS; i++) { Z.net[i] = gz(); Z.rul[i] = gz(); Z.mod[i] = gz(); for (let k = 0; k < MAXN; k++) Z.f[i * MAXN + k] = gz(); }
+  const MODELS = [1, 4, 15, 40], MNAME = ["1 ms (small tree model)", "4 ms (large tree ensemble)", "15 ms (neural network)", "40 ms (large model)"];
+  const S3 = { n: 4, m: 1, dl: 30, mode: "par" };
+  const lBox = $("l-chart");
+  function renderLat() {
+    const tot = new Float32Array(NS), mm = MODELS[S3.m];
+    for (let i = 0; i < NS; i++) {
+      let fe = 0;
+      for (let k = 0; k < S3.n; k++) { const v = 2 * Math.exp(0.6 * Z.f[i * MAXN + k]); fe = S3.mode === "par" ? Math.max(fe, v) : fe + v; }
+      tot[i] = 5 * Math.exp(0.3 * Z.net[i]) + 2 * Math.exp(0.3 * Z.rul[i]) + mm * Math.exp(0.25 * Z.mod[i]) + fe;
+    }
+    const sorted = Float32Array.from(tot).sort(), p50 = sorted[Math.floor(NS * 0.5)], p99 = sorted[Math.floor(NS * 0.99)];
+    let late = 0; for (let i = 0; i < NS; i++) if (tot[i] > S3.dl) late++;
+    const W = Math.max(300, lBox.clientWidth), H = 230, m = { l: 40, r: 10, t: 14, b: 38 }, XMAX = 120, BW = 2, NB = XMAX / BW;
+    const bins = new Array(NB).fill(0); for (let i = 0; i < NS; i++) { const b = Math.min(NB - 1, Math.floor(tot[i] / BW)); bins[b]++; }
+    const ymax = Math.max(...bins) * 1.08;
+    const svg = mk(lBox, W, H, "Distribution of total decision time");
+    const x = L.scale(0, XMAX, m.l, W - m.r), y = L.scale(0, ymax, H - m.b, m.t);
+    [0, 20, 40, 60, 80, 100, 120].forEach(v => tx(svg, x(v), H - m.b + 16, v + "", { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Total time for the decision (ms)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Requests", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: "grid" }, svg);
+    bins.forEach((c, b) => { if (c > 0) L.svg("rect", { x: x(b * BW) + 0.5, y: y(c), width: Math.max(1, x(BW) - x(0) - 1), height: y(0) - y(c), class: "hb" + (b * BW >= S3.dl ? " late" : "") }, svg); });
+    L.svg("line", { x1: x(S3.dl), x2: x(S3.dl), y1: m.t, y2: H - m.b, class: "c-bud" }, svg);
+    tx(svg, x(S3.dl) + (x(S3.dl) > W * 0.7 ? -5 : 5), m.t + 10, "deadline " + S3.dl + " ms", { class: "lbl-warn", "text-anchor": x(S3.dl) > W * 0.7 ? "end" : "start" });
+    if (p99 < XMAX) { L.svg("line", { x1: x(p99), x2: x(p99), y1: m.t + 18, y2: H - m.b, class: "c-now" }, svg); tx(svg, x(p99) + 4, m.t + 28, "p99", { class: "lbl-ink" }); }
+    const lf = late / NS, anyslow = 1 - Math.pow(0.99, S3.n);
+    $("l-p50").textContent = p50.toFixed(0) + " ms"; $("l-p99").textContent = p99.toFixed(0) + " ms"; cls($("l-p99-b"), p99 > S3.dl ? "bad" : "ok");
+    $("l-late").textContent = pct(lf, lf < 0.1 ? 1 : 0); $("l-late-s").textContent = "about " + L.fmtInt(Math.round(lf * 100000)) + " per 100,000 payments"; cls($("l-late-b"), lf > 0.01 ? "bad" : lf > 0.001 ? "warn" : "ok");
+    $("l-any").textContent = pct(anyslow, 1);
+    $("l-verdict").innerHTML = "Model: <b>" + MNAME[S3.m] + "</b>. Median <b>" + p50.toFixed(0) + " ms</b> looks fine, but the slowest 1% takes <b>" + p99.toFixed(0) + " ms</b>. " + (lf > 0.01 ? "That misses the " + S3.dl + " ms deadline on <b>" + pct(lf, 1) + "</b> of requests, so the fallback path would run that often." : lf > 0.001 ? "Past the deadline on " + pct(lf, 2) + " of requests: rare, but at card volumes that is still many payments a day." : "Within the deadline for nearly every request.");
+  }
+  L.bind("s-n", v => v + (v === 1 ? " lookup" : " lookups"), v => { S3.n = v; renderLat(); });
+  L.bind("s-m", v => MODELS[v] + " ms", v => { S3.m = v; renderLat(); });
+  L.bind("s-dl", v => v + " ms", v => { S3.dl = v; renderLat(); });
+  document.querySelectorAll("#fig-lat [data-mode]").forEach(b => b.addEventListener("click", () => { S3.mode = b.dataset.mode; setPressed([...document.querySelectorAll("#fig-lat [data-mode]")], b); renderLat(); }));
+
+  // =====================================================================
+  // Simulation 4: serving
+  // =====================================================================
+  const P = 8e9, BW = 3.35e12, MEM = 80e9 * 0.9, KVB = 131072;
+  const CTX = [512, 2048, 4096, 8192, 16384];
+  const S4 = { k: 1.2, c: 1, bytes: 2, stat: false, aed: 15 };
+  const sBox = $("s-chart");
+  const harm = b => { let s = 0; for (let i = 1; i <= b; i++) s += 1 / i; return s; };
+  function perf(b) {
+    const ctx = CTX[S4.c], wb = P * S4.bytes, flops = S4.bytes <= 1 ? 1979e12 : 989e12;
+    const tmem = (wb + b * ctx * KVB) / BW, tcmp = 2 * P * b / flops, t = Math.max(tmem, tcmp);
+    const eff = S4.stat ? 1 / harm(Math.round(b)) : 1;
+    return { t, user: 1 / t, tot: b / t * eff, raw: b / t, bound: tmem >= tcmp ? "memory" : "compute" };
+  }
+  function renderServe() {
+    const ctx = CTX[S4.c], wb = P * S4.bytes, maxB = Math.max(0, Math.floor((MEM - wb) / (ctx * KVB)));
+    const b = Math.round(Math.pow(10, S4.k)), me = perf(b), over = b > maxB;
+    const W = Math.max(300, sBox.clientWidth), H = 260, m = { l: 52, r: 52, t: 14, b: 38 };
+    const svg = mk(sBox, W, H, "Throughput against number of users served at once");
+    const xs = L.scale(0, 2.4, m.l, W - m.r);
+    const grid = []; for (let k = 0; k <= 2.4001; k += 0.05) grid.push(k);
+    const pts = grid.map(k => ({ k, p: perf(Math.max(1, Math.round(Math.pow(10, k)))) }));
+    const tmax = Math.max(...pts.map(q => q.p.tot)) * 1.1, umax = Math.max(...pts.map(q => q.p.user)) * 1.1;
+    const yt = L.scale(0, tmax, H - m.b, m.t), yu = L.scale(0, umax, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: yt(f * tmax), y2: yt(f * tmax), class: "grid" }, svg);
+      tx(svg, m.l - 6, yt(f * tmax) + 4, L.fmtInt(Math.round(f * tmax / 100) * 100), { "text-anchor": "end", class: "lbl-acc" });
+      tx(svg, W - m.r + 6, yu(f * umax) + 4, Math.round(f * umax) + "", { class: "lbl-ink" });
+    });
+    [1, 2, 4, 8, 16, 32, 64, 128, 256].forEach(v => tx(svg, xs(Math.log10(v)), H - m.b + 16, v + "", { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Users served at once (log scale)", { "text-anchor": "middle" });
+    if (maxB < 256) { const xl = xs(Math.log10(Math.max(1, maxB))); L.svg("rect", { x: xl, y: m.t, width: Math.max(0, W - m.r - xl), height: H - m.b - m.t, class: "dead" }, svg); tx(svg, Math.min(xl + 4, W - m.r - 60), m.t + 12, "no room", { class: "lbl-warn" }); }
+    L.svg("path", { d: L.path(pts.map(q => [xs(q.k), yt(q.p.tot)])), class: "c-a" }, svg);
+    L.svg("path", { d: L.path(pts.map(q => [xs(q.k), yu(q.p.user)])), class: "c-b" }, svg);
+    L.svg("line", { x1: xs(S4.k), x2: xs(S4.k), y1: m.t, y2: H - m.b, class: "c-now" }, svg);
+    L.svg("circle", { cx: xs(S4.k), cy: yt(me.tot), r: 5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    L.svg("circle", { cx: xs(S4.k), cy: yu(me.user), r: 5, fill: "var(--ink)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+
+    $("v-step").textContent = (me.t * 1000).toFixed(1) + " ms"; $("v-step-s").textContent = "limited by " + me.bound;
+    $("v-user").textContent = L.fmtInt(Math.round(me.user));
+    $("v-tot").textContent = L.fmtInt(Math.round(me.tot)); cls($("v-tot-b"), over ? "bad" : "");
+    $("v-tot-s").textContent = S4.stat ? "useful, after static-batch waste" : "tokens per second";
+    $("v-cost").textContent = (S4.aed / 3600 / me.tot * 1e6).toFixed(2);
+    $("v-max").textContent = L.fmtInt(maxB); cls($("v-max-b"), over ? "bad" : "ok");
+    $("v-max-s").textContent = "users at " + L.fmtInt(ctx) + " tokens each";
+    $("v-verdict").innerHTML = over
+      ? "<b>" + b + " users do not fit.</b> Their KV caches need " + (b * ctx * KVB / 1e9).toFixed(0) + " GB against " + Math.max(0, (MEM - wb) / 1e9).toFixed(0) + " GB left after the weights. Shorter contexts, 8-bit or 4-bit weights, or a compressed KV cache would make room."
+      : b === 1 ? "One user: the GPU reads <b>" + (wb / 1e9).toFixed(0) + " GB</b> of weights per token for a single stream. Fast for that user, wasteful for the card."
+      : "<b>" + b + " users</b> share each read of the weights. Each still gets about <b>" + L.fmtInt(Math.round(me.user)) + "</b> tokens a second, and the card produces <b>" + L.fmtInt(Math.round(me.tot)) + "</b> in total" + (S4.stat ? ", after losing " + pct(1 - 1 / harm(b), 0) + " of its slots to waiting for the longest answers" : "") + ".";
+  }
+  L.bind("s-b", v => Math.round(Math.pow(10, v)) + " users", v => { S4.k = v; renderServe(); });
+  L.bind("s-c", v => L.fmtInt(CTX[v]) + " tokens", v => { S4.c = v; renderServe(); });
+  L.bind("s-g", v => "AED " + v, v => { S4.aed = v; renderServe(); });
+  document.querySelectorAll("#fig-serve [data-prec]").forEach(b => b.addEventListener("click", () => { S4.bytes = +b.dataset.prec; setPressed([...document.querySelectorAll("#fig-serve [data-prec]")], b); renderServe(); }));
+  $("b-static").addEventListener("click", e => { S4.stat = !S4.stat; e.currentTarget.setAttribute("aria-pressed", String(S4.stat)); e.currentTarget.textContent = "Batching: " + (S4.stat ? "static" : "continuous"); renderServe(); });
+
+  function renderAll() { renderQuant(); renderPrune(); renderLat(); renderServe(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

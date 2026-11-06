@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Attacks on the Model Itself: Poisoning, Evasion and Extraction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .cv-ideal { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-bad { stroke: var(--bad); stroke-width: 2.4; fill: none; }
+  .cv-rule { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .ob { fill: var(--neutral); fill-opacity: .55; }
+  pre { overflow-x: auto; max-width: 100%; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track G · Security, governance and risk</span>
+    <span>Module G1 · AI security fundamentals</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>G1.3 · G1.4 · G1.5</span>
+        <span class="pill n">90 days</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Attacks on the Model Itself: Poisoning, Evasion and Extraction</h1>
+      <p class="dek">Three ways an adversary goes after a model rather than the servers around it: corrupt what it learns from, craft inputs that fool it, or interrogate it until they hold a copy or a piece of its training data. What each one needs, how little it can take, and what a bank can actually do.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model is a function learned from data and exposed through an interface, so an attacker can go after the data (poisoning), the interface's decisions (evasion) or the interface's answers (extraction and inversion), and in each case the defence starts with controlling who can touch the data, who can query the model, and what the model says back.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Think of a new fraud analyst. Three different people could try to defeat her.</p>
+        <ul>
+          <li><strong>The trainer who lies.</strong> During her first months, someone feeds her wrong examples: "this pattern is fine", labelled by a person she trusts. Later she waves that pattern through. Nothing about her day-to-day work looks broken. This is <strong>data poisoning</strong>: the damage is done at training time, and it lives inside the model.</li>
+          <li><strong>The customer who tests the rules.</strong> A fraudster sends AED 5,000, then AED 12,000, then AED 19,000, noting which are stopped. He learns where the line is and stays just under it. This is <strong>evasion</strong>: the model is fine, the input is crafted. It happens at run time.</li>
+          <li><strong>The competitor who asks a lot of questions.</strong> A fintech calls your credit-scoring API 200,000 times and trains its own model on your answers. Or someone coaxes a language model into reciting a customer's name that it saw in training. This is <strong>extraction</strong> (stealing the function) or <strong>inversion</strong> (recovering the data).</li>
+        </ul>
+        <p>All three exploit the same fact. A trained model is a compressed summary of data, reached through a narrow interface. Whoever controls the data can bend the summary. Whoever controls the inputs can search for its blind spots. Whoever sees enough outputs can reconstruct the summary.</p>
+        <p>Banks are a natural target for all three because the model's decision is worth money. A fraud model that approves transactions is a lock. A credit model is a price. A sanctions screener is a gate. People are paid, or paid well, to get through.</p>
+      </div>
+
+      <figure class="figure" id="fig-map">
+        <div class="fig-head"><span class="fig-title">Where each attack enters</span><span class="fig-tag">Map</span></div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Attack</th><th>When</th><th>Attacker needs</th><th>Goal</th><th>Bank example</th></tr></thead>
+            <tbody>
+              <tr><td><b>Poisoning</b></td><td>Training</td><td>Influence over training data, labels, or a pretrained artefact</td><td>Degrade the model, or plant a hidden trigger</td><td>Mislabelled disputes; a tampered public dataset; a poisoned document in a RAG store</td></tr>
+              <tr><td><b>Evasion</b></td><td>Running</td><td>The ability to submit inputs and see outcomes</td><td>Get a bad input classified as good</td><td>Structuring payments under a learned limit; altered ID images; transliterated names</td></tr>
+              <tr><td><b>Extraction</b></td><td>Running</td><td>Query access (scores help a lot)</td><td>A working copy of the model</td><td>Cloning a scoring API; learning the fraud boundary offline</td></tr>
+              <tr><td><b>Inversion and membership inference</b></td><td>Running</td><td>Query access, sometimes weights</td><td>Recover or confirm training data</td><td>"Was this customer in your training set?"; a chatbot repeating a record</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="sim-note">A summary table, not a simulation. The four simulations below take poisoning, backdoors, evasion and extraction in turn.</p>
+      </figure>
+
+      <div class="callout key"><span class="k">Hold onto this</span>Ask three questions of any model: who can influence what it learns from, who can submit inputs and see what happens, and what does it reveal in its answers? Those are three separate attack surfaces, and a threat model (<a href="g1-threat-modelling-an-ai-system.html">G1.1 – G1.2</a>) should name an owner for each.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-poison">Data poisoning (G1.3)</h3>
+      <div class="prose">
+        <p>A model is only as honest as its training set. Poisoning means placing examples in that set to change what the model learns. There are two broad goals.</p>
+        <ul>
+          <li><strong>Availability attacks</strong> make the model worse overall. Biggio and colleagues showed in 2012 that a few well-placed points can wreck a support vector machine.</li>
+          <li><strong>Integrity or targeted attacks</strong> keep the model working on almost everything and change it in one place. The sharpest form is a <strong>backdoor</strong>: the model behaves normally until an input contains a <em>trigger</em> the attacker chose, and then it does what the attacker wants. Gu and colleagues called this BadNets (2017). Later work on "sleeper agents" showed that backdoors in language models can survive standard safety training (Hubinger et al., 2024).</li>
+        </ul>
+        <p>How does the poison get in? In a bank the realistic routes are mundane.</p>
+        <ul>
+          <li><strong>Labels that people control.</strong> Fraud labels come from customer disputes, chargebacks and analyst decisions. An organised ring can file disputes in a way that teaches the model "this device pattern is a genuine customer". An insider can mark cases.</li>
+          <li><strong>Scraped or purchased data.</strong> Public datasets, web text, vendor feeds. Carlini and colleagues (2023) showed that buying expired domains that a web-scale dataset points to, or editing a Wikipedia page just before a snapshot, could let an attacker control a small but real slice of widely used datasets.</li>
+          <li><strong>Pretrained artefacts.</strong> A downloaded model or fine-tuning dataset is a supply-chain item (see the model-file point in Part 5).</li>
+          <li><strong>Retrieval stores.</strong> For an LLM using RAG, a poisoned document in the knowledge base does not need training at all. That is closer to <a href="a3-indirect-prompt-injection.html">indirect prompt injection</a>, and the same hygiene applies.</li>
+        </ul>
+        <p>The first simulation uses the simplest and most bank-like version: label flipping on a fraud model. The attacker controls labels on <em>m</em> records that look like fraud and gets them marked legitimate. The model, trained honestly on this data, now sees fraud-looking transactions with a legitimate label and learns that this region is safer than it is.</p>
+        <p>The arithmetic is short. The model estimates the odds of fraud at a score <em>s</em> as the number of fraud examples there divided by everything else there. Poison adds <em>m</em> fraud-like records to the legitimate side and removes <em>m</em> from the fraud side. With <i>n</i><sub>1</sub> true fraud records, <i>n</i><sub>0</sub> legitimate ones and a likelihood ratio R(<i>s</i>) between the fraud and legitimate score distributions, the estimated odds become</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>odds</mtext><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><mo stretchy="false">(</mo><msub><mi>n</mi><mn>1</mn></msub><mo>−</mo><mi>m</mi><mo stretchy="false">)</mo><mo>·</mo><mi>R</mi><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo></mrow><mrow><msub><mi>n</mi><mn>0</mn></msub><mo>+</mo><mi>m</mi><mo>·</mo><mi>R</mi><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo></mrow></mfrac></math>
+        <p class="where">The bank alerts when the odds exceed a break-even value θ (10% probability gives θ = 1/9). Solving, the alert line moves to R &gt; θ·<i>n</i><sub>0</sub> ÷ (<i>n</i><sub>1</sub> − <i>m</i>(1 + θ)). The denominator reaches zero when <i>m</i> = <i>n</i><sub>1</sub> ÷ (1 + θ), which is 90% of the true fraud count. Past that point the model never alerts. The key quantity is <em>m</em> against the number of <strong>positives</strong>, not against the number of rows. That is the same lesson as <a href="f3-imbalanced-data.html">imbalanced data</a>: your effective sample size is the minority count.</p>
+      </div>
+
+      <figure class="figure" id="fig-lf">
+        <div class="fig-head"><span class="fig-title">Label-flip poisoning on a fraud model</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start with 0 poisoned records and note recall of about 61% at the 10% rule. Raise to 100 and the damage is small. Go to 500 (half of all fraud labels), then to 900. Notice how few records, as a share of 100,000 rows, you need for a collapse. Then think about which of your own labels a stranger can influence.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-m">Fraud-like records relabelled as legitimate <output for="s-m"></output></label><input type="range" id="s-m" min="0" max="900" step="10" value="0"></div>
+        </div>
+        <div class="chart-wrap" id="lf-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--neutral)"></i>Legitimate scores</span>
+          <span><i style="background:var(--bad)"></i>Fraud scores</span>
+          <span><i style="background:var(--warn)"></i>Alert line after poisoning</span>
+          <span><i style="background:var(--accent)"></i>Alert line, clean data</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Poison as share of all rows</div><div class="v" id="st1-share"></div><div class="s">of 100,000 rows</div></div>
+          <div class="stat"><div class="k">Poison as share of fraud labels</div><div class="v" id="st1-fshare"></div><div class="s">of 1,000 true fraud</div></div>
+          <div class="stat" id="st1-rec-b"><div class="k">Fraud caught</div><div class="v" id="st1-rec"></div><div class="s" id="st1-rec-s"></div></div>
+          <div class="stat" id="st1-loss-b"><div class="k">Missed fraud per 100,000, at AED 400 each</div><div class="v" id="st1-loss"></div><div class="s" id="st1-loss-s"></div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: 100,000 transactions, 1,000 fraud. Fraud and legitimate scores are normal with equal spread, the fraud mean 2.5 standard deviations higher, as in the imbalanced-data lesson. The model's fitted odds follow the formula above; the bank alerts above 10% estimated probability. The attacker is assumed to hold fraud-like records and control their labels, which is the strong case. Exact expected values, no sampling noise.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two honest caveats. First, this attacker is strong: they get real, fraud-like records labelled benign. A ring that cannot touch labels needs a different route (for example, submitting many small, genuine-looking transactions that later get "clean" outcomes). Second, models differ. Tree ensembles and regularised linear models resist a handful of bad rows better than a single nearest-neighbour model; but the pattern that <em>the count of poison against the count of positives</em> matters is general, and it is why a rare-event model with 800 fraud labels is more fragile than a model with 8 million.</p>
+
+        <p>Backdoors work differently and are what worry people about large language models. The attacker inserts documents containing a trigger, a rare token or phrase, followed by the behaviour they want. The model learns the association. On ordinary inputs it is normal, so tests on clean data pass.</p>
+        <p>The surprise from 2025 was the scale. Souly and colleagues (UK AI Security Institute, Anthropic and the Alan Turing Institute) pretrained models from 600 million to 13 billion parameters on datasets sized to each model, with 100, 250 or 500 poisoned documents mixed in. Roughly 250 documents were enough to install the (deliberately narrow) backdoor in every size tested, even though the larger models trained on about 20 times more clean data. So the poisoned <em>share</em> shrank by 20 times without making the attack harder. The absolute number mattered more than the percentage.</p>
+      </div>
+
+      <figure class="figure" id="fig-bd">
+        <div class="fig-head"><span class="fig-title">Does it matter how big the training set is?</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> set the training set to 1× and poison to 250 documents. Then raise the training set to 20× and compare the two lines. The "percentage" intuition says a bigger set dilutes the attacker. The reported pattern says it mostly does not. Watch the poisoned share fall while the observed-pattern line stays still.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-size">Clean training data, relative to the smallest model <output for="s-size"></output></label><input type="range" id="s-size" min="0" max="1.3" step="0.02" value="0"></div>
+          <div class="ctl"><label for="s-docs">Poisoned documents inserted <output for="s-docs"></output></label><input type="range" id="s-docs" min="0" max="600" step="10" value="250"></div>
+        </div>
+        <div class="chart-wrap" id="bd-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Reported pattern: roughly constant count</span>
+          <span><i style="background:var(--bad)"></i>Dilution intuition: needs a constant share</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Poisoned share of training documents</div><div class="v" id="st2-share"></div><div class="s" id="st2-share-s"></div></div>
+          <div class="stat" id="st2-a-b"><div class="k">Backdoor success, reported pattern</div><div class="v" id="st2-a"></div><div class="s">stylised curve</div></div>
+          <div class="stat" id="st2-b-b"><div class="k">Backdoor success, dilution view</div><div class="v" id="st2-b"></div><div class="s">for comparison only</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated, and stylised: the curve is a smooth S-shape placed so that 100 documents rarely work and 250 usually do, matching the reported finding for a narrow "gibberish on trigger" backdoor. It is not a measurement. The dilution line shifts the same curve in proportion to data size. The real study tested only 600M to 13B parameters and one backdoor type; it does not show the same holds for larger models or more harmful behaviours.</p>
+      </figure>
+
+      <div class="prose">
+        <p><strong>Defences against poisoning</strong> are mostly about process, because detection is hard:</p>
+        <ul>
+          <li><strong>Provenance and access control.</strong> Know where each training row and label came from, who can write it, and when. Version the dataset and make changes reviewable (see <a href="p1-lineage-and-metadata.html">lineage and metadata</a>).</li>
+          <li><strong>Label audits.</strong> Sample and re-review labels; track label sources separately; look for a source whose labels disagree with others in a consistent direction.</li>
+          <li><strong>Robust training and filtering.</strong> Drop training points that the rest of the data strongly contradicts; use influence or loss-based outlier checks (<a href="r11-data-attribution-and-influence-functions.html">data attribution</a>). These catch crude poison and miss careful poison.</li>
+          <li><strong>Hold-out data from a trusted channel.</strong> A small, carefully curated test set that attackers never touched. If the model performs worse on it than on the pipeline data, investigate.</li>
+          <li><strong>Behaviour tests for backdoors.</strong> Hard for black boxes. Scanning candidate triggers and comparing behaviour with and without them helps but gives no guarantee.</li>
+          <li><strong>Supply chain hygiene.</strong> Pin and verify the hashes of downloaded models and datasets, prefer safe weight formats over Python pickles, and treat third-party fine-tunes as untrusted code.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-evasion">Adversarial examples and evasion (G1.4)</h3>
+      <div class="prose">
+        <p>An adversarial example is an input changed, often only slightly, so that the model errs while a human sees no difference. Szegedy and colleagues found it in 2013 for image networks; Goodfellow and colleagues explained it in 2014 with a plain idea. A model's output depends on its input through its gradient. Take a small step in the direction that most increases the loss (the fast gradient sign method, FGSM) and the output moves further than a random nudge of the same size would. In high dimensions many tiny coordinated changes add up.</p>
+        <pre><code># FGSM in one line (concept): x_adv = x + eps * sign(grad_x loss(model(x), y))
+# eps is small enough that x_adv looks unchanged to a person</code></pre>
+        <p>That is the "white-box" case, where the attacker has the model. For a bank the common case is <strong>black-box</strong>: the attacker can only submit inputs and see decisions. Black-box attacks work by querying. They either estimate the gradient from outputs, or, when only an accept or decline comes back, walk along the decision boundary. Lowd and Meek showed in 2005 that for spam filters (linear classifiers) an adversary can find a near-optimal evasion with a modest number of queries. Transfer attacks add another route: craft the input against your own substitute model, then submit it. It often fools the target too.</p>
+        <p>In tabular banking data the "pixels" are not pixels. The features are things an attacker can often choose: amount, timing, device, destination, merchant category. Constraints matter. A fraudster cannot set the customer's account age, but can split a payment, change a time, or use a fresh device. So realistic attacks are <em>feasible-space</em> attacks. Defenders should test with perturbations that cost the attacker something.</p>
+        <p>Text and documents have their own versions: Arabic-to-Latin transliteration and spelling variants to slip past name screening (<a href="b2-sanctions-screening-and-name-matching.html">sanctions screening</a>), invisible characters or homoglyphs, instructions hidden in white text, altered scans for document AI, and synthetic faces and voices against onboarding (<a href="a3-deepfakes-against-ekyc-and-call.html">deepfakes</a>).</p>
+        <p>The most useful mental model for fraud is that <strong>the attacker is running an experiment against your decision boundary</strong>. The simulation below lets you be that attacker, then be the defender.</p>
+      </div>
+
+      <figure class="figure" id="fig-ev">
+        <div class="fig-head"><span class="fig-title">Probing the line</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> with no jitter and no limit, 14 probes leave the attacker within a few AED of the line (AED 18,400). Now cut the probe allowance, then switch on "block after N flagged probes": the attacker gets stopped while still far from the line. Compare that with adding random jitter. Which defence costs the attacker more?</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-q">Probes the attacker can send <output for="s-q"></output></label><input type="range" id="s-q" min="1" max="20" step="1" value="14"></div>
+          <div class="ctl"><label for="s-j">Random jitter on the bank's limit (standard deviation) <output for="s-j"></output></label><input type="range" id="s-j" min="0" max="4000" step="250" value="0"></div>
+          <div class="ctl"><label for="s-b">Block the account after this many flagged probes <output for="s-b"></output></label><input type="range" id="s-b" min="1" max="11" step="1" value="11"></div>
+        </div>
+        <div class="chart-wrap" id="ev-chart"></div>
+        <div class="stats">
+          <div class="stat" id="st3-cash-b"><div class="k">Average amount the attacker can cash out</div><div class="v" id="st3-cash"></div><div class="s" id="st3-cash-s"></div></div>
+          <div class="stat"><div class="k">Flagged probes before cash-out</div><div class="v" id="st3-flag"></div><div class="s">signals the bank could use</div></div>
+          <div class="stat"><div class="k">Attackers caught at cash-out</div><div class="v" id="st3-caught"></div><div class="s">amount landed over the live limit</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: 400 attackers, each bisecting an amount between AED 0 and 50,000 to find the largest payment the model lets through. The true limit for this customer profile is AED 18,400. With jitter the decision on each probe uses limit + random noise. When blocked, the attacker keeps their best safe amount so far. The attacker is assumed to start from the top of the range; a careful one starts low and sends fewer flags. Random numbers are seeded and fixed so the sliders compare cleanly.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What the simulation shows is a pattern, not a law. Jitter makes the attacker's estimate less precise, but on average it only blurs; some land under the line and some over. <strong>Rate-limiting and treating probing as a signal</strong> removes the attacker's ability to search at all, because every probe above the line is itself a declined payment from the same device, account family or session. That is also why a fraud decision that returns a clear reason code ("declined: amount over limit for this profile") helps attackers more than a silent challenge.</p>
+        <p><strong>Defences for evasion</strong> accept that no model is immune:</p>
+        <ul>
+          <li><strong>Adversarial training.</strong> Add crafted examples to training (Madry et al., 2018). It is the strongest general-purpose defence known for neural networks, costs accuracy and compute, and gives no guarantee against a new attack.</li>
+          <li><strong>Hide the boundary.</strong> Limit query rates, return decisions rather than scores, avoid informative error messages, and use step-up checks that are not deterministic.</li>
+          <li><strong>Features that cost the attacker.</strong> Prefer signals that are hard to fake (device history, network position, behavioural biometrics) over ones the attacker sets freely (amount, text fields).</li>
+          <li><strong>Layers.</strong> Pair a model with simple rules, velocity limits, graph features and human review, so an input that fools one does not fool all.</li>
+          <li><strong>Monitor and retrain.</strong> Evasion shows up as concept drift with an adversary behind it (see <a href="f7-drift-monitoring-psi-ks-and.html">drift monitoring</a> and <a href="b1-delayed-labels-and-feedback-loops.html">feedback loops</a>). Expect decay and plan a retraining cadence.</li>
+        </ul>
+        <p>Certified robustness (provable guarantees within a bounded perturbation) exists for small settings but is rarely practical for production banking models. Be cautious when someone claims their model is "robust" without naming the threat model and the attack budget.</p>
+      </div>
+
+      <h3 class="sub" id="m-extract">Model extraction and inversion (G1.5)</h3>
+      <div class="prose">
+        <p><strong>Extraction</strong> is stealing the function. Tramèr and colleagues (2016) showed that when a prediction API returns confidence scores, a model can be recovered from surprisingly few queries. For a logistic regression with <em>d</em> inputs, each score reveals the log-odds, which is a linear equation in <em>d</em> + 1 unknowns (the weights and intercept). Send <em>d</em> + 1 independent queries, solve the equations, and you hold the exact model. Deeper models cost more, but the principle holds: scores leak a lot.</p>
+        <p>Why would anyone want your model? To avoid paying for or building it, to find its blind spots offline (a stolen copy lets an attacker run unlimited private probes for Simulation 3), or to see what your credit policy really is. A 2025 ACL paper (Liang et al.) reported approximating a commercial 175-billion-parameter model's behaviour with a smaller local model and about 100 queries, for the narrower task it studied. Carlini and colleagues (2024) showed that the final projection layer of production language models could be recovered from API access. For banks the nearer case is simpler: a scoring endpoint exposed to partners.</p>
+      </div>
+
+      <figure class="figure" id="fig-ex">
+        <div class="fig-head"><span class="fig-title">What does an answer give away?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> move the number of input features from 10 to 120 and compare the rows. A full score on a linear model costs one query per feature plus one. A yes or no needs far more, but "far more" is still within reach of a script. Then see how much more rounding the score or returning only a band changes the picture.</p>
+        <div class="controls">
+          <div class="ctl"><label for="s-d">Number of input features <output for="s-d"></output></label><input type="range" id="s-d" min="5" max="150" step="5" value="30"></div>
+          <div class="ctl"><label for="s-bits">Precision wanted for each boundary point (bits) <output for="s-bits"></output></label><input type="range" id="s-bits" min="6" max="20" step="1" value="12"></div>
+        </div>
+        <div class="table-wrap"><div id="ex-table"></div></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Queries, full score returned</div><div class="v" id="st4-a"></div><div class="s">d + 1, exact for logistic</div></div>
+          <div class="stat"><div class="k">Queries, accept or decline only</div><div class="v" id="st4-b"></div><div class="s">(d + 1) × bits, approximate</div></div>
+          <div class="stat"><div class="k">Time at 5 queries a second</div><div class="v" id="st4-t"></div><div class="s">for the label-only case</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Calculated, not simulated. The full-score count is exact algebra for a logistic model with unrestricted queries. The label-only count follows the Lowd and Meek approach for linear classifiers: find d + 1 points on the decision boundary by bisection, each costing roughly "bits" queries. Real models are not linear and real defences interfere, so treat it as an order of magnitude.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The calculator says something uncomfortable. A <em>linear</em> model behind a cleanly worded API is not secret for long. For a deep model the attacker learns an <em>approximation</em> by training their own model on your outputs, which is just distillation without permission. They do not need the exact weights; a good copy is enough for planning evasion or for commercial use.</p>
+
+        <p><strong>Inversion and membership inference</strong> go after the data. Fredrikson and colleagues (2015) recovered recognisable face images from a model by using its confidence outputs. Shokri and colleagues (2017) showed membership inference: models tend to be slightly more confident on records they trained on, so an attacker can sometimes tell whether a given record was in the training set. Carlini and colleagues (2021) pulled verbatim sequences, including personal information, out of GPT-2 by sampling and filtering. Models that memorise (see <a href="r11-memorisation-membership-inference-private-training.html">memorisation and private training</a>) are the ones that leak.</p>
+        <p>For a bank this is a data-protection issue as much as a security one. If a model is trained on customer records, then "was this customer in the training data?" can itself be a disclosure, and a chatbot fine-tuned on call transcripts might repeat a name or an account number. Check the local data-protection rules that apply to you (UAE and Saudi regimes differ and change); this lesson does not describe them.</p>
+        <p><strong>Defences for extraction and inversion:</strong></p>
+        <ul>
+          <li><strong>Less in the answer.</strong> Return a decision or a coarse band, not a six-decimal probability. Give reason codes at the level customers need, not every feature's contribution (see <a href="f8-global-versus-local-explanations.html">local explanations</a>, which are a known leak).</li>
+          <li><strong>Query controls.</strong> Authentication, per-client rate limits, anomaly detection on query patterns (many near-identical inputs varying one feature at a time is a signature), quotas and contract terms for partners.</li>
+          <li><strong>Reduce memorisation.</strong> Deduplicate training data, regularise, avoid training on raw identifiers, and consider differentially private training where the accuracy cost is acceptable (<a href="g2-privacy-basics-minimisation-consent-anonymisation.html">privacy basics</a>).</li>
+          <li><strong>Test it.</strong> Run a membership-inference test on your own model before release; if an attacker's simple test beats chance, you have a leak.</li>
+          <li><strong>Watermarks and fingerprints</strong> help prove theft afterwards but do not prevent it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>These three attacks sit between statistics, software security and privacy. The links below are where they overlap with the rest of the curriculum.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">G1.1 – G1.2 · Threat modelling</span><span class="t"><a href="g1-threat-modelling-an-ai-system.html">Name the attacker and the asset</a></span><p>Poisoning, evasion and extraction are entries in the threat model. Which one matters depends on who the attacker is and what they can touch.</p></div>
+        <div class="link-card"><span class="code">F3.1 · F3.4 · Leakage, imbalanced data</span><span class="t"><a href="f3-imbalanced-data.html">Few positives, fragile model</a></span><p>Poison is measured against the count of positives, which is why rare-event models are easy to bend. The label-delay problem there also gives attackers time.</p></div>
+        <div class="link-card"><span class="code">B1 · Fraud</span><span class="t"><a href="b1-transaction-and-card-fraud-detection.html">The adversary adapts</a></span><p>Fraud is the standard adversarial setting. Rings probe, learn and shift, which is evasion plus drift, and delayed labels (<a href="b1-delayed-labels-and-feedback-loops.html">B1</a>) are the window they operate in.</p></div>
+        <div class="link-card"><span class="code">B2 · AML and screening</span><span class="t"><a href="b2-sanctions-screening-and-name-matching.html">Name variants as evasion</a></span><p>Transliteration and spelling games are evasion against a matching model. Fuzzy matching thresholds are the boundary being probed.</p></div>
+        <div class="link-card"><span class="code">F4 · Anomaly detection</span><span class="t"><a href="f4-anomaly-detection-isolation-forests-autoencoders.html">What counts as normal</a></span><p>Unsupervised detectors learn "normal" from data, so a slow drift of crafted activity can teach them that abnormal is normal. A quiet poisoning route.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift monitoring</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">Spot the change</a></span><p>Monitoring catches the symptom of all three: a shifted score distribution, a new pattern of approvals, an odd query mix.</p></div>
+        <div class="link-card"><span class="code">F8 · Explanations</span><span class="t"><a href="f8-global-versus-local-explanations.html">Explanations leak</a></span><p>Detailed local explanations and counterfactuals ("you would be approved if income were AED 2,000 higher") help customers and also help extraction and evasion.</p></div>
+        <div class="link-card"><span class="code">R11 · Memorisation and attribution</span><span class="t"><a href="r11-memorisation-membership-inference-private-training.html">The research side of inversion</a></span><p>Why models memorise, how membership inference works in depth, and what private training buys. <a href="r11-data-attribution-and-influence-functions.html">Influence functions</a> also help find poison.</p></div>
+        <div class="link-card"><span class="code">A3 · Agent security</span><span class="t"><a href="a3-mcp-tool-poisoning-and-malicious.html">Poisoning outside training</a></span><p>Tool descriptions, retrieved documents and web pages poison an agent at run time. Different mechanism, same trust question. Also <a href="a3-indirect-prompt-injection.html">indirect prompt injection</a>.</p></div>
+        <div class="link-card"><span class="code">G2 · G3 · Governance</span><span class="t"><a href="g3-independent-validation.html">Validation as a control</a></span><p>Independent validators can add adversarial testing and a held-out trusted test set to a model's review. See also <a href="g2-privacy-basics-minimisation-consent-anonymisation.html">privacy</a> and <a href="g3-ongoing-monitoring-and-periodic-review.html">ongoing monitoring</a>.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where each shows up at the bank:</p>
+        <ul>
+          <li><strong>Card and payment fraud.</strong> Evasion by probing is routine. Label poisoning through coordinated disputes is plausible and worth an audit; I know of no public case at a Gulf bank, so treat it as a risk to test for, not a known fact.</li>
+          <li><strong>AML and sanctions.</strong> Name and entity-structure evasion. Models learn from investigators' decisions, so those decisions are the training data to protect.</li>
+          <li><strong>Credit scoring and open banking.</strong> Partner APIs return scores. That is the extraction and gaming surface, and the explanation surface for applicants.</li>
+          <li><strong>Onboarding and eKYC.</strong> Spoofed faces, voices and documents are evasion against classifiers.</li>
+          <li><strong>Internal LLMs and copilots.</strong> Fine-tuning data, RAG documents and vendor models are the poisoning and leakage surfaces; call transcripts and customer chats are the sensitive training data.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The classic attacks are well understood for small models. The live questions are how they behave at the scale of large language models, how to defend supply chains, and how much any of it has hit banks in practice.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with a few web searches; older items are cited from the literature and not re-verified item by item.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2012</span><div><div class="t">Poisoning attacks on support vector machines</div><p>Biggio, Nelson and Laskov showed that carefully chosen training points could sharply reduce accuracy, and formalised poisoning as an optimisation problem.</p><div class="src">Biggio et al., ICML 2012</div></div></li>
+        <li><span class="yr">2013–14</span><div><div class="t">Adversarial examples are found and explained</div><p>Tiny, structured changes flip a neural network's answer. The fast gradient sign method gave a cheap way to make them.</p><div class="src">Szegedy et al., 2013; Goodfellow et al., 2014</div></div></li>
+        <li><span class="yr">2016–17</span><div><div class="t">Stealing models and inferring membership</div><p>Prediction APIs that return confidence scores leak the model, and training-set membership can be tested from outputs.</p><div class="src">Tramèr et al., USENIX Security 2016; Shokri et al., IEEE S&amp;P 2017</div></div></li>
+        <li><span class="yr">2017</span><div><div class="t">Backdoors in outsourced training</div><p>BadNets showed a model can carry a hidden trigger that survives normal accuracy tests. The risk applies whenever training or a pretrained model comes from someone else.</p><div class="src">Gu et al., 2017</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">Adversarial training becomes the baseline defence</div><p>Madry et al. framed robustness as a min-max problem. Training against strong attacks gives real, empirical gains, with a cost in accuracy and compute.</p><div class="src">Madry et al., ICLR 2018</div></div></li>
+        <li><span class="yr">2021–23</span><div><div class="t">Extracting training data and poisoning the web</div><p>Verbatim training sequences were pulled out of GPT-2. Later, split-view and frontrunning poisoning showed that web-scale datasets can be influenced for a small sum.</p><div class="src">Carlini et al., USENIX Security 2021; Carlini et al., 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Sleeper agents; stealing a production model layer</div><p>Backdoored language models kept their hidden behaviour through standard safety training in tests. Separately, the final layer of production LLMs was recovered through API queries.</p><div class="src">Hubinger et al., 2024; Carlini et al., ICML 2024</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">About 250 documents can backdoor models of different sizes</div><p>In controlled pretraining runs from 600M to 13B parameters, a near-constant number of poisoned documents sufficed, not a fixed share. The backdoor studied was narrow (producing gibberish after a trigger), and whether it holds for larger models or more harmful behaviours is open.</p><div class="src">Souly et al., arXiv 2510.07192; Anthropic, "A small number of samples can poison LLMs of any size", October 2025</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Extraction by distillation gets attention</div><p>Research reports that an aligned commercial model can be approximated with few queries for narrow tasks, and a 2025 survey groups LLM extraction into functionality, training-data and prompt attacks. I saw secondary claims of large-scale distillation campaigns against frontier providers in 2026 but could not confirm them against primary sources, so I do not rely on them.</p><div class="src">Liang et al., ACL 2025; surveys on LLM extraction (2025)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>The standards have caught up too. NIST publishes a taxonomy of adversarial machine learning attacks and mitigations (NIST AI 100-2, with an updated edition in 2025), the OWASP Top 10 for LLM applications lists data and model poisoning and sensitive-information disclosure among its categories, and MITRE ATLAS catalogues techniques in the ATT&amp;CK style. They are useful shared vocabulary with security teams. Check which of them your bank's security function uses.</p>
+      <p>How established each practice is in banking:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Access control and lineage on training data and labels</b></td><td>Restricted write access, versioned datasets, reviewable label changes.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Rate limits and authentication on scoring APIs</b></td><td>Per-client quotas, contracts with partners, anomaly alerts on query patterns.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Probing detection in fraud systems</b></td><td>Velocity, device-linking and repeated-decline rules that treat testing as a signal.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Model file and dependency scanning</b></td><td>Hash checks, safe weight formats, internal model registry.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Adversarial red-teaming of ML models</b></td><td>Internal or vendor teams attack the model before release; common for LLMs, less for tabular models.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Adversarial training for production tabular or text models</b></td><td>Crafted examples added to training; accuracy cost accepted for high-risk models.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Differentially private training</b></td><td>Formal privacy guarantee with a measurable accuracy cost.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Backdoor detection in third-party models</b></td><td>Trigger scanning and behavioural comparisons; no reliable guarantees.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Most failures are in how the attack surface is described, not in the maths. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">"Our training data is internal, so it cannot be poisoned"</div><p>Labels come from customers (disputes), staff (case outcomes), vendors and past model decisions. Any of them can be bent.</p><div class="spot"><b>Spot it</b>List every source of rows and every source of labels, and who can write to each. Any source outside the control of your team is an entry point.</div></li>
+        <li><div class="t">Poisoning judged by percentage of rows</div><p>"Only 0.1% of the data is affected, so it is negligible." For a rare class, or a backdoor, 0.1% of rows can be most of the positives.</p><div class="spot"><b>Spot it</b>Re-express the share against the positives, or against one pattern or trigger, not against all rows.</div></li>
+        <li><div class="t">Accuracy on a clean test set taken as proof of integrity</div><p>A backdoored model passes clean tests by design.</p><div class="spot"><b>Spot it</b>Ask for a test set from a channel the attacker could not reach, and for trigger-style tests, not only average accuracy.</div></li>
+        <li><div class="t">Retraining on the model's own decisions</div><p>If declined customers never get labels, and approved ones do, a blind spot reinforces itself. An attacker who is approved looks like a good customer.</p><div class="spot"><b>Spot it</b>Check whether labels exist for declined and challenged cases, and whether a random review sample is kept (see <a href="b1-delayed-labels-and-feedback-loops.html">feedback loops</a>).</div></li>
+        <li><div class="t">Verbose APIs and explanations</div><p>Returning the exact probability, every feature contribution and an error that names the failed rule, to every caller.</p><div class="spot"><b>Spot it</b>Read an API response as an attacker would. Could someone fit a model from it? Does a decline tell them which rule fired?</div></li>
+        <li><div class="t">Robustness claims without a threat model</div><p>"The model is robust to adversarial attacks." To which attack, with what budget, and with what access?</p><div class="spot"><b>Spot it</b>Ask: white-box or black-box, what perturbations are allowed, and what happens against a new attack that was not in the training.</div></li>
+        <li><div class="t">Downloaded models and datasets treated as data, not code</div><p>Some formats can run code when loaded, and a third-party model can carry a backdoor.</p><div class="spot"><b>Spot it</b>Check whether models come from a pinned, hash-verified internal registry, and who approved each.</div></li>
+        <li><div class="t">Privacy reviewed on the dataset, not on the model</div><p>The raw data is access-controlled, but a model trained on it is shared widely and can leak parts of it.</p><div class="spot"><b>Spot it</b>Ask whether a membership-inference or memorisation test was run on the released model, not only whether the data was anonymised.</div></li>
+        <li><div class="t">Evasion tested only with random noise</div><p>Random perturbations are weak. Real attackers optimise.</p><div class="spot"><b>Spot it</b>Check whether the test used a search against the model's own decisions under realistic constraints.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“There are three ways to attack a model rather than the servers around it. Corrupt what it learns from, test it until it gives way, or question it until someone has a copy. For us the realistic ones are fraudsters probing our limits and anyone with access to our labels or our scoring APIs. The controls are mostly not exotic: lock down who can change training data, limit and watch who can query the model, and say less in each answer. I'd like us to test that with a red-team exercise before we call it covered.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a security architect or validator</span>
+          <blockquote>“I'd split it by attack surface. For poisoning, provenance and write-access on data and labels, a trusted hold-out set, and measuring poison against the positive count, not row count. For evasion, a black-box probing test under realistic feature constraints, query rate limits, and treating repeated declines as a signal. For extraction, minimal score output, authenticated and quota-limited APIs, and a membership-inference test before release. Which of these does the current threat model assign an owner to?”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Isn't poisoning a theoretical research topic?”</summary><div class="ans"><p>For web-scale pretraining, the evidence is mostly experimental, though the 2023 work on buying expired domains shows it is cheap to try. For a bank, the nearer version is much more ordinary: labels and feedback that outsiders or insiders can influence. Whether it has happened to us is an audit question, not a research one. I'd start by listing who can write to our fraud labels.</p></div></details>
+        <details class="reveal"><summary>“Is 250 documents really enough to poison any AI model?”</summary><div class="ans"><p>No, and that headline overreaches. In controlled tests on models from 600 million to 13 billion parameters, about 250 poisoned documents installed a narrow backdoor (producing gibberish after a trigger). It did not show harmful behaviours, larger models or fine-tuned systems. What it does show is that the count of poisoned examples matters more than their share, so "our dataset is huge" is not a defence by itself.</p></div></details>
+        <details class="reveal"><summary>“Can we make the model robust to adversarial inputs?”</summary><div class="ans"><p>Partly. Adversarial training and feature design raise the cost, but no general method gives a guarantee against a motivated attacker. For fraud, the stronger lever is the system: hide the decision boundary, rate-limit and flag probing, use signals that are expensive to fake, and layer controls. I'd measure success as the attacker's cost per successful evasion, not a robustness score.</p></div></details>
+        <details class="reveal"><summary>“We give partners a credit score through an API. What is the risk?”</summary><div class="ans"><p>Three. They can clone the model if scores are precise and queries are cheap. They can find the boundary and coach applicants to game it. And the score itself may reveal something about training data. Mitigations: return a band rather than a decimal, authenticate and quota each partner, watch for one-feature-at-a-time query patterns, put limits on use in the contract, and keep a log we can audit.</p></div></details>
+        <details class="reveal"><summary>“We fine-tuned a chatbot on call transcripts. Is that a leak risk?”</summary><div class="ans"><p>It can be. Models memorise rare, specific strings such as names and numbers, and extraction attacks recover some of them. Before release: remove or mask identifiers, deduplicate, test for memorisation with canary strings and prompts for known records, and decide whether the chatbot's users should be allowed to see anything from that data at all. The rules on using customer data this way are a question for legal and data-protection teams; I wouldn't assume they permit it.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Name the three attack types and say, for each, when it happens and what the attacker needs.</summary><div class="ans"><p>Poisoning: at training time; influence over training data, labels or a pretrained artefact. Evasion: at run time; the ability to submit inputs and see outcomes. Extraction (and inversion): at run time; query access, and the more informative the outputs, the easier. Inversion and membership inference target the training data rather than the function.</p></div></details>
+        <details class="reveal"><summary>2. A fraud model is trained on 1,000 fraud records and 99,000 legitimate ones. An attacker gets 100 fraud-like records labelled legitimate. Why is that a bigger share than "0.1% of the data" suggests?</summary><div class="ans"><p>It is 0.1% of all rows but 10% of the fraud labels. What the model learns about the fraud region depends on the positives, so the damage scales with that smaller base (Simulation 1). With 500 poisoned records, half of the fraud labels are corrupted.</p></div></details>
+        <details class="reveal"><summary>3. What did the 2025 poisoning study find about dataset size, and what does it not show?</summary><div class="ans"><p>For models of 600M to 13B parameters, roughly the same number of poisoned documents (about 250) installed the backdoor regardless of size, even though larger models trained on far more clean data. It tested one narrow backdoor, in pretraining, at modest scale. It does not show the same for larger models, more harmful behaviours or every training method.</p></div></details>
+        <details class="reveal"><summary>4. Why can a backdoored model pass your normal test set?</summary><div class="ans"><p>The test set does not contain the trigger. On ordinary inputs the model behaves normally; the hidden behaviour appears only when the trigger is present. Defence needs a trusted hold-out, trigger-oriented testing and provenance, not only average accuracy.</p></div></details>
+        <details class="reveal"><summary>5. In Simulation 3, why did blocking after a few flagged probes beat adding jitter?</summary><div class="ans"><p>Jitter blurs the line, so the attacker's estimate is noisy but still centred on the true limit. Blocking stops the search itself: every probe above the line is a flagged event, and the attacker runs out of safe attempts while still far from the limit. Treat probing as a signal and cut off the search.</p></div></details>
+        <details class="reveal"><summary>6. A logistic scoring API with 40 features returns exact probabilities. How many queries recover the model, and what changes if it returns only approve or decline?</summary><div class="ans"><p>41 queries: each exact probability gives its log-odds, a linear equation in 41 unknowns (40 weights and an intercept). With only a decision, the attacker finds boundary points by bisection: roughly 41 points times about a dozen queries each, around 500, still easy for a script. Returning less raises the cost but does not stop a determined attacker; rate limits and monitoring do the rest.</p></div></details>
+        <details class="reveal"><summary>7. Why is membership inference a concern even when the raw training data is well protected?</summary><div class="ans"><p>The model itself can leak: models tend to be more confident on records they trained on, so an attacker with query access can sometimes tell whether a person was in the training set, and memorising models can repeat records. Protecting the data alone is not enough; test the released model and reduce memorisation.</p></div></details>
+        <details class="reveal"><summary>8. You can pick one control for a partner-facing credit-scoring API. Which, and why?</summary><div class="ans"><p>Authentication with per-partner rate limits and query-pattern monitoring, combined with returning a coarse band rather than an exact score. It cuts extraction, boundary-finding and data leakage at once and uses controls the bank already knows how to run. It is not complete, so pair it with contractual terms and logs.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>B. Biggio, B. Nelson, P. Laskov. <a href="https://arxiv.org/abs/1206.6389">Poisoning Attacks against Support Vector Machines</a>. ICML, 2012.</li>
+        <li>C. Szegedy et al. <a href="https://arxiv.org/abs/1312.6199">Intriguing properties of neural networks</a>. 2013.</li>
+        <li>I. Goodfellow, J. Shlens, C. Szegedy. <a href="https://arxiv.org/abs/1412.6572">Explaining and Harnessing Adversarial Examples</a>. 2014.</li>
+        <li>D. Lowd, C. Meek. <a href="https://doi.org/10.1145/1081870.1081950">Adversarial Learning</a>. KDD, 2005.</li>
+        <li>F. Tramèr et al. <a href="https://arxiv.org/abs/1609.02943">Stealing Machine Learning Models via Prediction APIs</a>. USENIX Security, 2016.</li>
+        <li>R. Shokri, M. Stronati, C. Song, V. Shmatikov. <a href="https://arxiv.org/abs/1610.05820">Membership Inference Attacks against Machine Learning Models</a>. IEEE S&amp;P, 2017.</li>
+        <li>M. Fredrikson, S. Jha, T. Ristenpart. <a href="https://doi.org/10.1145/2810103.2813677">Model Inversion Attacks that Exploit Confidence Information</a>. CCS, 2015.</li>
+        <li>T. Gu, B. Dolan-Gavitt, S. Garg. <a href="https://arxiv.org/abs/1708.06733">BadNets: Identifying Vulnerabilities in the Machine Learning Model Supply Chain</a>. 2017.</li>
+        <li>A. Madry et al. <a href="https://arxiv.org/abs/1706.06083">Towards Deep Learning Models Resistant to Adversarial Attacks</a>. ICLR, 2018.</li>
+        <li>N. Carlini et al. <a href="https://arxiv.org/abs/2012.07805">Extracting Training Data from Large Language Models</a>. USENIX Security, 2021.</li>
+        <li>N. Carlini et al. <a href="https://arxiv.org/abs/2302.10149">Poisoning Web-Scale Training Datasets is Practical</a>. 2023.</li>
+        <li>E. Hubinger et al. <a href="https://arxiv.org/abs/2401.05566">Sleeper Agents: Training Deceptive LLMs that Persist Through Safety Training</a>. 2024.</li>
+        <li>N. Carlini et al. <a href="https://arxiv.org/abs/2403.06634">Stealing Part of a Production Language Model</a>. ICML, 2024.</li>
+        <li>A. Souly et al. <a href="https://arxiv.org/abs/2510.07192">Poisoning Attacks on LLMs Require a Near-constant Number of Poison Samples</a>. 2025. See also Anthropic's summary, <a href="https://www.anthropic.com/research/small-samples-poison">A small number of samples can poison LLMs of any size</a>.</li>
+        <li>Z. Liang et al. <a href="https://aclanthology.org/2025.acl-long.73">"Yes, My LoRD." Guiding Language Model Extraction with Locality Reinforced Distillation</a>. ACL, 2025.</li>
+        <li>NIST. <a href="https://csrc.nist.gov/pubs/ai/100/2/e2025/final">Adversarial Machine Learning: A Taxonomy and Terminology of Attacks and Mitigations</a> (AI 100-2). Check for the current edition.</li>
+        <li><a href="https://genai.owasp.org/llm-top-10/">OWASP Top 10 for LLM Applications</a> and <a href="https://atlas.mitre.org/">MITRE ATLAS</a>.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in Track G: fairness definitions and their trade-offs (G2)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const Q = x => 1 - L.normCdf(x);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  const aed = v => "AED " + L.fmtInt(Math.round(v));
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // ===== Simulation 1: label-flip poisoning =====
+  const MU = 2.5, N0 = 99000, N1 = 1000, TH = 1 / 9;
+  const S1 = { m: 0 };
+  const box1 = $("lf-chart");
+  function alertLine(m) {
+    const den = N1 - m * (1 + TH);
+    if (den <= 0.5) return null;
+    const Rt = TH * N0 / den;
+    return (Math.log(Rt) + MU * MU / 2) / MU;
+  }
+  function renderLF() {
+    const m = S1.m, s = alertLine(m), s0 = alertLine(0);
+    const W = Math.max(300, box1.clientWidth), H = 220, mg = { l: 14, r: 14, t: 16, b: 32 };
+    const svg = mk(box1, W, H, "Score distributions and the alert line");
+    const lo = -3.5, hi = 7;
+    const x = L.scale(lo, hi, mg.l, W - mg.r), y = L.scale(0, 0.45, H - mg.b, mg.t);
+    const dens = (v, mu, w) => w * L.normPdf(v - mu);
+    const ptsA = [], ptsB = [];
+    for (let v = lo; v <= hi + 1e-9; v += 0.1) { ptsA.push([x(v), y(dens(v, 0, 1))]); ptsB.push([x(v), y(dens(v, MU, 1))]); }
+    L.svg("path", { d: L.path(ptsA), class: "tl-true", style: "stroke:var(--neutral);stroke-width:2.4;fill:none" }, svg);
+    L.svg("path", { d: L.path(ptsB), class: "cv-bad" }, svg);
+    L.svg("line", { x1: x(s0), x2: x(s0), y1: mg.t, y2: H - mg.b, class: "cv-ideal", style: "stroke:var(--accent)" }, svg);
+    tx(svg, x(s0) - 4, mg.t + 10, "clean", { "text-anchor": "end", class: "lbl-acc" });
+    if (s !== null) {
+      const sc = Math.min(s, hi);
+      L.svg("line", { x1: x(sc), x2: x(sc), y1: mg.t, y2: H - mg.b, class: "cv-rule" }, svg);
+      tx(svg, x(sc) + 4, mg.t + 10, s > hi ? "off the chart" : "poisoned", { class: "lbl-warn" });
+    } else tx(svg, W - mg.r, mg.t + 10, "model never alerts", { "text-anchor": "end", class: "lbl-warn" });
+    [-2, 0, 2, 4, 6].forEach(v => tx(svg, x(v), H - mg.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (mg.l + W - mg.r) / 2, H - 4, "Model score (standard deviations)", { "text-anchor": "middle" });
+    const rec = s === null ? 0 : Q(s - MU), fp = s === null ? 0 : N0 * Q(s);
+    const missed = N1 * (1 - rec), base = N1 * (1 - Q(s0 - MU));
+    $("st1-share").textContent = pct(m / 100000, 2);
+    $("st1-fshare").textContent = pct(m / N1, 0);
+    $("st1-rec").textContent = pct(rec, 0); $("st1-rec-s").textContent = "clean: " + pct(Q(s0 - MU), 0);
+    cls($("st1-rec-b"), rec < 0.45 ? "bad" : rec < 0.58 ? "warn" : "ok");
+    $("st1-loss").textContent = aed(missed * 400); $("st1-loss-s").textContent = "clean: " + aed(base * 400);
+    cls($("st1-loss-b"), missed > base * 1.3 ? "bad" : "ok");
+    $("s1-verdict").innerHTML = m === 0 ? "Clean data: the alert line sits at score <b>" + s0.toFixed(2) + "</b> and the model catches <b>" + pct(rec, 0) + "</b> of fraud with about <b>" + L.fmtInt(Math.round(N0 * Q(s0))) + "</b> false alerts."
+      : "With <b>" + m + "</b> poisoned records (<b>" + pct(m / 100000, 2) + "</b> of rows, <b>" + pct(m / N1, 0) + "</b> of fraud labels) the alert line " + (s === null ? "disappears: the model learns that fraud-like scores are legitimate." : "moves to <b>" + s.toFixed(2) + "</b>, and recall falls to <b>" + pct(rec, 0) + "</b>.") + " False alerts also fall to " + L.fmtInt(Math.round(fp)) + ", so the dashboard looks quieter. That is how this attack hides.";
+  }
+  L.bind("s-m", v => v + " records", v => { S1.m = v; renderLF(); });
+
+  // ===== Simulation 2: backdoor vs size =====
+  const S2 = { z: 0, d: 250 };
+  const box2 = $("bd-chart");
+  const succ = (d, scale) => 1 / (1 + Math.exp(-(d / scale - 200) / 35));
+  const sizeFmt = z => { const k = Math.pow(10, z); return (k < 10 ? k.toFixed(1) : Math.round(k)) + "×"; };
+  function renderBD() {
+    const k = Math.pow(10, S2.z), d = S2.d;
+    const W = Math.max(300, box2.clientWidth), H = 240, mg = { l: 40, r: 12, t: 14, b: 40 };
+    const svg = mk(box2, W, H, "Backdoor success against poisoned documents");
+    const xmax = 600, x = L.scale(0, xmax, mg.l, W - mg.r), y = L.scale(0, 1, H - mg.b, mg.t);
+    [0, 0.5, 1].forEach(v => { L.svg("line", { x1: mg.l, x2: W - mg.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, mg.l - 6, y(v) + 4, pct(v, 0), { "text-anchor": "end" }); });
+    [0, 100, 200, 300, 400, 500, 600].forEach(v => tx(svg, x(v), H - mg.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (mg.l + W - mg.r) / 2, H - 4, "Poisoned documents", { "text-anchor": "middle" });
+    const A = [], B = [];
+    for (let v = 0; v <= xmax; v += 5) { A.push([x(v), y(succ(v, 1))]); B.push([x(v), y(succ(v, k))]); }
+    L.svg("path", { d: L.path(B), class: "cv-bad" }, svg);
+    L.svg("path", { d: L.path(A), class: "cv-curve" }, svg);
+    L.svg("line", { x1: x(d), x2: x(d), y1: mg.t, y2: H - mg.b, class: "cv-rule" }, svg);
+    L.svg("circle", { cx: x(d), cy: y(succ(d, 1)), r: 5.5, class: "cv-now" }, svg);
+    const tokens = 12e9 * k;
+    const share = d / (2.4e6 * k);
+    $("st2-share").textContent = (100 * share).toFixed(5) + "%";
+    $("st2-share-s").textContent = "illustrative: " + (k < 10 ? k.toFixed(1) : Math.round(k)) + "× the smallest set";
+    const a = succ(d, 1), b = succ(d, k);
+    $("st2-a").textContent = pct(a, 0); $("st2-b").textContent = pct(b, 0);
+    cls($("st2-a-b"), a > 0.5 ? "bad" : "ok"); cls($("st2-b-b"), b > 0.5 ? "bad" : "ok");
+    $("s2-verdict").innerHTML = "At <b>" + sizeFmt(S2.z) + "</b> the data and <b>" + d + "</b> poisoned documents, the poisoned share is only <b>" + (100 * share).toFixed(5) + "%</b>. The dilution view predicts <b>" + pct(b, 0) + "</b> success; the reported pattern predicts <b>" + pct(a, 0) + "</b>. If your defence relies on the share being tiny, it relies on the wrong number.";
+  }
+  L.bind("s-size", sizeFmt, v => { S2.z = v; renderBD(); });
+  L.bind("s-docs", v => v + " documents", v => { S2.d = v; renderBD(); });
+
+  // ===== Simulation 3: probing =====
+  const T = 18400, TOP = 50000, NA = 400, QMAX = 20;
+  let seed = 12345;
+  const rnd = () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const gauss = () => Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd());
+  const Z = [], ZF = [];
+  for (let i = 0; i < NA; i++) { const r = [], f = []; for (let j = 0; j < QMAX; j++) r.push(gauss()); Z.push(r); ZF.push(gauss()); }
+  const S3 = { q: 14, j: 0, b: 11 };
+  const box3 = $("ev-chart");
+  function renderEV() {
+    const { q, j, b } = S3, blk = b >= 11 ? Infinity : b;
+    const finals = [];
+    let cash = 0, flags = 0, caught = 0;
+    for (let i = 0; i < NA; i++) {
+      let lo = 0, hi = TOP, f = 0;
+      for (let t = 0; t < q; t++) {
+        const mid = (lo + hi) / 2;
+        const flagged = mid > T + j * Z[i][t];
+        if (flagged) { hi = mid; f++; } else lo = mid;
+        if (f >= blk) break;
+      }
+      finals.push(lo); flags += f;
+      const isCaught = lo > T + j * ZF[i];
+      if (isCaught) caught++; else cash += lo;
+    }
+    const W = Math.max(300, box3.clientWidth), H = 220, mg = { l: 40, r: 12, t: 16, b: 40 };
+    const svg = mk(box3, W, H, "Where attackers end up relative to the limit");
+    const nb = 25, bins = new Array(nb).fill(0), xmax = 30000;
+    finals.forEach(v => { bins[Math.min(nb - 1, Math.floor(v / xmax * nb))]++; });
+    const ymax = Math.max(40, ...bins), x = L.scale(0, xmax, mg.l, W - mg.r), y = L.scale(0, ymax, H - mg.b, mg.t);
+    L.svg("line", { x1: mg.l, x2: W - mg.r, y1: y(0), y2: y(0), class: "grid" }, svg);
+    const bw = (x(xmax) - x(0)) / nb;
+    bins.forEach((c, i) => { if (c) L.svg("rect", { x: x(i * xmax / nb) + 1, y: y(c), width: bw - 2, height: y(0) - y(c), class: "ob" }, svg); });
+    L.svg("line", { x1: x(T), x2: x(T), y1: mg.t, y2: H - mg.b, class: "cv-rule" }, svg);
+    tx(svg, x(T) + 5, mg.t + 10, "live limit AED 18,400", { class: "lbl-warn" });
+    [0, 10000, 20000, 30000].forEach(v => tx(svg, x(v), H - mg.b + 16, v === 0 ? "0" : (v / 1000) + "k", { "text-anchor": "middle" }));
+    tx(svg, (mg.l + W - mg.r) / 2, H - 4, "Largest payment the attacker believes is safe (AED)", { "text-anchor": "middle" });
+    tx(svg, mg.l - 6, mg.t + 6, String(ymax), { "text-anchor": "end" });
+    const avg = cash / NA;
+    $("st3-cash").textContent = aed(avg); $("st3-cash-s").textContent = "limit is " + aed(T);
+    cls($("st3-cash-b"), avg > 0.85 * T ? "bad" : avg > 0.5 * T ? "warn" : "ok");
+    $("st3-flag").textContent = (flags / NA).toFixed(1);
+    $("st3-caught").textContent = pct(caught / NA, 0);
+    $("s3-verdict").innerHTML = "With <b>" + q + "</b> probes, jitter of " + aed(j) + (blk === Infinity ? " and no block" : " and a block after " + blk + " flagged probes") + ", the attacker cashes out about <b>" + aed(avg) + "</b> on average, <b>" + pct(avg / T, 0) + "</b> of the limit, and sets off <b>" + (flags / NA).toFixed(1) + "</b> flagged probes on the way." + (j > 0 && blk === Infinity ? " Jitter alone mostly blurs the answer: some land under the line, some over." : "");
+  }
+  L.bind("s-q", v => v + " probes", v => { S3.q = v; renderEV(); });
+  L.bind("s-j", v => aed(v), v => { S3.j = v; renderEV(); });
+  L.bind("s-b", v => v >= 11 ? "never" : v + " flags", v => { S3.b = v; renderEV(); });
+
+  // ===== Simulation 4: extraction cost =====
+  const S4 = { d: 30, b: 12 };
+  function renderEX() {
+    const d = S4.d, bits = S4.b, full = d + 1, lab = (d + 1) * bits, secs = lab / 5;
+    const tFmt = s => s < 120 ? Math.round(s) + " seconds" : s < 7200 ? Math.round(s / 60) + " minutes" : (s / 3600).toFixed(1) + " hours";
+    $("st4-a").textContent = L.fmtInt(full); $("st4-b").textContent = L.fmtInt(lab); $("st4-t").textContent = tFmt(secs);
+    const rows = [
+      ["Full probability, six decimals", L.fmtInt(full), "Exact weights for a logistic model"],
+      ["Score rounded to 1 decimal", "about " + L.fmtInt(full * 3), "Close copy; rounding noise is averaged out with extra queries (rough guess)"],
+      ["Coarse band (for example five bands)", "about " + L.fmtInt(lab / 2), "Boundary points still findable at band edges"],
+      ["Accept or decline only", L.fmtInt(lab), "Bisection for d + 1 boundary points"],
+      ["Decision only, rate-limited to 100 per day", L.fmtInt(lab) + " queries = " + Math.ceil(lab / 100) + " days per account", "Attacker must use many accounts, which is detectable"]
+    ];
+    $("ex-table").innerHTML = '<table class="data"><thead><tr><th>What the API returns</th><th>Queries to copy a linear model</th><th>Note</th></tr></thead><tbody>' + rows.map(r => `<tr><td><b>${r[0]}</b></td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join("") + "</tbody></table>";
+    $("s4-verdict").innerHTML = "A model with <b>" + d + "</b> features falls to <b>" + L.fmtInt(full) + "</b> queries if it returns exact scores, and to roughly <b>" + L.fmtInt(lab) + "</b> if it returns only a decision. The reduction is about <b>" + Math.round(lab / full) + "×</b>, which a rate limit makes costly and a script makes cheap.";
+  }
+  L.bind("s-d", v => v + " features", v => { S4.d = v; renderEX(); });
+  L.bind("s-bits", v => v + " bits", v => { S4.b = v; renderEX(); });
+
+  function renderAll() { renderLF(); renderBD(); renderEV(); renderEX(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
