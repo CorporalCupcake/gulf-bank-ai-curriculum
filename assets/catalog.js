@@ -88,6 +88,16 @@ window.CATALOG = [
   {file: "g2-fairness-definitions-and-their-trade.html", module: "G2", title: "Fairness in Lending and Fraud Models: Competing Definitions and Where Bias Comes From", codes: ["G2.1","G2.2"], label: "G2.1 · G2.2", tier: "d", minutes: 45, star: true},
   {file: "g2-privacy-basics-minimisation-consent-anonymisation.html", module: "G2", title: "Privacy, Documentation and Oversight: Removing Names Is Not Anonymisation", codes: ["G2.3","G2.4","G2.5"], label: "G2.3 – G2.5", tier: "d", minutes: 40},
   {file: "g3-what-counts-as-a-model.html", module: "G3", title: "What Counts as a Model: The Inventory and the Governed Lifecycle", codes: ["G3.1","G3.2"], label: "G3.1 · G3.2", tier: "d", minutes: 40, star: true},
+  {file: "g3-independent-validation.html", module: "G3", title: "Independent Validation: How a Model Earns Its Approval, and the Documents That Get It There", codes: ["G3.3","G3.4"], label: "G3.3 · G3.4", tier: "n", minutes: 38},
+  {file: "g3-ongoing-monitoring-and-periodic-review.html", module: "G3", title: "Keeping Approval: Ongoing Monitoring, Periodic Review and Vendor Models", codes: ["G3.5","G3.6"], label: "G3.5 · G3.6", tier: "n", minutes: 40},
+  {file: "c1-turning-a-vague-request-into.html", module: "C1", title: "From Vague Request to Decision Problem", codes: ["C1.1","C1.2"], label: "C1.1 · C1.2", tier: "d", minutes: 40, star: true},
+  {file: "c1-baselines-what-happens-without-the.html", module: "C1", title: "Baselines, and Knowing When Not to Use ML", codes: ["C1.3","C1.4"], label: "C1.3 · C1.4", tier: "d", minutes: 35},
+  {file: "c2-answer-first-the-executive-summary.html", module: "C2", title: "Answer First, and Say How Sure You Are", codes: ["C2.1","C2.2"], label: "C2.1 · C2.2", tier: "d", minutes: 35, star: true},
+  {file: "c2-writing-for-validators-and-risk.html", module: "C2", title: "Writing for Validators, Charts That Carry One Message, and Facing Hard Questions", codes: ["C2.3","C2.4","C2.5"], label: "C2.3 – C2.5", tier: "n", minutes: 40},
+  {file: "c3-your-first-90-days.html", module: "C3", title: "Your First 90 Days: Credibility, Wins and the People Who Can Say Yes", codes: ["C3.1","C3.2"], label: "C3.1 · C3.2", tier: "d", minutes: 35, star: true},
+  {file: "c3-scoping-and-running-an-ai.html", module: "C3", title: "From Idea to Production: Scoping, Running and Landing an AI Project in a Gulf Bank", codes: ["C3.3","C3.4"], label: "C3.3 · C3.4", tier: "n", minutes: 40},
+  {file: "c3-managing-risk-and-expectations-in.html", module: "C3", title: "Managing Risk and Expectations, and Leading People", codes: ["C3.5","C3.6"], label: "C3.5 · C3.6", tier: "n", minutes: 40},
+  {file: "r1-mixture-of-experts-at-scale.html", module: "R1", title: "Mixture-of-Experts at Scale, and the Recurrent Challengers", codes: ["R1.1","R1.2"], label: "R1.1 · R1.2", tier: "n", minutes: 40, star: true, fast: true},
   {file: "a1-know-your-agent.html", module: "A1", title: "Know Your Agent: How AI Agents Get Permission to Pay", codes: ["A1.1","A1.2","A1.3","A1.4","A1.5"], label: "A1.1 – A1.5", tier: "n", star: true, fast: true, minutes: 40}
 ];
 

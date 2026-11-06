@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mixture-of-Experts at Scale, and the Recurrent Challengers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .bar-all { fill: var(--neutral); fill-opacity: .55; }
+  .bar-act { fill: var(--accent); }
+  .bar-hot { fill: var(--warn); fill-opacity: .85; }
+  .bar-cool { fill: var(--neutral); }
+  .bar-sel { fill: var(--accent); }
+  .ln-moe { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .ln-dense { stroke: var(--muted); stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+  .ln-ridge { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .ln-cap { stroke: var(--bad); stroke-width: 1.4; stroke-dasharray: 4 3; }
+  .ln-mean { stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 2 3; }
+  .dot-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track R · Research frontier: AI, ML and data science</span>
+    <span>Module R1 · Architectures beyond the standard transformer</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>R1.1 · R1.2</span>
+        <span class="pill n">90 days</span>
+        <span>★ Priority</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Mixture-of-Experts at Scale, and the Recurrent Challengers</h1>
+      <p class="dek">Why a model with 671 billion parameters can cost about as much per token as one with 37 billion, what the router actually does, why serving such models is still hard, and how state-space and hybrid models attack the other big cost, long inputs.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A mixture-of-experts model stores many specialist sub-networks but sends each token through only a few of them, so you pay compute for the active slice and memory for the whole; state-space hybrids do something similar for context length, replacing most of the attention memory with a fixed-size state.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Picture a large bank's operations floor with 256 specialists: sanctions, trade finance, Islamic structures, card disputes, Arabic complaints, and so on. When a case arrives, a triage clerk reads it and hands it to the eight people best placed to deal with it. The other 248 do not touch it. The floor <em>knows</em> a great deal, but any one case uses a small part of that knowledge.</p>
+        <p>That is a mixture-of-experts (MoE) language model. In a standard transformer (F5.5), every token passes through every parameter. In an MoE, the big feed-forward block in each layer is replaced by many smaller feed-forward "experts" plus a tiny <strong>router</strong> that picks a few experts for each token. The model has a large <em>total</em> parameter count, which holds knowledge, and a much smaller <em>active</em> count per token, which sets the arithmetic you pay for.</p>
+        <p>Concretely, DeepSeek-V3 has 671 billion parameters in total and 37 billion active for each token (DeepSeek-AI, 2024). Per token it does roughly the arithmetic of a 37B dense model, with the capacity of something far larger. That is why DeepSeek-style models are cheap to <em>train</em> and cheap per token to <em>run at scale</em>.</p>
+        <p>There is a catch, and it is the most useful thing to understand. All 671 billion parameters must still sit in fast memory, because the next token might need any expert. MoE trades <strong>compute for memory</strong>. The second half of this lesson is about a different trade: state-space models and hybrids such as Mamba, Jamba and Falcon-H1 trade the ever-growing attention memory for a fixed-size state, which matters when inputs are very long.</p>
+      </div>
+
+      <figure class="figure" id="fig-shape">
+        <div class="fig-head"><span class="fig-title">Total versus active: fine-grained experts</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> press the three presets in turn. Total size stays at 600B, but as the experts get smaller and more numerous the active share collapses, while the number of distinct expert combinations a token can choose from explodes. Then move the sliders yourself.</p>
+        <div class="btns" role="group" aria-label="Presets">
+          <button class="btn" type="button" id="p-mix">Coarse: 8 experts, top-2</button>
+          <button class="btn" type="button" id="p-ds16">Fine: 64 experts, top-6, 2 shared</button>
+          <button class="btn" type="button" id="p-ds3">Finer: 256 experts, top-8, 1 shared</button>
+        </div>
+        <div class="chart-wrap" id="shape-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral);opacity:.55"></i>Stored (must sit in memory)</span>
+          <span><i class="sq" style="background:var(--accent)"></i>Used for one token</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-e">Routed experts per layer <output for="s-e"></output></label><input type="range" id="s-e" min="2" max="8" step="1" value="3"></div>
+          <div class="ctl"><label for="s-k">Experts chosen per token (top-k) <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="16" step="1" value="2"></div>
+          <div class="ctl"><label for="s-sh">Shared experts (always on) <output for="s-sh"></output></label><input type="range" id="s-sh" min="0" max="2" step="1" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Size of one expert</div><div class="v" id="st1-f"></div><div class="s">per layer, summed over layers</div></div>
+          <div class="stat"><div class="k">Active parameters per token</div><div class="v" id="st1-act"></div><div class="s" id="st1-act-s"></div></div>
+          <div class="stat"><div class="k">Compute per token vs a dense 600B</div><div class="v" id="st1-fl"></div><div class="s">forward-pass arithmetic</div></div>
+          <div class="stat"><div class="k">Expert combinations per layer</div><div class="v" id="st1-comb"></div><div class="s">ways to pick the routed experts</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: a toy parameter budget, not a real model. Total parameters are fixed at 600B, of which 14B (attention, embeddings, norms) is non-expert and the rest is split equally among routed and shared experts, summed over all layers. Active = 14B + (top-k + shared) experts. Combinations are the exact binomial coefficient C(E, k). Real models also have dense early layers and other details.</p>
+      </figure>
+
+      <div class="callout key"><span class="k">Hold onto this</span>An MoE changes <em>which</em> parameters a token uses, not the idea of a transformer. Compute follows the <strong>active</strong> parameters; memory follows the <strong>total</strong>. Every claim about MoE being cheap or expensive depends on which of the two you are paying for.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-moe">R1.1 · The sparse layer, the router and fine-grained experts</h3>
+      <div class="prose">
+        <p>Inside a transformer block (F5.5, F5.1), attention mixes information across positions and a feed-forward network (FFN) then processes each token on its own. The FFN holds most of the parameters. An MoE layer swaps that single FFN for <em>E</em> smaller FFNs, the experts, and a router: a single linear layer that scores every expert for the current token.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>y</mi><mo>=</mo><munder><mo>∑</mo><mrow><mi>i</mi><mo>∈</mo><mtext>TopK</mtext></mrow></munder><msub><mi>g</mi><mi>i</mi></msub><mo>·</mo><msub><mtext>Expert</mtext><mi>i</mi></msub><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mspace width="0.4em"></mspace><mtext>with</mtext><mspace width="0.4em"></mspace><mi>s</mi><mo>=</mo><mi>softmax</mi><mo stretchy="false">(</mo><msub><mi>W</mi><mi>r</mi></msub><mi>x</mi><mo stretchy="false">)</mo></math>
+        <p class="where"><i>x</i> is the token's hidden vector, <i>W<sub>r</sub></i> the router's weights, <i>s</i> the router's scores over the <i>E</i> experts, TopK the <i>k</i> experts with the highest scores, and <i>g<sub>i</sub></i> their (often renormalised) scores used as mixing weights. The other <i>E</i> − <i>k</i> experts are never run for this token. The design goes back to Shazeer et al. (2017) and was made practical for transformers by GShard and Switch Transformer.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Three design choices separate the models you will hear about.</p>
+        <ul>
+          <li><strong>How many experts, how big.</strong> Mixtral (2024) used 8 large experts per layer and picked 2. DeepSeekMoE argued for <em>fine-grained</em> experts: split each big expert into several small ones and activate proportionally more of them, keeping compute the same. The gain is flexibility. With 8 experts and top-2 a token can pick one of 28 combinations; with 256 experts and top-8 it can pick one of roughly 4 × 10<sup>14</sup>. Simulation 1 shows this directly. More combinations let experts specialise more sharply, because a token's needs can be met by a precise mix instead of two blunt tools.</li>
+          <li><strong>Shared experts.</strong> DeepSeek-style models add one or two experts that <em>every</em> token uses. They soak up the general knowledge (grammar, common facts) that all tokens need, so the routed experts are freed to specialise instead of each learning the same basics.</li>
+          <li><strong>What is routed.</strong> Usually each token chooses its own experts ("token choice"). The alternative, "expert choice", lets each expert pick its tokens, which balances load by construction but is awkward for generation where tokens arrive one at a time (Zhou et al., 2022).</li>
+        </ul>
+        <p>A practical point on naming. "Qwen-30B-A3B" means 30B total, 3B active. "A" stands for active. Read model names that way and you can estimate cost at a glance.</p>
+      </div>
+
+      <h3 class="sub" id="m-balance">Load balancing: the part that makes or breaks training</h3>
+      <div class="prose">
+        <p>Left alone, routers collapse. Early in training a few experts get slightly better, so the router sends them more tokens, so they get better still. The rest starve. You end up with a large model where only a handful of experts work, which defeats the purpose. There is also a hardware reason to care: experts live on different GPUs, and each step finishes only when the busiest GPU finishes. If one expert gets 3× the average load, the whole cluster waits for it.</p>
+        <p>The classic fix is an <strong>auxiliary loss</strong> added to the training objective. In Switch Transformer it is </p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>L</mi><mtext>bal</mtext></msub><mo>=</mo><mi>α</mi><mo>·</mo><mi>E</mi><mo>·</mo><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>E</mi></munderover><msub><mi>f</mi><mi>i</mi></msub><mo>·</mo><msub><mi>P</mi><mi>i</mi></msub></math>
+        <p class="where"><i>f<sub>i</sub></i> is the fraction of tokens actually sent to expert <i>i</i>, <i>P<sub>i</sub></i> the average router probability for expert <i>i</i>, and α a small coefficient. The sum is smallest when all experts get equal shares. The cost is that this loss pulls on the router's gradients and competes with the language-modelling objective; too large and it hurts quality, too small and routing collapses.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>DeepSeek-V3 used a different approach, <strong>auxiliary-loss-free balancing</strong> (Wang et al., 2024). Each expert gets a bias that is added to its score <em>only when choosing</em> the top-k. After each step, the bias of an overloaded expert is nudged down and that of an underloaded expert is nudged up. The mixing weights still use the original, unbiased scores, so no extra gradient interferes with learning. The V3 report reports a speed for this adjustment of 0.001 and says it keeps a very small sequence-level balance loss as a safeguard, so it is not entirely loss-free. The simulation below runs the idea in miniature.</p>
+      </div>
+
+      <figure class="figure" id="fig-route">
+        <div class="fig-head"><span class="fig-title">Routing collapse and the bias fix</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> set popularity skew to about 1.5 with zero balancing steps: two or three experts take most tokens, some sit idle, and tokens overflowing the capacity line are dropped. Now raise the balancing steps and watch the bars level out. Then raise skew again and see how many steps it takes to recover.</p>
+        <div class="chart-wrap" id="route-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--warn)"></i>Over capacity</span>
+          <span><i class="sq" style="background:var(--neutral)"></i>Within capacity</span>
+          <span><i style="background:var(--ink)"></i>Perfectly even load</span>
+          <span><i style="background:var(--bad)"></i>Capacity limit (1.25 × even)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-skew">How unequal the experts' natural appeal is <output for="s-skew"></output></label><input type="range" id="s-skew" min="0" max="2.5" step="0.1" value="1.5"></div>
+          <div class="ctl"><label for="s-steps">Bias-balancing steps applied <output for="s-steps"></output></label><input type="range" id="s-steps" min="0" max="150" step="1" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st2-max-b"><div class="k">Busiest expert vs even load</div><div class="v" id="st2-max"></div><div class="s">the cluster waits for this one</div></div>
+          <div class="stat" id="st2-idle-b"><div class="k">Nearly idle experts</div><div class="v" id="st2-idle"></div><div class="s">under a quarter of even load</div></div>
+          <div class="stat" id="st2-drop-b"><div class="k">Token-expert slots dropped</div><div class="v" id="st2-drop"></div><div class="s">overflow past capacity</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: 2,000 tokens, 8 experts, top-2. Each expert's score for a token is a fixed appeal (scaled by the skew slider) plus random noise with standard deviation 1, drawn once from a seeded generator. Each balancing step lowers the bias of experts above the average load by 0.05 and raises it for those below, which is the sign-based update in spirit only; real training changes experts and router together. Capacity is 1.25 times an even share per expert.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two further practical details. First, <strong>capacity and dropping</strong>: older systems gave each expert a fixed buffer and dropped overflow tokens, which quietly hurts quality; DeepSeek-V3 reports no token dropping in training or inference thanks to its balancing. Second, <strong>router stability</strong>: routers can produce huge logits and unstable training, which is why techniques such as a z-loss on router logits are used in some models.</p>
+      </div>
+
+      <h3 class="sub" id="m-serve">Why the compute saving does not come free: memory, batches and serving</h3>
+      <div class="prose">
+        <p>Decoding a token is mostly <em>reading weights from memory</em>, not multiplying. A GPU can do hundreds of arithmetic operations in the time it takes to fetch one byte. The ratio matters: the <strong>arithmetic intensity</strong> of a step is its floating-point operations divided by the bytes it reads. If that is below the hardware's ridge point (a few hundred operations per byte on a modern accelerator), the step is <strong>memory-bound</strong> and extra compute is free. If above, it is compute-bound.</p>
+        <p>For a dense model, a batch of <em>b</em> sequences reads all weights once and does about 2 operations per parameter per sequence, so intensity is about 2<em>b</em>. It crosses the ridge near a batch of 150. For an MoE, batching has a twist. Each token picks its own experts, so a batch of 64 tokens touches the <em>union</em> of their choices. If routing were uniform, the expected share of experts touched by at least one of <em>b</em> tokens is</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mn>1</mn><mo>−</mo><msup><mrow><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mfrac><mi>k</mi><mi>E</mi></mfrac><mo stretchy="false">)</mo></mrow><mi>b</mi></msup></math>
+        <p class="where">With <i>E</i> = 256 and <i>k</i> = 8, a single token touches 8 experts (3%), 16 tokens touch about 40% of them and 64 tokens touch 87%. So at modest batch sizes an MoE reads nearly all its weights while doing only 37B-worth of arithmetic per token. Its intensity stays low and the saving in compute does not turn into speed. Only at very large batches, thousands of tokens across many users, does it become compute-bound and show its advantage.</p>
+      </div>
+
+      <figure class="figure" id="fig-serve">
+        <div class="fig-head"><span class="fig-title">When does the cheap-per-token model become cheap in practice?</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start at batch 1: the MoE reads only about 37 GB, far less than a dense model of the same total size would. Raise the batch to about 64: it now reads almost everything. Keep going until the green line crosses the dashed ridge. A dense model crosses at about 150 sequences; the MoE needs about 2,750, roughly eighteen times as many.</p>
+        <div class="chart-wrap" id="serve-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>MoE (671B total, 37B active)</span>
+          <span><i style="background:var(--muted)"></i>Any dense model</span>
+          <span><i style="background:var(--warn)"></i>Accelerator ridge point (300 ops per byte)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-b">Tokens decoded together (batch) <output for="s-b"></output></label><input type="range" id="s-b" min="0" max="4" step="0.05" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Experts touched per layer</div><div class="v" id="st3-touch"></div><div class="s">of 256 routed, plus 1 shared</div></div>
+          <div class="stat"><div class="k">Weights read per step</div><div class="v" id="st3-gb"></div><div class="s" id="st3-gb-s"></div></div>
+          <div class="stat" id="st3-int-b"><div class="k">Arithmetic intensity</div><div class="v" id="st3-int"></div><div class="s" id="st3-int-s"></div></div>
+          <div class="stat"><div class="k">Batch where it becomes compute-bound</div><div class="v" id="st3-cross"></div><div class="s">dense: about 150</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: a DeepSeek-V3-shaped budget (671B total, 37B active, 256 routed experts, top-8, 1 shared expert). Solving 14B + 257 F = 671B gives F of about 2.6B, and 14B + 9 F matches the 37B active figure. Weights at 8 bits (1 byte). Routing is assumed uniform and independent across tokens, so touched experts are an upper bound; real routing is correlated and touches somewhat fewer. The 300 ops per byte ridge is a round illustrative figure for a current GPU at 8-bit precision, not a specific product. Intensity ignores attention and the KV cache.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What this means in practice:</p>
+        <ul>
+          <li><strong>Training is where MoE shines.</strong> Training uses huge batches, so the compute saving is real. DeepSeek reported pre-training V3 on 14.8 trillion tokens for about 2.79 million H800 GPU-hours, far less than a dense model of comparable quality would be expected to need.</li>
+          <li><strong>Serving needs scale.</strong> To use all the experts efficiently you spread them across many GPUs (expert parallelism) and batch many users together. A big provider can do this; a single bank hosting one model for a few hundred staff will often see the memory cost without the throughput benefit.</li>
+          <li><strong>Small active, big footprint.</strong> A 120B-total MoE with 5B active can run well on one large GPU with its weights quantized (R12.1), and decodes quickly at batch 1 because it reads few weights. But its quality tracks something between 5B and 120B, not either number.</li>
+          <li><strong>Fine-tuning has quirks.</strong> Adapters on the attention layers are easy. Training the experts themselves risks disturbing routing.</li>
+        </ul>
+        <p>For why the 37B figure translates to training cost, see scaling laws in <a href="r2-scaling-laws-then-and-now.html">R2.1</a> (MoE changes the compute-optimal curve), and for squeezing the memory side see <a href="r12-very-low-bit-quantization-gptq.html">R12.1</a>.</p>
+      </div>
+
+      <h3 class="sub" id="m-ssm">R1.2 · State-space models and hybrids, in brief</h3>
+      <div class="prose">
+        <p>MoE attacks the cost of <em>parameters</em>. A second cost grows with <em>input length</em>. In attention, every new token compares itself with all previous tokens and the model must keep their keys and values, the KV cache. For a toy 32-layer model that is about 128 KiB per token, so a 128,000-token document is 16 GiB for one user. Long contracts, whole credit files and months of call transcripts make this the binding constraint.</p>
+        <p><strong>State-space models</strong> (SSMs) take another route, close to the recurrent networks of F5.4. They read the sequence one token at a time and update a <em>fixed-size</em> state, like a running summary that has room for only so much. Memory does not grow with length, and decoding a token costs the same at position 100 as at position 1,000,000. Early SSMs were weak at precise recall. <strong>Mamba</strong> (Gu and Dao, 2023) made the state update <em>selective</em>: the decision of what to write into the state and what to forget depends on the current token, so the model can ignore filler and hold on to a sanction-list name. Mamba-2 later showed a mathematical link between SSMs and a form of attention, which allowed faster, matrix-multiply-friendly implementations.</p>
+        <p>The weakness is the state's limited size. Exact retrieval ("what was the second clause's penalty rate?") and in-context copying are things attention does naturally, because it can look straight at any earlier token, and a compressed state does less well. Pure SSMs trail transformers on these tasks at equal size. So the practical answer has been <strong>hybrids</strong>: mostly SSM layers with a few attention layers for precise lookup.</p>
+        <ul>
+          <li><strong>Jamba</strong> (AI21, 2024) interleaves Mamba and attention layers at a ratio of roughly one attention layer per seven or eight, and uses MoE on top, combining both ideas in one model.</li>
+          <li><strong>Nemotron-H</strong> (NVIDIA, 2025) replaces most attention layers with Mamba-2 and reports up to about 3× faster inference than comparable transformers.</li>
+          <li><strong>Falcon-H1</strong> (TII, Abu Dhabi, 2025) is a <em>parallel</em> hybrid: attention and SSM run side by side within each block, and their outputs are combined. It ships from 0.5B to 34B parameters with up to 256K context and 18 languages, openly licensed. It is the one to know in the UAE.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-ssm">
+        <div class="fig-head"><span class="fig-title">Memory per user as the document grows</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> set the context to about 128,000 tokens (a long contract bundle) and compare the five designs. Full attention needs 16 GiB per user; a one-in-eight hybrid needs 2 GiB. Then push to a million tokens: only the hybrids stay manageable. Note the floor: even with no attention at all, the state is never zero.</p>
+        <div class="chart-wrap" id="ssm-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-ctx">Context length <output for="s-ctx"></output></label><input type="range" id="s-ctx" min="3" max="6.3" step="0.05" value="5.1"></div>
+          <div class="ctl"><label for="s-att">Share of layers that use attention <output for="s-att"></output></label><input type="range" id="s-att" min="0" max="4" step="1" value="1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Attention KV cache</div><div class="v" id="st4-kv"></div><div class="s">grows with length</div></div>
+          <div class="stat"><div class="k">SSM state</div><div class="v" id="st4-st"></div><div class="s">fixed, whatever the length</div></div>
+          <div class="stat" id="st4-tot-b"><div class="k">Memory per user</div><div class="v" id="st4-tot"></div><div class="s" id="st4-tot-s"></div></div>
+          <div class="stat"><div class="k">Users per 80 GB of cache</div><div class="v" id="st4-users"></div><div class="s">ignoring weights</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: a toy 32-layer model. Each attention layer stores keys and values for 8 heads of width 128 in 16-bit numbers, which is 4,096 bytes per token per layer. Each SSM layer keeps a state of 8,192 channels by 16 dimensions in 16-bit, 256 KiB per layer. Real models vary a lot, and quantized caches shrink both. Exact arithmetic on these assumptions; it says nothing about quality.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Memory is only half the story. Hybrids are also faster at long lengths, since attention's cost per token grows with length and an SSM's does not. But attention remains better at exact recall, so hybrid designers tune the ratio, and evidence on where the optimum lies is still moving.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Architecture choices set the cost, speed and deployment options of every language-model project at the bank. These are the links.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F5.5 · Attention</span><span class="t"><a href="f5-attention.html">What MoE and SSMs modify</a></span><p>MoE replaces the feed-forward block; SSMs replace most attention layers. Know the original to reason about the change, especially the KV cache.</p></div>
+        <div class="link-card"><span class="code">F5.4 · Recurrent sequence models</span><span class="t"><a href="f5-convolutions.html">SSMs are recurrence, revived</a></span><p>A fixed-size state updated token by token is the RNN idea. Selectivity and parallel training are what let it scale this time.</p></div>
+        <div class="link-card"><span class="code">F6.5 · Distributed training</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">Expert parallelism</a></span><p>Experts are spread across GPUs and tokens travel between them. Load balance is a communication and throughput problem as much as a modelling one.</p></div>
+        <div class="link-card"><span class="code">R2.1 · Scaling laws</span><span class="t"><a href="r2-scaling-laws-then-and-now.html">Active parameters set the compute</a></span><p>Scaling-law questions about how big and how long to train change when "size" splits into total and active.</p></div>
+        <div class="link-card"><span class="code">R2.4 · FP8 and FP4 training</span><span class="t"><a href="r2-synthetic-data-and-model-collapse.html">Low precision makes MoE affordable</a></span><p>DeepSeek-V3 trained largely in 8-bit arithmetic. Efficiency tricks stack with sparsity.</p></div>
+        <div class="link-card"><span class="code">R12.1 · R12.3 · Quantization and on-premises models</span><span class="t"><a href="r12-very-low-bit-quantization-gptq.html">Fitting the total into the box</a></span><p>For an on-premises deployment the total parameter count decides the hardware, so quantization and pruning matter more for MoE.</p></div>
+        <div class="link-card"><span class="code">R12.2 · KV-cache compression</span><span class="t"><a href="r12-very-low-bit-quantization-gptq.html">The other route to long context</a></span><p>Compressing or sharing the cache is the alternative to swapping attention for state. DeepSeek's multi-head latent attention is one such method.</p></div>
+        <div class="link-card"><span class="code">R1.3 · R1.4 · Other architectures</span><span class="t"><a href="r1-diffusion-language-models-llada-gemini.html">More challengers</a></span><p>Diffusion language models and multi-token prediction attack the cost of generating one token at a time, a third axis next to parameters and context.</p></div>
+        <div class="link-card"><span class="code">B7 · Document AI and copilots</span><span class="t"><a href="b7-document-ai-for-trade-finance.html">Where length bites</a></span><p>Trade-finance bundles and credit files are long. Whether a model reads them in one pass or by retrieval is partly an architecture and cost question.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Choosing an open-weight model to host.</strong> A "671B" or "1T" model sounds out of reach, but its active size is a fraction. The honest sizing question is memory for the total and how many concurrent users you really have.</li>
+          <li><strong>Vendor cost and latency claims.</strong> Cheap per-million-token prices from API providers reflect large shared batches. They do not mean a private deployment will be as cheap.</li>
+          <li><strong>Data residency.</strong> Open-weight MoE models make in-country hosting thinkable, with the caveat that regulators' expectations (CBUAE, SAMA) on third-party and model risk apply to whoever operates it. Check current guidance rather than assume.</li>
+          <li><strong>Long documents and call transcripts.</strong> Hybrids and SSMs matter where a whole file or a month of Arabic and English call records must be read at once, though retrieval (B7) is often still cheaper and more auditable.</li>
+          <li><strong>Gulf sovereign AI.</strong> Falcon-H1 from TII in Abu Dhabi is a locally built hybrid; its Arabic coverage and licence make it a natural candidate to evaluate for local deployment.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>By late 2026, sparse MoE is the default shape of large open-weight language models, and most frontier systems are widely reported to be MoE too, though closed labs rarely confirm. Hybrid SSM-attention models are established at small and medium sizes and are being tested at larger ones. The live arguments: how fine-grained the experts should be, how to balance load without hurting quality, whether pure-SSM models can match transformers, and how best to serve MoE efficiently.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Searches were light and confirmed the DeepSeek-V3, Falcon-H1 and Nemotron-H points; the other entries are from my own knowledge and should be checked against the papers before you quote exact figures.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2017</span><div><div class="t">Sparsely-gated mixture-of-experts layers</div><p>Shazeer et al. put thousands of feed-forward experts and a learned top-k gate into an LSTM language model, showing large capacity gains at little extra compute.</p><div class="src">Shazeer et al., ICLR 2017</div></div></li>
+        <li><span class="yr">2021–22</span><div><div class="t">Making MoE work in transformers</div><p>GShard and Switch Transformer scaled MoE transformers, simplified routing to top-1, and introduced the auxiliary balance loss and capacity factors.</p><div class="src">Lepikhin et al. 2020; Fedus et al., JMLR 2022</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Mamba: selective state spaces</div><p>Linear-time sequence modelling with input-dependent state updates, competitive with transformers on language at small scale. Mamba-2 followed in 2024.</p><div class="src">Gu &amp; Dao, 2023; Dao &amp; Gu, ICML 2024</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Mixtral, DeepSeekMoE and Jamba</div><p>Mixtral showed an open 8-expert top-2 model matching much larger dense ones. DeepSeekMoE introduced fine-grained and shared experts. Jamba combined Mamba, attention and MoE in a production-grade long-context model.</p><div class="src">Jiang et al., 2024; Dai et al., 2024; Lieber et al., 2024</div></div></li>
+        <li><span class="yr">Dec 2024</span><div><div class="t">DeepSeek-V3</div><p>An MoE with 671B total and 37B active parameters per token, using auxiliary-loss-free balancing, multi-token prediction and FP8 training. Confirmed from the technical report: 671B total, 37B active, the bias-based balancing with speed 0.001, and a small residual sequence-wise balance loss. The 256 routed experts figure is from a secondary source.</p><div class="src">DeepSeek-AI, arXiv 2412.19437</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Open MoE everywhere, and hybrids at scale</div><p>From memory: Llama 4, Qwen3, Kimi K2 (about 1T total, 32B active) and OpenAI's gpt-oss all released as open-weight MoEs. Nemotron-H (8B to 56B) reported up to about 3× faster inference by using mostly Mamba-2 layers. Falcon-H1 from TII released parallel hybrids from 0.5B to 34B with 256K context.</p><div class="src">Nemotron-H, arXiv 2504.03624; Falcon-H1, arXiv 2507.22448</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Reasoning models on hybrids</div><p>TII released Falcon-H1R-7B, a reasoning model on the hybrid architecture, reporting strong results on maths and science benchmarks for its size and good token efficiency. Results are the authors' own.</p><div class="src">Falcon-H1R, arXiv 2601.02346</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each idea is, as far as can be told from public information:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Idea</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Sparse MoE with top-k routing</b></td><td>The standard layout of large open-weight models; the model name often gives total and active sizes.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Fine-grained plus shared experts</b></td><td>Many small experts with one or two always-on. Used by DeepSeek-style models and imitated widely.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Auxiliary-loss-free balancing</b></td><td>Per-expert routing bias updated by load. Adopted in DeepSeek-V3; variants appear elsewhere.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Expert-parallel serving at scale</b></td><td>Experts spread over many GPUs with large batches; practised by big providers, details mostly not public.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Hybrid SSM-attention models</b></td><td>Jamba, Nemotron-H, Falcon-H1: released with open weights and used in products.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Pure SSM models as general assistants</b></td><td>Competitive on some tasks, behind on exact recall at equal size.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Sparsity is how large models stay affordable to train and, at scale, to serve; for long inputs the leading approach is a hybrid that keeps a few attention layers for exact recall and lets cheaper recurrent layers do the rest.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These come up in vendor decks and in loose technical talk. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">"671B parameters, but only 37B, so it fits on a small machine"</div><p>Compute is small, memory is not. All experts must be loaded.</p><div class="spot"><b>Spot it</b>Ask for the memory footprint in GB at the precision they will run, and the number of GPUs it needs.</div></li>
+        <li><div class="t">Quoting the active size as the model's "real" size</div><p>Quality of an MoE sits between its active and total size, closer to a dense model of intermediate size. Neither number is the right comparison.</p><div class="spot"><b>Spot it</b>Compare on your own task against a dense model with similar <em>cost</em>, not by headline parameters.</div></li>
+        <li><div class="t">Assuming cheap API prices mean cheap self-hosting</div><p>Prices reflect huge shared batches that keep experts busy. A lightly used private deployment leaves expensive GPUs idle.</p><div class="spot"><b>Spot it</b>Model utilisation: expected concurrent requests against the batch size at which throughput peaks (Simulation 3).</div></li>
+        <li><div class="t">Reading "experts" as human-style specialists</div><p>Experts in trained MoEs tend to specialise by token type or syntax (punctuation, code, certain languages) more than by clean topics like "finance". Do not expect a "sanctions expert" you can switch on.</p><div class="spot"><b>Spot it</b>Be wary of any claim that routing gives interpretable, controllable domain experts without evidence.</div></li>
+        <li><div class="t">Routing collapse and dropped tokens</div><p>Poor balancing leaves experts idle, wasting capacity, or drops tokens under tight capacity limits, silently degrading outputs under load.</p><div class="spot"><b>Spot it</b>Ask for expert load histograms, whether tokens are dropped, and whether quality was tested at production batch sizes.</div></li>
+        <li><div class="t">Quantization and fine-tuning that disturb routing</div><p>Aggressive quantization or full fine-tuning can change router decisions, causing quality loss that dense-model experience would not predict.</p><div class="spot"><b>Spot it</b>Re-run your own evaluation after any compression or fine-tuning, with languages and document types you care about.</div></li>
+        <li><div class="t">"Infinite context" claims for SSMs</div><p>A fixed state cannot store everything. Long-context benchmarks that test exact retrieval from the middle of a document expose this.</p><div class="spot"><b>Spot it</b>Test needle-in-a-haystack style lookups on your own documents, such as a specific clause or amount deep in a long file.</div></li>
+        <li><div class="t">Treating a benchmark gain as an architecture gain</div><p>A hybrid may beat a transformer because it saw different or more data, not because of the layers.</p><div class="spot"><b>Spot it</b>Look for controlled comparisons with the same data and training budget.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“These newer models are built like a large team of specialists with a triage desk: each word is handled by a handful of them rather than the whole team. That is why the biggest open models cost a fraction as much to run per word as their size suggests. The catch is that the whole team has to be on site, so hardware cost depends on the total size, and the savings only really appear when many users share the system. For us the question is how many concurrent users we expect, not the headline number.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or platform engineer</span>
+          <blockquote>“MoE replaces the FFN with many experts and a top-k router, so FLOPs follow active parameters and memory follows total. DeepSeek-V3 is 671B total and 37B active, with fine-grained and shared experts and bias-based, auxiliary-loss-free balancing. In decode, a batch touches the union of experts, so intensity stays low until batches reach the thousands, which is why serving needs expert parallelism and large shared batches. For long context, KV cache grows linearly, which is why hybrids like Jamba, Nemotron-H and Falcon-H1 use mostly SSM layers with a few attention layers.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Is a 671B model with 37B active as good as a 671B dense model?”</summary><div class="ans"><p>No, and it is not as weak as a 37B dense one either. Quality is generally somewhere between. The point is that it is much cheaper to train and, at scale, to serve than a 671B dense model, while knowing more than a 37B one. Judge it by quality per unit cost on your task.</p></div></details>
+        <details class="reveal"><summary>“Why not run DeepSeek-V3 on one GPU, if only 37B is active?”</summary><div class="ans"><p>Because the router can send the next token to any expert, so all weights must be resident. At 8-bit that is about 671 GB, which means a multi-GPU node even before the KV cache. The 37B figure tells you the arithmetic per token, not the memory.</p></div></details>
+        <details class="reveal"><summary>“What actually goes wrong if the router sends everything to a few experts?”</summary><div class="ans"><p>Two things. The unused experts waste parameters, so you have paid for capacity you do not use. And on a cluster, the GPU holding the popular expert becomes a bottleneck while others wait. Balance losses or bias adjustment during training are there to prevent this.</p></div></details>
+        <details class="reveal"><summary>“Does Mamba replace the transformer?”</summary><div class="ans"><p>Not so far. Pure SSMs are cheaper on long inputs but weaker at exact recall. The working compromise is hybrids with a minority of attention layers, which already ship in Jamba, Nemotron-H and Falcon-H1. Whether the ratio keeps shifting toward SSM at larger scale is open.</p></div></details>
+        <details class="reveal"><summary>“Should we host an open MoE model on premises?”</summary><div class="ans"><p>It depends on utilisation and sensitivity. Compute per token is low, but we need hardware for the full weights, plus the operational skill for expert-parallel serving. If volume is modest or data permits a vendor, a hosted service may cost less. If data must stay in-country, a smaller dense or low-active-size MoE, quantized, is often the better fit. Either way the model-risk and third-party rules under CBUAE or SAMA still apply and I'd confirm the current requirements with compliance.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A model is called "Model-80B-A6B". What do the numbers mean, and which one sets the arithmetic per token and which sets the memory?</summary><div class="ans"><p>80B total parameters, 6B active per token. The active figure (6B) sets the arithmetic per token; the total (80B) sets the memory needed to hold the weights, about 80 GB at 8-bit.</p></div></details>
+        <details class="reveal"><summary>2. With 64 routed experts and top-6, how many expert combinations can a token pick in one layer? Why does having more combinations help?</summary><div class="ans"><p>C(64, 6) = 74,974,368, about 75 million. More combinations mean a token's needs can be met by a finer mix of small specialists, so experts can specialise more sharply than with a few large ones, at the same compute.</p></div></details>
+        <details class="reveal"><summary>3. Why does a shared expert help?</summary><div class="ans"><p>Every token needs some common knowledge. If only routed experts exist, many of them each relearn the same basics. A shared expert that every token passes through holds it once, so the routed experts are free to differ from one another.</p></div></details>
+        <details class="reveal"><summary>4. With 256 experts and top-8 under uniform routing, roughly what share of experts does a batch of 16 tokens touch?</summary><div class="ans"><p>1 − (1 − 8/256)<sup>16</sup> = 1 − 0.96875<sup>16</sup> ≈ 1 − 0.60 = about 40%. So even a small batch reads a large share of the weights, which is why MoE does not speed up memory-bound decoding at moderate batch sizes.</p></div></details>
+        <details class="reveal"><summary>5. Explain auxiliary-loss-free balancing in two sentences.</summary><div class="ans"><p>Each expert has a bias added to its router score only when choosing the top-k. After every step, the bias of overloaded experts is lowered and that of underloaded ones raised, so load evens out without adding a competing term to the training loss. The weights that mix expert outputs still use the unbiased scores.</p></div></details>
+        <details class="reveal"><summary>6. In the toy model, a transformer stores 128 KiB of KV cache per token. How much for a 200,000-token document, and what happens in a hybrid with one attention layer in eight?</summary><div class="ans"><p>200,000 × 128 KiB ≈ 24.4 GiB for full attention. With one layer in eight the cache is an eighth, about 3 GiB, plus a fixed SSM state of roughly 7 MiB (28 layers × 256 KiB). Memory per user falls by around 8 times.</p></div></details>
+        <details class="reveal"><summary>7. Why are SSMs weaker than attention at exact recall, and how do hybrids cope?</summary><div class="ans"><p>An SSM compresses everything it has read into a fixed-size state, so details can be lost, while attention can look back directly at any earlier token. Hybrids keep a few attention layers for exact lookup and use SSM layers for the cheap bulk of the processing.</p></div></details>
+        <details class="reveal"><summary>8. A vendor quotes very low per-token prices for a large MoE model. Why might your private deployment cost much more per token?</summary><div class="ans"><p>Their price assumes large shared batches that keep every expert busy. A private deployment with few concurrent users batches little, touches most experts per step for little useful work, and leaves expensive GPUs under-used, so cost per token rises.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>N. Shazeer et al. <a href="https://arxiv.org/abs/1701.06538">Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer</a>. ICLR, 2017.</li>
+        <li>D. Lepikhin et al. <a href="https://arxiv.org/abs/2006.16668">GShard: Scaling Giant Models with Conditional Computation and Automatic Sharding</a>. 2020.</li>
+        <li>W. Fedus, B. Zoph, N. Shazeer. <a href="https://arxiv.org/abs/2101.03961">Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity</a>. JMLR, 2022.</li>
+        <li>Y. Zhou et al. <a href="https://arxiv.org/abs/2202.09368">Mixture-of-Experts with Expert Choice Routing</a>. NeurIPS, 2022.</li>
+        <li>A. Jiang et al. <a href="https://arxiv.org/abs/2401.04088">Mixtral of Experts</a>. 2024.</li>
+        <li>D. Dai et al. <a href="https://arxiv.org/abs/2401.06066">DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models</a>. 2024.</li>
+        <li>DeepSeek-AI. <a href="https://arxiv.org/abs/2412.19437">DeepSeek-V3 Technical Report</a>. 2024. Source for 671B/37B, auxiliary-loss-free balancing and training cost.</li>
+        <li>L. Wang, H. Gao, C. Zhao, X. Sun, D. Dai. <a href="https://arxiv.org/abs/2408.15664">Auxiliary-Loss-Free Load Balancing Strategy for Mixture-of-Experts</a>. 2024.</li>
+        <li>A. Gu, T. Dao. <a href="https://arxiv.org/abs/2312.00752">Mamba: Linear-Time Sequence Modeling with Selective State Spaces</a>. 2023.</li>
+        <li>T. Dao, A. Gu. <a href="https://arxiv.org/abs/2405.21060">Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality</a>. ICML, 2024.</li>
+        <li>O. Lieber et al. <a href="https://arxiv.org/abs/2403.19887">Jamba: A Hybrid Transformer-Mamba Language Model</a>. AI21, 2024.</li>
+        <li>NVIDIA. <a href="https://arxiv.org/abs/2504.03624">Nemotron-H: A Family of Accurate and Efficient Hybrid Mamba-Transformer Models</a>. 2025.</li>
+        <li>TII. <a href="https://arxiv.org/abs/2507.22448">Falcon-H1: A Family of Hybrid-Head Language Models Redefining Efficiency and Performance</a>. 2025.</li>
+        <li>TII. <a href="https://arxiv.org/abs/2601.02346">Falcon-H1R-7B</a>. 2026. Reasoning model on the hybrid architecture.</li>
+        <li>Sebastian Raschka. <a href="https://magazine.sebastianraschka.com/">Ahead of AI</a>. Readable architecture comparisons of recent open models.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in R1: Diffusion language models and tokenizer-free models (R1.3, R1.4)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  const bn = v => v >= 100 ? v.toFixed(0) + "B" : v >= 10 ? v.toFixed(1) + "B" : v.toFixed(2) + "B";
+  const sci = lg => { // lg = log10 of value
+    if (lg < 6) return L.fmtInt(Math.round(Math.pow(10, lg)));
+    const e = Math.floor(lg), m = Math.pow(10, lg - e);
+    return m.toFixed(1) + " × 10^" + e;
+  };
+
+  // =====================================================================
+  // Simulation 1: total versus active
+  // =====================================================================
+  const T = 600, A = 14;
+  const S1 = { e: 3, k: 2, sh: 0 };
+  const shapeBox = $("shape-chart");
+  function lnFact(n) { let s = 0; for (let i = 2; i <= n; i++) s += Math.log(i); return s; }
+  function log10C(n, k) { if (k > n) return -Infinity; return (lnFact(n) - lnFact(k) - lnFact(n - k)) / Math.LN10; }
+  let ctlE, ctlK, ctlS;
+  function renderShape() {
+    const E = Math.pow(2, S1.e);
+    const k = Math.min(S1.k, E), sh = S1.sh;
+    const F = (T - A) / (E + sh), act = A + (k + sh) * F;
+    const W = Math.max(300, shapeBox.clientWidth), H = 120, m = { l: 12, r: 12, t: 14, b: 30 };
+    const svg = mk(shapeBox, W, H, "Stored versus active parameters");
+    const x = L.scale(0, T, m.l, W - m.r);
+    L.svg("rect", { x: x(0), y: 20, width: x(T) - x(0), height: 28, rx: 3, class: "bar-all" }, svg);
+    L.svg("rect", { x: x(0), y: 60, width: Math.max(2, x(act) - x(0)), height: 28, rx: 3, class: "bar-act" }, svg);
+    tx(svg, x(0) + 6, 14, "Stored: 600B", { class: "lbl-ink" });
+    tx(svg, Math.min(x(act) + 8, W - 90), 56, "", {});
+    tx(svg, x(0) + 6, 108, "Used for one token: " + bn(act) + " (" + pct(act / T, 1) + " of stored)", { class: "lbl-acc" });
+    $("st1-f").textContent = bn(F);
+    $("st1-act").textContent = bn(act);
+    $("st1-act-s").textContent = pct(act / T, 1) + " of 600B stored";
+    $("st1-fl").textContent = pct(act / T, 1);
+    const lg = log10C(E, k);
+    $("st1-comb").textContent = sci(lg);
+    $("s1-verdict").innerHTML = k >= E
+      ? "Top-k equals the number of experts, so every expert runs: this is just a dense model with extra steps."
+      : "Each token runs <b>" + (k + sh) + "</b> of <b>" + (E + sh) + "</b> experts and chooses among <b>" + sci(lg) + "</b> routed combinations. Compute is " + pct(act / T, 1) + " of a dense 600B, but all 600B must stay in memory.";
+  }
+  ctlE = L.bind("s-e", v => String(Math.pow(2, v)), v => { S1.e = v; renderShape(); });
+  ctlK = L.bind("s-k", v => String(v), v => { S1.k = v; renderShape(); });
+  ctlS = L.bind("s-sh", v => String(v), v => { S1.sh = v; renderShape(); });
+  function preset(e, k, sh) { S1.e = e; S1.k = k; S1.sh = sh; ctlE.set(e); ctlK.set(k); ctlS.set(sh); renderShape(); }
+  $("p-mix").addEventListener("click", () => preset(3, 2, 0));
+  $("p-ds16").addEventListener("click", () => preset(6, 6, 2));
+  $("p-ds3").addEventListener("click", () => preset(8, 8, 1));
+
+  // =====================================================================
+  // Simulation 2: routing balance
+  // =====================================================================
+  const NT = 2000, NE = 8, TK = 2;
+  const POP = [1.2, 0.9, 0.5, 0.2, 0, -0.3, -0.7, -1.1];
+  function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const rnd = mulberry(80);
+  const gauss = () => { const u = Math.max(rnd(), 1e-9), v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  const NOISE = Array.from({ length: NT }, () => Array.from({ length: NE }, gauss));
+  const S2 = { skew: 1.5, steps: 0 };
+  const routeBox = $("route-chart");
+  function loads(bias, skew) {
+    const ld = new Array(NE).fill(0);
+    for (let t = 0; t < NT; t++) {
+      const sc = NOISE[t].map((n, e) => POP[e] * skew + n + bias[e]);
+      const idx = sc.map((s, e) => [s, e]).sort((a, b) => b[0] - a[0]).slice(0, TK);
+      idx.forEach(p => ld[p[1]]++);
+    }
+    return ld;
+  }
+  function runRoute() {
+    const bias = new Array(NE).fill(0);
+    let ld = loads(bias, S2.skew);
+    for (let s = 0; s < S2.steps; s++) {
+      const mean = NT * TK / NE;
+      for (let e = 0; e < NE; e++) bias[e] += ld[e] > mean ? -0.05 : ld[e] < mean ? 0.05 : 0;
+      ld = loads(bias, S2.skew);
+    }
+    return ld;
+  }
+  function renderRoute() {
+    const ld = runRoute(), even = NT * TK / NE, cap = 1.25 * even;
+    const W = Math.max(300, routeBox.clientWidth), H = 240, m = { l: 44, r: 12, t: 16, b: 34 };
+    const svg = mk(routeBox, W, H, "Tokens routed to each expert");
+    const ymax = Math.max(Math.max(...ld) * 1.1, cap * 1.1);
+    const y = L.scale(0, ymax, H - m.b, m.t), x = L.scale(0, NE, m.l, W - m.r);
+    const tick = ymax > 2000 ? 1000 : ymax > 800 ? 500 : 250;
+    for (let v = 0; v <= ymax; v += tick) {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, L.fmtInt(v), { "text-anchor": "end" });
+    }
+    const bw = (x(1) - x(0)) * 0.7;
+    ld.forEach((v, e) => {
+      L.svg("rect", { x: x(e) + (x(1) - x(0) - bw) / 2, y: y(v), width: bw, height: y(0) - y(v), rx: 2, class: v > cap ? "bar-hot" : "bar-cool" }, svg);
+      tx(svg, x(e) + (x(1) - x(0)) / 2, H - m.b + 16, "E" + (e + 1), { "text-anchor": "middle" });
+    });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(even), y2: y(even), class: "ln-mean" }, svg);
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(cap), y2: y(cap), class: "ln-cap" }, svg);
+    tx(svg, W / 2, H - 4, "Experts in one layer (token-expert slots received)", { "text-anchor": "middle" });
+    const mx = Math.max(...ld) / even, idle = ld.filter(v => v < 0.25 * even).length;
+    const drop = ld.reduce((a, v) => a + Math.max(0, v - cap), 0) / (NT * TK);
+    $("st2-max").textContent = mx.toFixed(2) + "×"; cls($("st2-max-b"), mx > 1.5 ? "bad" : mx > 1.25 ? "" : "ok");
+    $("st2-idle").textContent = idle + " of 8"; cls($("st2-idle-b"), idle > 0 ? "bad" : "ok");
+    $("st2-drop").textContent = pct(drop, 1); cls($("st2-drop-b"), drop > 0.05 ? "bad" : drop > 0 ? "" : "ok");
+    $("s2-verdict").innerHTML = mx < 1.15
+      ? "Balanced: the busiest expert is within " + pct(mx - 1, 0) + " of an even share, so no GPU holds the others up and nothing is dropped."
+      : "Unbalanced: the busiest expert gets <b>" + mx.toFixed(2) + "×</b> its fair share, so the step takes about that much longer than it should, <b>" + idle + "</b> expert(s) are close to idle, and <b>" + pct(drop, 1) + "</b> of assignments overflow. Increase the balancing steps.";
+  }
+  L.bind("s-skew", v => v.toFixed(1), v => { S2.skew = v; renderRoute(); });
+  L.bind("s-steps", v => String(v), v => { S2.steps = v; renderRoute(); });
+
+  // =====================================================================
+  // Simulation 3: arithmetic intensity versus batch
+  // =====================================================================
+  const TOT = 671, ACT = 37, NR = 256, KR = 8, SHR = 1, A3 = ACT - (KR + SHR) * (TOT - ACT) / (NR + SHR - KR - SHR);
+  // F from: A + (NR+SHR)F = TOT, A + (KR+SHR)F = ACT
+  const F3 = (TOT - ACT) / (NR - KR), ATT3 = ACT - (KR + SHR) * F3, RIDGE = 300;
+  const touched = b => NR * (1 - Math.pow(1 - KR / NR, b));
+  const gbRead = b => ATT3 + F3 * (SHR + touched(b));
+  const inten = b => 2 * ACT * b / gbRead(b);
+  let crossB = null;
+  for (let b = 1; b < 1e6; b = Math.ceil(b * 1.01)) { if (inten(b) >= RIDGE) { crossB = b; break; } }
+  const S3 = { v: 0 };
+  const serveBox = $("serve-chart");
+  function renderServe() {
+    const b = Math.max(1, Math.round(Math.pow(10, S3.v)));
+    const W = Math.max(300, serveBox.clientWidth), H = 280, m = { l: 52, r: 14, t: 16, b: 42 };
+    const svg = mk(serveBox, W, H, "Arithmetic intensity against batch size");
+    const x = L.scale(0, 4.2, m.l, W - m.r), lo = 0, hi = Math.log10(30000), y = L.scale(lo, hi, H - m.b, m.t);
+    [1, 10, 100, 1000, 10000].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(Math.log10(v)), y2: y(Math.log10(v)), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(Math.log10(v)) + 4, L.fmtInt(v), { "text-anchor": "end" });
+    });
+    [0, 1, 2, 3, 4].forEach(v => tx(svg, x(v), H - m.b + 16, L.fmtInt(Math.pow(10, v)), { "text-anchor": "middle" }));
+    const yc = v => y(Math.log10(Math.min(Math.max(v, 1), 30000)));
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: yc(RIDGE), y2: yc(RIDGE), class: "ln-ridge" }, svg);
+    tx(svg, m.l + 6, yc(RIDGE) - 6, "ridge: 300", { class: "lbl-warn" });
+    const dp = [], mp = [];
+    for (let v = 0; v <= 4.0001; v += 0.04) { const bb = Math.pow(10, v); dp.push([x(v), yc(2 * bb)]); mp.push([x(v), yc(inten(bb))]); }
+    L.svg("path", { d: L.path(dp), class: "ln-dense" }, svg);
+    L.svg("path", { d: L.path(mp), class: "ln-moe" }, svg);
+    L.svg("circle", { cx: x(Math.log10(b)), cy: yc(inten(b)), r: 6, class: "dot-now" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Tokens decoded together (log scale)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Operations per byte read", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const tc = touched(b), gb = gbRead(b), it = inten(b);
+    $("st3-touch").textContent = tc.toFixed(0) + " (" + pct(tc / NR, 0) + ")";
+    $("st3-gb").textContent = gb.toFixed(0) + " GB"; $("st3-gb-s").textContent = "dense 671B reads 671 GB; dense 37B reads 37 GB";
+    $("st3-int").textContent = it.toFixed(it < 10 ? 1 : 0); $("st3-int-s").textContent = it >= RIDGE ? "compute-bound" : "memory-bound; dense at this batch: " + L.fmtInt(2 * b);
+    cls($("st3-int-b"), it >= RIDGE ? "ok" : "");
+    $("st3-cross").textContent = "about " + L.fmtInt(Math.round(crossB / 50) * 50);
+    $("s3-verdict").innerHTML = b === 1
+      ? "At batch 1 the MoE reads only <b>" + gb.toFixed(0) + " GB</b> against 671 GB for a dense model of the same total: this is the best case for it. But it also sits far below the ridge, so the GPU's arithmetic units are nearly idle."
+      : it >= RIDGE
+        ? "Compute-bound: here the MoE's low arithmetic per token turns into real throughput, and it reads <b>" + gb.toFixed(0) + " GB</b> per step shared across " + L.fmtInt(b) + " tokens."
+        : "Still memory-bound: the batch touches <b>" + pct(tc / NR, 0) + "</b> of the experts, so the step reads <b>" + gb.toFixed(0) + " GB</b> while doing the arithmetic of a 37B model. The saving is mostly unrealised until the batch grows.";
+  }
+  L.bind("s-b", v => L.fmtInt(Math.max(1, Math.round(Math.pow(10, v)))), v => { S3.v = v; renderServe(); });
+
+  // =====================================================================
+  // Simulation 4: KV cache versus state
+  // =====================================================================
+  const LAY = 32, KVTOK = 4096, STATE = 262144; // bytes
+  const SHARES = [0, 1 / 8, 1 / 4, 1 / 2, 1], SLAB = ["0 (pure SSM)", "1 in 8", "1 in 4", "1 in 2", "All (transformer)"];
+  const GIB = 1024 * 1024 * 1024, MIB = 1024 * 1024;
+  const S4 = { c: 5.1, a: 1 };
+  const ssmBox = $("ssm-chart");
+  const memFor = (f, ctx) => ({ kv: KVTOK * LAY * f * ctx, st: STATE * LAY * (1 - f) });
+  const fmtB = v => v >= GIB ? (v / GIB).toFixed(v / GIB < 10 ? 2 : 1) + " GiB" : (v / MIB).toFixed(v / MIB < 10 ? 1 : 0) + " MiB";
+  function renderSsm() {
+    const ctx = Math.round(Math.pow(10, S4.c)), f = SHARES[S4.a];
+    const W = Math.max(300, ssmBox.clientWidth), H = 210, m = { l: 112, r: 70, t: 10, b: 30 };
+    const svg = mk(ssmBox, W, H, "Memory per user for five designs");
+    const lo = Math.log10(2 * MIB), hi = Math.log10(400 * GIB), X = L.scale(lo, hi, m.l, W - m.r);
+    [[10 * MIB, "10 MiB"], [GIB, "1 GiB"], [100 * GIB, "100 GiB"]].forEach(([v, s]) => {
+      L.svg("line", { x1: X(Math.log10(v)), x2: X(Math.log10(v)), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(Math.log10(v)), H - m.b + 16, s, { "text-anchor": "middle" });
+    });
+    const bh = 22, gap = (H - m.t - m.b - 5 * bh) / 6;
+    SHARES.forEach((sf, i) => {
+      const mm = memFor(sf, ctx), tot = mm.kv + mm.st, yy = m.t + gap * (i + 1) + bh * i;
+      L.svg("rect", { x: X(lo), y: yy, width: Math.max(2, X(Math.log10(tot)) - X(lo)), height: bh, rx: 3, class: i === S4.a ? "bar-sel" : "bar-cool" }, svg);
+      tx(svg, m.l - 8, yy + bh / 2 + 4, SLAB[i], { "text-anchor": "end", class: "lbl-ink" });
+      tx(svg, X(Math.log10(tot)) + 6, yy + bh / 2 + 4, fmtB(tot), { class: "lbl-ink" });
+    });
+    const mm = memFor(f, ctx), tot = mm.kv + mm.st, full = memFor(1, ctx);
+    $("st4-kv").textContent = fmtB(mm.kv);
+    $("st4-st").textContent = fmtB(mm.st);
+    $("st4-tot").textContent = fmtB(tot); $("st4-tot-s").textContent = f === 1 ? "plain transformer" : (full.kv / tot).toFixed(1) + "× less than full attention";
+    cls($("st4-tot-b"), f < 1 ? "ok" : "");
+    $("st4-users").textContent = L.fmtInt(Math.floor(80 * GIB / tot));
+    $("s4-verdict").innerHTML = "At <b>" + L.fmtInt(ctx) + "</b> tokens, " + (f === 0 ? "a pure state-space model needs only the fixed state, " + fmtB(mm.st) + ", whatever the length." : f === 1 ? "full attention caches <b>" + fmtB(mm.kv) + "</b> per user." : "attention on " + SLAB[S4.a] + " layers caches " + fmtB(mm.kv) + ", plus a state of " + fmtB(mm.st) + ".") + " Doubling the context doubles only the attention part.";
+  }
+  L.bind("s-ctx", v => L.fmtInt(Math.round(Math.pow(10, v))) + " tokens", v => { S4.c = v; renderSsm(); });
+  L.bind("s-att", v => SLAB[v], v => { S4.a = v; renderSsm(); });
+
+  function all() { renderShape(); renderRoute(); renderServe(); renderSsm(); }
+  all();
+  if (window.ResizeObserver) { let t; new ResizeObserver(() => { clearTimeout(t); t = setTimeout(all, 120); }).observe(document.body); }
+})();
+</script>
+</body>
+</html>
