@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Validating an LLM You Cannot Explain: Evidence Packages, Test Bounds and Probes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .cov { display: grid; gap: 10px; margin: 14px 0; }
+  .cov-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .cov-row .q { font-size: 14px; }
+  .cov-row .q b { font-weight: 600; }
+  .cov-bar { position: relative; height: 14px; border-radius: 7px; background: var(--sunk); overflow: hidden; }
+  .cov-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 7px; }
+  .cov-bar .fill.short { background: var(--bad); }
+  .cov-bar .need { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); }
+  .cov-row .n { font-size: 12px; color: var(--muted); }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-rule { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .dist-b { fill: var(--neutral); fill-opacity: .35; stroke: var(--neutral); stroke-width: 1.5; }
+  .dist-h { fill: var(--bad); fill-opacity: .25; stroke: var(--bad); stroke-width: 1.5; }
+  .band { fill: var(--warn); fill-opacity: .16; }
+  .blk { fill: var(--bad); fill-opacity: .14; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track A · Applied frontier: banking, agents and the Gulf</span>
+    <span>Module A7 · Explaining LLMs to validators</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>A7.1 · A7.2</span>
+        <span class="pill n">90 days</span>
+        <span>About 30 minutes</span>
+      </div>
+      <h1>Validating an LLM You Cannot Explain: Evidence Packages, Test Bounds and Probes</h1>
+      <p class="dek">A validator cannot read a language model's reasoning off its weights, and nobody can yet. What they can accept is behaviour measured with honest error bars, controls around the model, and monitoring that keeps watching, now including cheap probes that read the model's internal state.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Do not try to make a language model explain itself to a validator; give them evidence about what it does (test sets with bounds, comparisons, sensitivity checks), what surrounds it (approval gates, change control) and how you will notice it going wrong (monitoring, where internal-state probes are a promising extra layer but not yet a proof).</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A credit team wants to use an LLM to draft the first page of a credit memo from a client's financial statements. Model validation, the independent second line, receives the request. For a logistic-regression scorecard the validator's job is familiar: read the coefficients, check the signs make sense, test stability, compare with a challenger. For the LLM there are no coefficients to read. There are billions of weights and nobody, at any institution, can say what a given one means.</p>
+        <p>So what can the validator accept? Think of how a bank approves a <em>person</em> for a sensitive role. Nobody scans their brain. The bank checks references, sets them a realistic test, limits what they can sign alone, has a manager review their work, and watches their results. That is an <strong>evidence package about behaviour and controls</strong>. It works because the question is not "do we understand the mechanism?" but "is it fit for this purpose, within these limits, and will we notice if it stops being so?"</p>
+        <p>The tempting wrong move is to hand the validator an <em>explanation</em> instead: a saliency heatmap over the input, a model's own written reasons, a diagram of attention. These look like understanding. They usually are not evidence. A model's written reason is another piece of generated text, and studies show it can omit what really drove the answer (Part 4). Heatmaps can be unfaithful to the computation. A validator who has read the model-risk guidance will ask the sharp question: <em>how do you know this explanation is true of the model?</em></p>
+        <p>The newer part of the story is the second half of the title. Researchers can now read directions in a model's internal activations that correlate with concepts such as "this request is a jailbreak attempt" or "the model is unsure". A small classifier on those activations, a <strong>probe</strong>, is cheap enough to run on every request. Labs have deployed them to catch misuse. For a bank this opens a monitoring layer that sees something a text-only monitor cannot. It is a smoke detector, not a post-mortem report. It tells you something may be wrong, not why.</p>
+      </div>
+
+      <figure class="figure" id="fig-pack">
+        <div class="fig-head"><span class="fig-title">Build an evidence package and see what a validator would still ask</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> pick a use case, then switch on only <b>Internal-state probes and feature dictionaries</b>. Every bar stays short: interpretability alone answers none of the validator's questions at the required level. Now add the plain items (test set, monitoring, approval gate) and watch the gaps close. The black tick on each bar is the level the use case needs.</p>
+        <div class="btns" role="group" aria-label="Use case" id="uc-btns"></div>
+        <div class="toggles" id="ev-toggles" aria-label="Evidence items" style="margin-top:12px"></div>
+        <div class="cov" id="cov"></div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Illustrative, not a regulatory rubric. The points each evidence item earns against each question, and the levels each use case needs, are my own judgement for teaching. They are not taken from CBUAE, SAMA, SR 11-7 or any validator's standard. Your validation team's policy decides in real life. Half-points mark evidence that supports but is not accepted as proof.</p>
+      </figure>
+
+      <div class="callout key"><span class="k">Hold onto this</span>Validators accept <em>evidence that would change their mind if it were bad</em>: measured failure rates with bounds, comparisons with a simpler alternative, controls that limit damage, and monitoring with triggers. They do not need to understand the weights; they need to be unable to find a hole in the case.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-questions">The validator's four questions, and what answers them</h3>
+      <div class="prose">
+        <p>Strip away the paperwork and independent validation asks four things. The names differ across institutions; the content is stable and follows the logic of SR 11-7, which most Gulf banks' model-risk policies echo in spirit (check your own policy and the current CBUAE and SAMA texts; Part 3 says more).</p>
+        <ol>
+          <li><strong>Is the design sound for the purpose?</strong> (conceptual soundness) Does the approach make sense for this task, and is the scope clear? For an LLM, this means a defined use, a baseline to beat, and an argument for why a language model is the right tool.</li>
+          <li><strong>Does it perform well enough?</strong> (outcome analysis) Measured on realistic cases, with an interval, against a threshold the business agreed in advance.</li>
+          <li><strong>Does it stay inside limits as things change?</strong> (ongoing monitoring and sensitivity) Different wording, language, document type, a new model version from the vendor.</li>
+          <li><strong>Can people challenge and override it?</strong> (governance and use controls) Who approves outputs, what is logged, who is accountable.</li>
+        </ol>
+        <p>Simulation 1 maps ten kinds of evidence onto these four. Two patterns to notice. First, a cheap, boring item (a labelled test set with an interval) carries more weight than an impressive-looking one (internals). Second, question 4 is often the cheapest to satisfy and the one that most lowers risk: if a human approves every output that matters, the required performance for question 2 drops.</p>
+      </div>
+
+      <h3 class="sub" id="m-pack">The package: what goes in it, and why each part is there</h3>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Evidence item</th><th>What it contains</th><th>What it proves, and what it does not</th></tr></thead>
+          <tbody>
+            <tr><td><b>Scope and prohibited uses</b></td><td>Task, inputs, who sees outputs, what it must never do (for example give credit advice, or act without approval).</td><td>Proves the intended use is bounded. Does not prove the model respects the bounds.</td></tr>
+            <tr><td><b>Challenger comparison</b></td><td>The LLM against a simple alternative: a rule, a template, a smaller or older model, or the human process.</td><td>Proves the extra risk buys something. A validator will ask "what if we did not use an LLM?" (see C1, baselines).</td></tr>
+            <tr><td><b>Task test set with interval</b></td><td>Cases drawn from real inputs, labelled by domain experts, with a pre-agreed pass bar and a confidence bound.</td><td>Proves performance on that population, not on tomorrow's. The interval is the point (below).</td></tr>
+            <tr><td><b>Red-team and adversarial set</b></td><td>Prompt injection, odd formats, Arabic/English mixing, requests designed to break policy.</td><td>Shows known weaknesses and how they are contained. Absence of failures is not proof of absence.</td></tr>
+            <tr><td><b>Sensitivity and ablation tests</b></td><td>Re-run with reworded prompts, shuffled order, other languages, a new model version. Report how much results move.</td><td>Proves (or disproves) stability. This is the closest an LLM gets to a coefficient stability check.</td></tr>
+            <tr><td><b>Grounding and citations</b></td><td>Outputs link to source passages a reviewer can check.</td><td>Makes each output <em>verifiable</em> even if the model is not explainable. Does not prove the citation supports the claim; test that (A4.3).</td></tr>
+            <tr><td><b>Approval gates and logs</b></td><td>Human review points, override rates, full prompt and output logging.</td><td>Bounds the damage from errors. Beware rubber-stamping: if reviewers approve 99.8% in four seconds, the control is decoration.</td></tr>
+            <tr><td><b>Monitoring plan with triggers</b></td><td>Metrics, sample reviews, drift checks, and the number that forces a pause or rollback.</td><td>Turns a one-off validation into an ongoing one (G3).</td></tr>
+            <tr><td><b>Change control</b></td><td>Pinned model versions, regression test on each vendor update, rollback path.</td><td>Matters because hosted models change under you.</td></tr>
+            <tr><td><b>Interpretability findings</b></td><td>Probes, sparse-autoencoder features, circuit analyses of the model or a proxy.</td><td>Supporting colour at best today: hypotheses about mechanism, rarely tested to the standard a validator needs.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub" id="m-bounds">How many tests make "good enough" a claim you can defend</h3>
+      <div class="prose">
+        <p>The most common weakness in an LLM evidence package is a test set that is too small to say anything, reported as a single percentage. "We tested 50 cases and none failed" sounds reassuring. The statistics say otherwise. If you see zero failures in <i>n</i> independent cases, the upper 95% bound on the true failure rate is</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>p</mi><mtext>upper</mtext></msub><mo>=</mo><mn>1</mn><mo>−</mo><msup><mn>0.05</mn><mrow><mn>1</mn><mo>/</mo><mi>n</mi></mrow></msup><mo>≈</mo><mfrac><mn>3</mn><mi>n</mi></mfrac></math>
+        <p class="where">The right-hand side is the "rule of three" (Hanley and Lippman-Hand, 1983). With 50 clean cases the true failure rate could still be as high as about 6%. To show it is below 1% you need about 300 clean cases; below 0.1%, about 3,000. If there are some failures, use the exact binomial (Clopper-Pearson) upper bound, which the simulation computes. This is the same logic as F2.1 intervals and A4.1 statistics for evals.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>A second trap is that LLM test cases are rarely independent. If you wrote 20 paraphrases of each of 10 scenarios, you have 200 rows but closer to 10 independent trials: the model that fails a scenario tends to fail all its paraphrases. The effective sample is smaller, and the interval wider, than the row count suggests. The simulation applies a rough correction (divide by the cluster size) so the effect is visible.</p>
+      </div>
+
+      <figure class="figure" id="fig-bound">
+        <div class="fig-head"><span class="fig-title">What can your test set actually claim?</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> leave failures at 0 and move the test size: at 50 cases the claim is "below about 6%". Raise to 300 and it reaches 1%. Now put 2 failures in and see how far the claim moves back. Last, raise <b>paraphrases per scenario</b> to 10: the same 300 rows now support a much weaker claim.</p>
+        <div class="chart-wrap" id="bound-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>95% upper bound on failure rate (with the failures shown)</span>
+          <span><i style="background:var(--warn)"></i>Your pass bar</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Test rows <output for="s-n"></output></label><input type="range" id="s-n" min="1.5" max="3.5" step="0.02" value="2.48"></div>
+          <div class="ctl"><label for="s-k">Failures observed <output for="s-k"></output></label><input type="range" id="s-k" min="0" max="12" step="1" value="0"></div>
+          <div class="ctl"><label for="s-c">Paraphrases per scenario <output for="s-c"></output></label><input type="range" id="s-c" min="1" max="20" step="1" value="1"></div>
+          <div class="ctl"><label for="s-bar">Pass bar: failure rate must be below <output for="s-bar"></output></label><input type="range" id="s-bar" min="-3" max="-1" step="0.05" value="-2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Independent trials (effective)</div><div class="v" id="st-neff"></div><div class="s" id="st-neff-s"></div></div>
+          <div class="stat" id="st-ub-b"><div class="k">Failure rate is below (95%)</div><div class="v" id="st-ub"></div><div class="s" id="st-ub-s"></div></div>
+          <div class="stat"><div class="k">Zero-failure rows needed for the bar</div><div class="v" id="st-need"></div><div class="s">in independent trials</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Computed exactly: one-sided 95% Clopper-Pearson upper bound from the binomial distribution, found by bisection. The clustering correction is a rough approximation (effective trials = rows ÷ paraphrases, failures ÷ paraphrases, rounded); a real analysis would model the clusters properly. The number of rows is on a log scale, 30 to 3,000. No data are simulated; this is pure arithmetic on your inputs.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Practical consequences for the package. State the pass bar <em>before</em> testing. Report the bound, not just the point rate. Grow the set from real production samples, since your invented cases will be easier than real ones. And note that a tight bound on a bad rate does not rescue a test set that does not look like the bank's inputs: a bound is only as good as the sample is representative. That is the same point as F2.6 on selection bias.</p>
+      </div>
+
+      <h3 class="sub" id="m-probes">What a probe is, and what it can and cannot tell you</h3>
+      <div class="prose">
+        <p>When a transformer reads a prompt, each layer produces a vector of numbers (activations) for each token. A <strong>probe</strong> is a small, simple classifier, often logistic regression (F4.2), trained to predict a label from those vectors. Train it on activations from prompts you know are jailbreak attempts versus ordinary requests, and it learns a direction in activation space along which the two groups differ. The probe's score for a new prompt is its position along that direction. The method goes back to linear classifier probes on neural-net layers (Alain and Bengio, 2016) and ties to the broader finding that many concepts are roughly linear directions in the model's internal space (A7's neighbour lesson, R5, covers this).</p>
+        <p>Why a bank cares: a probe reads activations the model has already computed, so it adds almost nothing to the cost of the request, unlike a second LLM that must re-read the whole text. A text-only monitor sees the words; a probe sees a proxy for how the model has <em>represented</em> them. In research on production misuse filters the two make different mistakes, which is why they work best together.</p>
+        <p>What a probe is not. It detects <strong>correlation with a label on the data you trained it on</strong>. It does not show the model "knows" or "intends" anything, and a high probe score is a cue to look, not a verdict. A probe trained on English jailbreaks may behave differently on Gulf Arabic or on 100-page PDFs; a published production study of probes for Gemini found long inputs a weak spot (Part 4). A probe that is also trained on the model it watches cannot be moved to a different model or even a new version without retraining.</p>
+      </div>
+
+      <h3 class="sub" id="m-steer">Steering: the other thing you can do with a direction</h3>
+      <div class="prose">
+        <p>If a direction in activation space corresponds to a concept, you can not only read it but <em>push</em> on it: add a scaled copy of the vector to the activations while the model runs. This is activation steering (Turner et al., 2023, and representation engineering, Zou et al., 2023). Pushing along a "refusal" direction makes a model refuse more; subtracting it can make it comply with requests it would normally decline (Arditi et al., 2024, found refusal is mediated by a single direction in many open models).</p>
+        <p>For monitoring, the relevance is two-sided. As a <em>control</em>, steering is attractive: a dial that might nudge a model towards more cautious behaviour without retraining. As a <em>risk</em>, it shows how thin some safeguards are: anyone with weight access can remove a refusal direction. For a bank using a hosted API, steering is mostly not available (you do not get the activations). It matters for on-premises open-weight models (A5.2, P4.2), where you do control them, and for judging how much weight to put on a vendor's safety claims. Treat steering as a research tool today. Its effects are often blunt and can damage fluency; no validator will accept "we steered it to be safe" without behavioural test evidence of the effect.</p>
+      </div>
+
+      <h3 class="sub" id="m-cascade">Probes in production: the cascade</h3>
+      <div class="prose">
+        <p>The deployment pattern that has emerged is a <strong>cascade</strong>. The probe scores every request at near-zero cost. Very low scores pass; very high scores are blocked or escalated; the uncertain middle band goes to a more expensive check, such as a prompted LLM judge (A4.2) or a human. You choose two thresholds and trade four things: recall, false alarms, cost, and speed. The simulation shows the trade-off with the arithmetic exposed.</p>
+      </div>
+
+      <figure class="figure" id="fig-cascade">
+        <div class="fig-head"><span class="fig-title">A probe-first monitor with an LLM judge for the grey zone</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> keep the defaults and read the three numbers: most harmful requests are caught, almost no genuine ones are blocked, and the judge sees only a slice of traffic. Narrow the grey zone (raise the lower threshold) and the judge bill falls but recall drops. Then press <b>Apply a distribution shift</b>: the probe was tuned on English chat, and now sees Arabic or long documents. Nothing in the thresholds changed, yet recall slips quietly.</p>
+        <div class="btns" role="group" aria-label="Shift">
+          <button class="btn" type="button" id="b-shift" aria-pressed="false">Apply a distribution shift (probe separates less well)</button>
+        </div>
+        <div class="chart-wrap" id="cas-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--neutral)"></i>Ordinary requests</span>
+          <span><i style="background:var(--bad)"></i>Policy-violating requests (rare)</span>
+          <span><i style="background:var(--warn)"></i>Grey zone: sent to the judge</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-lo">Judge above score <output for="s-lo"></output></label><input type="range" id="s-lo" min="0" max="3" step="0.1" value="1.5"></div>
+          <div class="ctl"><label for="s-hi">Block outright above score <output for="s-hi"></output></label><input type="range" id="s-hi" min="2" max="5" step="0.1" value="3.5"></div>
+          <div class="ctl"><label for="s-pi">Share of requests that are violations <output for="s-pi"></output></label><input type="range" id="s-pi" min="-3.5" max="-1" step="0.05" value="-2.7"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="stc-rec-b"><div class="k">Violations caught</div><div class="v" id="stc-rec"></div><div class="s" id="stc-rec-s"></div></div>
+          <div class="stat"><div class="k">Genuine requests wrongly stopped</div><div class="v" id="stc-fp"></div><div class="s" id="stc-fp-s"></div></div>
+          <div class="stat"><div class="k">Share of traffic sent to the judge</div><div class="v" id="stc-j"></div><div class="s" id="stc-j-s"></div></div>
+          <div class="stat"><div class="k">Share of stopped requests that are real</div><div class="v" id="stc-pr"></div><div class="s">precision, set by the base rate</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: the probe score is normal with mean 0 and sd 1 for ordinary requests, and mean 3 (separation d = 3, a strong probe) for violations; the shift lowers d to 2. The judge is assumed to catch 92% of violations and wrongly flag 0.5% of genuine requests, independently of the probe, which is optimistic. All figures are exact expected values per 100,000 requests. Real probe scores are rarely this tidy, and the shift would also change the thresholds' behaviour on ordinary traffic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three lessons in that simulation. <strong>The base rate rules</strong> (F1.4, F3.5): with rare violations, even a very low false-alarm rate gives a precision well below 100%, so the blocked set needs human review. <strong>Thresholds are tuned for a distribution</strong>: when inputs change, recall changes silently; that is why monitoring needs labelled samples of live traffic, not just the probe's own scores (F7.7). And <strong>the cascade reduces cost, not risk</strong>: the judge is itself an unvalidated model, and its error rate belongs in the package too.</p>
+        <p>One more caution for validators. Probes can be attacked. A prompt crafted to move the model's internal state while keeping its output unchanged can fool a probe, as shown for latent-space defences (Bailey et al., 2024, from memory). So a probe is a layer of defence in depth, never the only one.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson is where model risk, evaluation statistics and interpretability research meet. These are the neighbours.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">G3 · Independent validation</span><span class="t"><a href="g3-independent-validation.html">What the validator does with your package</a></span><p>The other side of the table. Read it to learn what challenge looks like and how your evidence will be tested.</p></div>
+        <div class="link-card"><span class="code">G3 · What counts as a model</span><span class="t"><a href="g3-what-counts-as-a-model.html">Is a prompt a model?</a></span><p>Before evidence comes scoping: does your LLM application sit inside the model inventory, and at what tier?</p></div>
+        <div class="link-card"><span class="code">G3 · Ongoing monitoring</span><span class="t"><a href="g3-ongoing-monitoring-and-periodic-review.html">Monitoring plans and triggers</a></span><p>Where the probe-and-judge cascade sits in the bank's monitoring and periodic review cycle.</p></div>
+        <div class="link-card"><span class="code">A4.1 · Statistics for evals</span><span class="t"><a href="a4-statistics-for-evals.html">Intervals, clusters and power for LLM tests</a></span><p>The full treatment of Simulation 2: bounds, paired comparisons, and why paraphrases are not independent.</p></div>
+        <div class="link-card"><span class="code">A4.2 · A4.3 · Judges and grounding</span><span class="t"><a href="a4-hallucination-detection-and-groundedness.html">The check that backs up the probe</a></span><p>The grey-zone judge is an LLM judge with its own biases. Groundedness testing is how citations become evidence.</p></div>
+        <div class="link-card"><span class="code">R5 · Representations</span><span class="t"><a href="r5-linear-representations-probing-representation-engineering.html">Why probes work at all</a></span><p>The research behind linear directions, probing and steering. This lesson uses the results; R5 explains them.</p></div>
+        <div class="link-card"><span class="code">R4 · Faithfulness</span><span class="t"><a href="r4-chain-of-thought-faithfulness-and.html">Why a model's stated reasons are not evidence</a></span><p>The reason you should not hand a validator the model's own explanation as proof.</p></div>
+        <div class="link-card"><span class="code">F8 · Explanation limits</span><span class="t"><a href="f8-partial-dependence-and-ice-plots.html">The limits of post-hoc explanation</a></span><p>The same caution applied to tabular models: explanations describe, they do not certify.</p></div>
+        <div class="link-card"><span class="code">A12 · Model risk rules for LLMs</span><span class="t"><a href="a12-eu-ai-act-iso-iec.html">Regulatory framing</a></span><p>How model-risk expectations, NIST and ISO frameworks apply to LLMs and agents.</p></div>
+        <div class="link-card"><span class="code">C2 · Writing for validators</span><span class="t"><a href="c2-writing-for-validators-and-risk.html">Writing the documentation</a></span><p>An evidence package is only as useful as its write-up. C2 covers structure and tone.</p></div>
+        <div class="link-card"><span class="code">P2 · Versioning and tracing</span><span class="t"><a href="p2-prompt-versioning-and-llm-tracing.html">Change control for prompts and models</a></span><p>The logs and pinned versions that make question 3 answerable.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Credit memo and covenant drafting.</strong> Outputs go to a credit officer, so approval gates carry much of the control; the evidence focus is faithful extraction from statements, with citations.</li>
+          <li><strong>Customer-facing assistants.</strong> Higher bar on performance, red-team coverage and monitoring, because errors reach customers directly. Arabic and English must each be tested, not assumed equal.</li>
+          <li><strong>AML investigation copilots and KYC summarisation.</strong> Evidence on omission rates (what the summary left out) matters more than fluency.</li>
+          <li><strong>Agents that act.</strong> Autonomy levels (A2.4) set the evidence level: the more the agent can do alone, the more the package must show about containment, not just accuracy.</li>
+          <li><strong>Regulators.</strong> CBUAE and SAMA expectations on AI and model risk keep developing, and I am not citing specific clauses here. Treat your bank's compliance team and the current published guidance as the authority; A12 covers what is known.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Two literatures are converging: model-risk practice, which was built for statistical models and is adapting to generative AI, and interpretability research, which has moved from curiosity to engineering but is not yet at the standard of proof a validator expects.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Two light searches were run; items marked "from memory" were not re-verified, and regulatory items come from secondary commentary, so read the primary texts.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2011</span><div><div class="t">SR 11-7 sets the validation vocabulary</div><p>The US supervisory guidance on model risk management set out conceptual soundness, ongoing monitoring and outcomes analysis, and the idea of effective challenge. Its structure still shapes how many banks, including in the Gulf, frame validation.</p><div class="src">Federal Reserve and OCC, 2011</div></div></li>
+        <li><span class="yr">2016</span><div><div class="t">Linear probes as a diagnostic</div><p>Alain and Bengio trained linear classifiers on each layer of a network to see where information becomes linearly available. The origin of the probing toolkit (from memory).</p><div class="src">Alain &amp; Bengio, arXiv 1610.01644</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Directions you can read and push</div><p>Representation engineering and activation addition showed that concept directions in activations can both be read out and used to steer behaviour at inference time.</p><div class="src">Zou et al., arXiv 2310.01405; Turner et al., arXiv 2308.10248</div></div></li>
+        <li><span class="yr">2023–25</span><div><div class="t">Stated reasons are not a reliable window</div><p>Experiments showed that chain-of-thought explanations can omit the real influence on an answer, such as a planted hint or bias. Later work on reasoning models found hints used but rarely acknowledged. This is why generated explanations are not accepted as evidence (from memory).</p><div class="src">Turpin et al., arXiv 2305.04388; Chen et al. (Anthropic), arXiv 2505.05410</div></div></li>
+        <li><span class="yr">2024–25</span><div><div class="t">Features and circuits in production-scale models</div><p>Sparse autoencoders extracted millions of interpretable features from a production model, and circuit tracing then followed how some behaviours are computed. Impressive, partial, and costly; coverage of the model is incomplete (from memory).</p><div class="src">Templeton et al., 2024; Lindsey et al., 2025 (Anthropic, transformer-circuits.pub)</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Probes for high-stakes interactions, and the cascade</div><p>Probes were compared with LLM monitors for spotting high-stakes conversations. Probes were far cheaper, comparable in some settings, and a probe-plus-LLM cascade beat either alone at fixed compute. One reported limit: the best probe found fewer high-stakes cases than the best LLM baseline at a 1% false-positive rate.</p><div class="src">McKenzie et al., arXiv 2506.10805</div></div></li>
+        <li><span class="yr">Jan 2026</span><div><div class="t">Production-ready probes at Google DeepMind</div><p>A paper on probes for cyber-misuse and jailbreak detection in Gemini reports that probes complement black-box classifiers and informed deployed mitigations. Probes struggled to generalise to long-context inputs, a production distribution shift. The architecture routes the uncertain middle band to a prompted LLM, the cascade of Simulation 3. A secondary digest reports Anthropic describing a similar architecture; I did not read that paper.</p><div class="src">arXiv 2601.11516, 2026</div></div></li>
+        <li><span class="yr">Apr 2026</span><div><div class="t">US model-risk guidance replaced, with generative AI out of scope</div><p>Commentary reports that the US banking agencies issued SR 26-2 and OCC Bulletin 2026-13 on 17 April 2026, superseding SR 11-7, and that the new text places generative and agentic AI outside its scope pending a request for information. Sources differ in detail and are secondary, so confirm against the Federal Reserve and OCC texts. The practical reading: the principles still guide validators, and expect frameworks such as NIST AI RMF to fill the gap.</p><div class="src">Secondary: Fiddler AI and Fruggr summaries, 2026 (unverified against primary text)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Evasion of probes</div><p>Work reported in 2026 suggests models can be made to control their activations in ways that hide from simple probes, echoing earlier results on obfuscated activations. Search snippets only; I did not read the paper.</p><div class="src">arXiv 2608.21664 (unverified); Bailey et al., arXiv 2412.09565 (from memory)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Task test sets with pre-agreed bars and intervals</b></td><td>Expert-labelled cases from real inputs, bound reported, bar set before testing.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Human approval gates and full logging</b></td><td>The control most banks lean on first for LLM outputs.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Version pinning and regression tests on vendor updates</b></td><td>Re-run the frozen test set whenever the model or prompt changes.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>LLM-as-judge in monitoring, with human spot-checks</b></td><td>Sampled outputs scored by a judge, calibrated against human labels.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Activation probes in production monitoring</b></td><td>Published by frontier labs for misuse detection; for banks using hosted APIs the activations are not exposed, so this is mainly for self-hosted models.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Sparse-autoencoder features as validation evidence</b></td><td>Research on finding features linked to behaviours; not yet a standard artefact in a validation file.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Steering as a safety control</b></td><td>Demonstrated in research; effects can be blunt, and I found no reports of banks relying on it.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Behavioural evidence with honest bounds, plus controls and monitoring, is what validators can accept now. Interpretability is a promising addition for monitoring, and for hypotheses about why, but it supports the case rather than carries it.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These turn up in evidence packages, human-written and AI-written. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">"Explainability" offered as validation</div><p>A heatmap, attention plot or the model's own rationale presented as proof the model is sound.</p><div class="spot"><b>Spot it</b>Ask what test shows the explanation is true of the model. If the answer is "it looks plausible", it is illustration, not evidence.</div></li>
+        <li><div class="t">Zero failures in a small test</div><p>"We ran 40 cases, all passed."</p><div class="spot"><b>Spot it</b>Compute the rule of three: 3 ÷ 40 is about 7.5%. Ask what failure rate that is supposed to demonstrate.</div></li>
+        <li><div class="t">Paraphrase inflation</div><p>A large row count built from rewordings of a few scenarios.</p><div class="spot"><b>Spot it</b>Ask how many distinct underlying scenarios there are, and report the bound on that number.</div></li>
+        <li><div class="t">Test set written by the builders</div><p>Cases the developer imagined, in the style the prompt was tuned on. Performance is optimistic, and the prompt was tuned against them.</p><div class="spot"><b>Spot it</b>Ask where the cases came from and whether any were used to tune the prompt. Keep a held-out set nobody has seen.</div></li>
+        <li><div class="t">Pass bar set after the results</div><p>"85% is good enough" decided once 85% was observed.</p><div class="spot"><b>Spot it</b>Look for a dated test plan that precedes the results.</div></li>
+        <li><div class="t">English only</div><p>Everything tested in English for a bank whose customers write Arabic, Arabizi and mixed text.</p><div class="spot"><b>Spot it</b>Count test rows per language and dialect. Report the bound per language, not pooled.</div></li>
+        <li><div class="t">Rubber-stamp review counted as a control</div><p>A human approves 99.9% of outputs in seconds, and the package counts it as risk reduction.</p><div class="spot"><b>Spot it</b>Ask for override rate and review time. Seed known-bad outputs and see whether reviewers catch them.</div></li>
+        <li><div class="t">A probe or judge treated as ground truth</div><p>Reporting "the monitor found 0.02% violations" as the violation rate.</p><div class="spot"><b>Spot it</b>Ask for the monitor's own recall on a labelled sample. The reported rate is the true rate times recall, plus false alarms.</div></li>
+        <li><div class="t">Monitoring thresholds that never get revisited</div><p>Probe or judge thresholds tuned once on launch data. New languages, longer inputs or a model update shift them silently.</p><div class="spot"><b>Spot it</b>Ask when the monitor was last checked against fresh labelled traffic, and what triggers a recheck.</div></li>
+        <li><div class="t">A vendor model update with no re-test</div><p>The provider changes the model behind the same name and the evidence goes stale.</p><div class="spot"><b>Spot it</b>Check the model identifier is a pinned version and that a regression run is logged for each change.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To a head of model risk · 30 seconds</span>
+          <blockquote>“We can't explain this model's internals, and I won't pretend a heatmap does. What I'll give you is evidence about behaviour: a test set drawn from real credit memos, labelled by two senior analysts, with a pass bar fixed in advance and a confidence bound on the failure rate. Plus a comparison with the manual process, sensitivity tests across wording and language, a human approval step with override logging, and a monitoring plan with a number that triggers a pause.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical validator or interviewer</span>
+          <blockquote>“The package maps to the usual four questions. Soundness: scope, challenger, grounding. Outcomes: clustered test set with Clopper-Pearson bounds per language. Stability: prompt and version sensitivity with a frozen regression suite. Governance: gates, logs, change control. For monitoring on self-hosted models, we're piloting a probe on internal activations as a cheap first filter, with an LLM judge on the grey zone. But the probe's recall is measured on labelled live samples and rechecked after any distribution change. It supports the case; it isn't the case.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Can't you just show us why it gave this answer?”</summary><div class="ans"><p>Not reliably, and I'd rather say so than show a plausible story. For each output we can show the source passages it cites, so a reviewer can check the claim directly. For the model overall, we evidence behaviour: error rates with bounds, stability under rewording, and what happens when it's wrong. Explanations of internals are research tools today; I'd treat them as supporting colour, not as proof.</p></div></details>
+        <details class="reveal"><summary>“You tested 200 cases and had one failure. Is that good enough?”</summary><div class="ans"><p>It depends on the bar and on how independent the cases are. One failure in 200 gives an upper 95% bound of about 2.4%. If those 200 are 20 scenarios in 10 phrasings each, the effective sample is nearer 20 and the bound is much wider. I'd tell you the bound, the number of distinct scenarios, and what we'd need to add to reach the agreed bar.</p></div></details>
+        <details class="reveal"><summary>“Why should we trust a probe that reads the model's internals?”</summary><div class="ans"><p>You shouldn't trust it blindly. It's a classifier trained on labelled examples, so its worth is what we measure: recall and false alarms on fresh labelled traffic, in each language. Its advantage is cost and a different error pattern from a text judge. We use it as the first stage of a cascade and keep a human or judge behind it, and we recheck it when inputs or the model change.</p></div></details>
+        <details class="reveal"><summary>“Is this covered by the model risk rules?”</summary><div class="ans"><p>Our policy treats LLM applications that influence decisions as in scope, and I'd apply the same four-question structure regardless of how a particular regulator words it. Rules for generative AI are still moving (the US replaced SR 11-7 in 2026 and reportedly carved generative AI out for now), so I'd confirm the current CBUAE or SAMA position with compliance rather than quote from memory.</p></div></details>
+        <details class="reveal"><summary>“What's the cheapest control that reduces risk the most?”</summary><div class="ans"><p>Usually a well-designed human approval step, because it changes the consequence of an error, not only its probability. The caveat is that review must be real: measure override rates and review time, and seed known errors to check reviewers catch them.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Why does a validator not accept "the model explained its reasoning" as evidence?</summary><div class="ans"><p>The explanation is generated text. Experiments show it can leave out what actually drove the answer, so it may not be true of the model's computation. Evidence must be something that would look different if the model were bad: measured behaviour, not a story.</p></div></details>
+        <details class="reveal"><summary>2. You ran 100 independent test cases with no failures. What is the upper 95% bound on the failure rate? How many would you need to show it is below 0.5%?</summary><div class="ans"><p>1 − 0.05^(1/100) ≈ 2.9%, close to 3 ÷ 100. For 0.5% you need about 3 ÷ 0.005 = 600 clean independent cases (exactly 598).</p></div></details>
+        <details class="reveal"><summary>3. Your 500 test rows are 25 scenarios each in 20 phrasings. Roughly how many trials do you really have?</summary><div class="ans"><p>About 25. Rows that fail together are not independent. With zero failures the bound is near 3 ÷ 25 = 12%, not 3 ÷ 500 = 0.6%.</p></div></details>
+        <details class="reveal"><summary>4. Name the four validator questions and one cheap piece of evidence for each.</summary><div class="ans"><p>Soundness: scope plus a challenger comparison. Performance: expert-labelled test set with a bound. Stability and monitoring: sensitivity tests, pinned versions, a monitoring plan with triggers. Governance: approval gates and logs.</p></div></details>
+        <details class="reveal"><summary>5. Of 100,000 daily requests, 100 are real violations (0.1%). A probe-first cascade catches 85 of them and wrongly stops 0.05% of the 99,900 genuine requests. Using these numbers, what share of stops are real?</summary><div class="ans"><p>Genuine stops: 99,900 × 0.0005 ≈ 50. Real stops: 85. Precision = 85 ÷ 135 ≈ 63%. Roughly one in three stops needs human release, so the process behind the block matters as much as the probe.</p></div></details>
+        <details class="reveal"><summary>6. What does a probe's high score tell you, and what does it not?</summary><div class="ans"><p>It says the activations resemble those of the labelled examples the probe was trained on, so the request deserves a closer look. It does not say why, does not prove intent, and may not hold on inputs unlike the training data (other languages, long documents).</p></div></details>
+        <details class="reveal"><summary>7. Why might a bank using a hosted API be unable to use probes or steering?</summary><div class="ans"><p>Both need access to the model's internal activations, which hosted APIs normally do not expose. They apply to self-hosted open-weight models, or to the vendor's own safety stack. For hosted models, rely on behavioural evidence, logging and external monitors.</p></div></details>
+        <details class="reveal"><summary>8. Your monitor reports 0.02% violations among requests. What do you ask before believing it?</summary><div class="ans"><p>The monitor's recall and false-alarm rate on a labelled sample of current traffic. If recall is 50%, the true rate is about twice what it reports; if it was tuned on English and traffic is now partly Arabic, recall may have changed.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>Board of Governors of the Federal Reserve System and OCC. <a href="https://www.federalreserve.gov/supervisionreg/srletters/sr1107.htm">SR 11-7: Guidance on Model Risk Management</a>. 2011. Note: reported to have been superseded in 2026 (see next items).</li>
+        <li><a href="https://www.fiddler.ai/blog/sr-26-2-model-risk-management-guidance">SR 26-2 Model Risk Management: What Replaced SR 11-7 and What It Means for LLMs and AI Agents</a>. Fiddler AI, 2026. Secondary commentary; verify against the Federal Reserve and OCC texts.</li>
+        <li><a href="https://www.fruggr.io/en/sr-11-7-replaced-sr-26-2-ai-model-risk-2026/">SR 11-7 Replaced by SR 26-2: AI Model Risk in 2026</a>. Fruggr, 2026. Secondary commentary.</li>
+        <li>NIST. <a href="https://www.nist.gov/itl/ai-risk-management-framework">AI Risk Management Framework</a> and the Generative AI Profile (NIST AI 600-1).</li>
+        <li>J. Hanley, A. Lippman-Hand. <a href="https://doi.org/10.1001/jama.1983.03340060055026">If nothing goes wrong, is everything all right? Interpreting zero numerators</a>. JAMA, 1983. The rule of three.</li>
+        <li>G. Alain, Y. Bengio. <a href="https://arxiv.org/abs/1610.01644">Understanding intermediate layers using linear classifier probes</a>. arXiv, 2016.</li>
+        <li>A. Zou et al. <a href="https://arxiv.org/abs/2310.01405">Representation Engineering: A Top-Down Approach to AI Transparency</a>. arXiv, 2023.</li>
+        <li>A. Turner et al. <a href="https://arxiv.org/abs/2308.10248">Steering Language Models With Activation Engineering</a>. arXiv, 2023.</li>
+        <li>A. Arditi et al. <a href="https://arxiv.org/abs/2406.11717">Refusal in Language Models Is Mediated by a Single Direction</a>. arXiv, 2024.</li>
+        <li>M. Turpin et al. <a href="https://arxiv.org/abs/2305.04388">Language Models Don't Always Say What They Think</a>. NeurIPS, 2023.</li>
+        <li>Y. Chen et al. <a href="https://arxiv.org/abs/2505.05410">Reasoning Models Don't Always Say What They Think</a>. Anthropic, 2025.</li>
+        <li>A. Templeton et al. <a href="https://transformer-circuits.pub/2024/scaling-monosemanticity/">Scaling Monosemanticity</a>. Anthropic, 2024. And J. Lindsey et al. <a href="https://transformer-circuits.pub/2025/attribution-graphs/biology.html">On the Biology of a Large Language Model</a>. Anthropic, 2025.</li>
+        <li>A. McKenzie et al. <a href="https://arxiv.org/abs/2506.10805">Detecting High-Stakes Interactions with Activation Probes</a>. arXiv, 2025.</li>
+        <li><a href="https://arxiv.org/abs/2601.11516">Building Production-Ready Probes For Gemini</a>. Google DeepMind, arXiv 2601.11516, 2026.</li>
+        <li>L. Bailey et al. <a href="https://arxiv.org/abs/2412.09565">Obfuscated Activations Bypass LLM Latent-Space Defenses</a>. arXiv, 2024. Cited from memory.</li>
+        <li>C. Rudin. <a href="https://arxiv.org/abs/1811.10154">Stop Explaining Black Box Machine Learning Models for High Stakes Decisions and Use Interpretable Models Instead</a>. Nature Machine Intelligence, 2019.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in Track A: Foundation models for transaction data (A8.1)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const Q = x => 1 - L.normCdf(x);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+
+  // =====================================================================
+  // Simulation 1: evidence package
+  // =====================================================================
+  const QS = ["Design is sound for the purpose", "Performance is good enough, with a bound", "Stays inside limits as things change", "People can challenge and override"];
+  const ITEMS = [
+    ["Scope and prohibited uses",           [2, 0, 0, 1]],
+    ["Challenger comparison",               [1, 2, 0, 0]],
+    ["Expert-labelled test set with bound", [0, 3, 0, 0]],
+    ["Red-team set",                        [0, 1, 1, 0]],
+    ["Sensitivity tests",                   [1, 0, 2, 0]],
+    ["Citations to source passages",        [1, 0, 0, 1]],
+    ["Internal-state probes and feature dictionaries", [0.5, 0, 0.5, 0]],
+    ["Human approval gate and logs",        [0, 0, 0, 2]],
+    ["Monitoring plan with triggers",       [0, 0, 2, 1]],
+    ["Version pinning and change control",  [0, 0, 1, 1]]
+  ];
+  const UCS = [
+    ["Internal meeting-notes summariser", [1, 1, 1, 1]],
+    ["Customer-facing chatbot", [2, 2, 2, 1]],
+    ["Agent preparing credit or payment actions", [3, 3, 2, 2]]
+  ];
+  const S1 = { uc: 1, on: new Set([6]) };
+  const ucBox = $("uc-btns"), tgBox = $("ev-toggles");
+  UCS.forEach((u, i) => {
+    const b = document.createElement("button");
+    b.className = "btn"; b.type = "button"; b.textContent = u[0];
+    b.addEventListener("click", () => { S1.uc = i; renderPack(); });
+    ucBox.appendChild(b);
+  });
+  ITEMS.forEach((it, i) => {
+    const b = document.createElement("button");
+    b.className = "toggle"; b.type = "button"; b.textContent = it[0];
+    b.addEventListener("click", () => { S1.on.has(i) ? S1.on.delete(i) : S1.on.add(i); renderPack(); });
+    tgBox.appendChild(b);
+  });
+  const CAP = 3;
+  function score(set) {
+    const s = [0, 0, 0, 0];
+    set.forEach(i => ITEMS[i][1].forEach((p, q) => { s[q] += p; }));
+    return s.map(v => Math.min(CAP, v));
+  }
+  function renderPack() {
+    [...ucBox.children].forEach((b, i) => b.setAttribute("aria-pressed", String(i === S1.uc)));
+    [...tgBox.children].forEach((b, i) => b.setAttribute("aria-pressed", String(S1.on.has(i))));
+    const need = UCS[S1.uc][1], got = score(S1.on);
+    let html = "", short = [];
+    QS.forEach((q, i) => {
+      const ok = got[i] >= need[i];
+      if (!ok) short.push(i);
+      html += `<div class="cov-row"><div class="q"><b>${i + 1}.</b> ${q}</div><div class="cov-bar"><div class="fill${ok ? "" : " short"}" style="width:${100 * got[i] / CAP}%"></div><div class="need" style="left:calc(${100 * need[i] / CAP}% - 1px)"></div></div><div class="n">${got[i]} of ${CAP} points; needs ${need[i]}. ${ok ? "Met." : "Gap of " + (need[i] - got[i]) + "."}</div></div>`;
+    });
+    $("cov").innerHTML = html;
+    let v;
+    if (S1.on.size === 0) v = "Nothing submitted. The validator has nothing to assess.";
+    else if (short.length === 0) v = "<b>No gaps at this level.</b> Every question is answered at the level this use case needs. A real validator would still probe the quality of each item, but the structure is complete.";
+    else {
+      let best = -1, bestGain = 0;
+      ITEMS.forEach((it, i) => {
+        if (S1.on.has(i)) return;
+        const g = score(new Set([...S1.on, i]));
+        const gain = short.reduce((a, q) => a + Math.max(0, Math.min(need[q], g[q]) - got[q]), 0);
+        if (gain > bestGain) { bestGain = gain; best = i; }
+      });
+      v = "<b>" + short.length + " of 4 questions unanswered at the required level.</b> " + (best >= 0 ? "The single biggest improvement is to add <b>" + ITEMS[best][0].toLowerCase() + "</b>." : "Add more evidence of the missing kinds.");
+      if (S1.on.has(6) && [...S1.on].every(i => i === 6)) v += " Interpretability alone leaves every question open.";
+    }
+    $("s1-verdict").innerHTML = v;
+  }
+
+  // =====================================================================
+  // Simulation 2: test bounds
+  // =====================================================================
+  function cdf(k, n, p) {
+    if (p <= 0) return 1;
+    if (p >= 1) return 0;
+    let t = Math.pow(1 - p, n), s = t;
+    for (let i = 0; i < k; i++) { t *= (n - i) / (i + 1) * p / (1 - p); s += t; }
+    return s;
+  }
+  function upper(k, n) {
+    if (n <= 0) return 1;
+    if (k >= n) return 1;
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (cdf(k, n, m) > 0.05) lo = m; else hi = m; }
+    return (lo + hi) / 2;
+  }
+  const S2 = { n: 300, k: 0, c: 1, bar: 0.01 };
+  const boundBox = $("bound-chart");
+  const nFmt = v => L.fmtInt(Math.round(Math.pow(10, v)));
+  function renderBound() {
+    const nRows = Math.round(Math.pow(10, +$("s-n").value)), k = S2.k, c = S2.c;
+    const neff = Math.max(1, Math.round(nRows / c)), keff = Math.min(Math.round(k / c), neff);
+    const ub = upper(keff, neff);
+    const W = Math.max(300, boundBox.clientWidth), H = 280, m = { l: 48, r: 14, t: 14, b: 44 };
+    const svg = mk(boundBox, W, H, "Upper bound on failure rate against number of independent trials");
+    const x = L.scale(Math.log10(30), Math.log10(3000), m.l, W - m.r);
+    const ymax = 0.2;
+    const y = L.scale(0, ymax, H - m.b, m.t);
+    [0, 0.05, 0.1, 0.15, 0.2].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" });
+    });
+    [30, 100, 300, 1000, 3000].forEach(v => tx(svg, x(Math.log10(v)), H - m.b + 16, L.fmtInt(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "independent trials (log scale)", { "text-anchor": "middle" });
+    let pts = [];
+    for (let i = 0; i <= 50; i++) {
+      const nn = Math.pow(10, Math.log10(30) + (Math.log10(3000) - Math.log10(30)) * i / 50);
+      const nI = Math.round(nn);
+      pts.push([x(Math.log10(nI)), y(Math.min(ymax, upper(Math.min(keff, nI), nI)))]);
+    }
+    L.svg("path", { d: "M" + pts.map(p => p[0].toFixed(1) + "," + p[1].toFixed(1)).join("L"), class: "cv-curve" }, svg);
+    if (S2.bar <= ymax) {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(S2.bar), y2: y(S2.bar), class: "cv-rule" }, svg);
+      tx(svg, W - m.r - 4, y(S2.bar) - 5, "pass bar " + pct(S2.bar, S2.bar < 0.01 ? 2 : 1), { "text-anchor": "end", class: "lbl-warn" });
+    }
+    const nc = Math.max(30, Math.min(3000, neff));
+    L.svg("circle", { cx: x(Math.log10(nc)), cy: y(Math.min(ymax, ub)), r: 6, class: "cv-now" }, svg);
+    $("st-neff").textContent = L.fmtInt(neff);
+    $("st-neff-s").textContent = c > 1 ? nRows + " rows ÷ " + c + " paraphrases" : "rows are treated as independent";
+    $("st-ub").textContent = pct(ub, ub < 0.01 ? 2 : 1);
+    $("st-ub-s").textContent = keff + " failure" + (keff === 1 ? "" : "s") + " in " + L.fmtInt(neff) + " trials";
+    const need = Math.ceil(Math.log(0.05) / Math.log(1 - S2.bar));
+    $("st-need").textContent = L.fmtInt(need);
+    const pass = ub <= S2.bar;
+    $("st-ub-b").className = "stat " + (pass ? "ok" : "bad");
+    let msg = pass ? "You can defend the claim: with 95% confidence the failure rate is below the bar." : "You cannot yet claim the bar is met. The data are consistent with a failure rate as high as <b>" + pct(ub, 1) + "</b>.";
+    if (c > 1) msg += " Counting " + nRows + " rows as independent would have suggested " + pct(upper(k, nRows), 1) + ", which overstates your evidence.";
+    $("s2-verdict").innerHTML = msg;
+  }
+  L.bind("s-n", nFmt, () => renderBound());
+  L.bind("s-k", v => String(v), v => { S2.k = v; renderBound(); });
+  L.bind("s-c", v => String(v), v => { S2.c = v; renderBound(); });
+  L.bind("s-bar", v => pct(Math.pow(10, v), Math.pow(10, v) < 0.01 ? 2 : 1), v => { S2.bar = Math.pow(10, v); renderBound(); });
+
+  // =====================================================================
+  // Simulation 3: probe cascade
+  // =====================================================================
+  const NREQ = 100000, JT = 0.92, JF = 0.005;
+  const S3 = { lo: 1.5, hi: 3.5, pi: Math.pow(10, -2.7), shift: false };
+  const casBox = $("cas-chart");
+  function renderCas() {
+    const d = S3.shift ? 2 : 3, lo = S3.lo, hi = Math.max(S3.hi, S3.lo), pi = S3.pi;
+    const n1 = NREQ * pi, n0 = NREQ - n1;
+    const b0 = Q(hi), j0 = Q(lo) - Q(hi), b1 = Q(hi - d), j1 = Q(lo - d) - Q(hi - d);
+    const caught = n1 * (b1 + JT * j1), fp = n0 * (b0 + JF * j0);
+    const judged = n0 * j0 + n1 * j1;
+    const rec = caught / n1, prec = caught / (caught + fp);
+    const W = Math.max(300, casBox.clientWidth), H = 240, m = { l: 14, r: 14, t: 14, b: 32 };
+    const svg = mk(casBox, W, H, "Score distributions for ordinary and violating requests");
+    const x = L.scale(-3.5, 7, m.l, W - m.r);
+    const f0 = s => L.normPdf(s), f1 = s => L.normPdf(s - d);
+    const y = L.scale(0, 0.42, H - m.b, m.t);
+    L.svg("rect", { x: x(lo), y: m.t, width: Math.max(0, x(hi) - x(lo)), height: H - m.b - m.t, class: "band" }, svg);
+    L.svg("rect", { x: x(hi), y: m.t, width: Math.max(0, x(7) - x(hi)), height: H - m.b - m.t, class: "blk" }, svg);
+    tx(svg, (x(lo) + x(hi)) / 2, m.t + 12, "judge", { "text-anchor": "middle", class: "lbl-warn" });
+    tx(svg, Math.min(W - m.r - 4, x(hi) + 4), m.t + 28, "block", { class: "lbl-ink" });
+    const curve = (f, cls) => {
+      let dd = "M" + x(-3.5).toFixed(1) + "," + y(0).toFixed(1);
+      for (let s = -3.5; s <= 7.0001; s += 0.1) dd += "L" + x(s).toFixed(1) + "," + y(f(s)).toFixed(1);
+      dd += "L" + x(7).toFixed(1) + "," + y(0).toFixed(1) + "Z";
+      L.svg("path", { d: dd, class: cls }, svg);
+    };
+    curve(f0, "dist-b"); curve(f1, "dist-h");
+    for (let s = -2; s <= 6; s += 2) tx(svg, x(s), H - m.b + 16, String(s), { "text-anchor": "middle" });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "probe score (the violating curve is drawn at the same height for visibility; in reality it is far rarer)", { "text-anchor": "middle" });
+    $("stc-rec").textContent = pct(rec, 1);
+    $("stc-rec-b").className = "stat " + (rec >= 0.9 ? "ok" : rec >= 0.75 ? "warn" : "bad");
+    $("stc-rec-s").textContent = Math.round(caught) + " of " + Math.round(n1) + " per 100,000";
+    $("stc-fp").textContent = L.fmtInt(Math.round(fp));
+    $("stc-fp-s").textContent = "per 100,000 requests";
+    $("stc-j").textContent = pct(judged / NREQ, 1);
+    $("stc-j-s").textContent = "judge only: 100% of traffic";
+    $("stc-pr").textContent = pct(prec, 0);
+    $("s3-verdict").innerHTML = "Per 100,000 requests there are about <b>" + Math.round(n1) + "</b> violations. The cascade stops <b>" + Math.round(caught) + "</b> of them and <b>" + Math.round(fp) + "</b> genuine requests, while the judge reads <b>" + L.fmtInt(Math.round(judged)) + "</b> requests instead of 100,000." + (S3.shift ? " Under the shift the same thresholds miss more: recall has fallen because the violation scores sit closer to ordinary ones." : "");
+  }
+  L.bind("s-lo", v => v.toFixed(1), v => { S3.lo = v; renderCas(); });
+  L.bind("s-hi", v => v.toFixed(1), v => { S3.hi = v; renderCas(); });
+  L.bind("s-pi", v => { const p = 100 * Math.pow(10, v); return (p < 1 ? p.toFixed(2) : p.toFixed(1)) + "%"; }, v => { S3.pi = Math.pow(10, v); renderCas(); });
+  $("b-shift").addEventListener("click", () => {
+    S3.shift = !S3.shift;
+    $("b-shift").setAttribute("aria-pressed", String(S3.shift));
+    renderCas();
+  });
+
+  function renderAll() { renderPack(); renderBound(); renderCas(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderBound(); renderCas(); }, 120); });
+})();
+</script>
+</body>
+</html>

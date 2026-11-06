@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Searching Document Images: ColPali, Late Interaction and Contextual Retrieval</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  .ln-single { stroke: var(--warn); stroke-width: 2.4; fill: none; }
+  .ln-multi { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .dot-single { fill: var(--warn); stroke: var(--surface); stroke-width: 2; }
+  .dot-multi { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .cell-bg { fill: var(--sunk); stroke: var(--surface); stroke-width: 1; }
+  .cell-hot { fill: var(--accent); }
+  .cell-best { fill: none; stroke: var(--warn); stroke-width: 2.5; }
+  .cur { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; }
+  .chunkrow { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 12px; border-radius: 8px; background: var(--sunk); font-size: 14px; }
+  .chunkrow .ctx { grid-column: 1 / -1; color: var(--accent); font-size: 13px; }
+  .chunkrow .sc { font-family: var(--font-display); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+  .chunkrow.top { outline: 2px solid var(--accent); }
+  .chunkrow.tie { outline: 2px dashed var(--warn); }
+  .chunks { display: grid; gap: 8px; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track A · Applied frontier: banking, agents and the Gulf</span>
+    <span>Module A6 · Frontier retrieval</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>A6.1 · A6.2</span>
+        <span class="pill n">90 days</span>
+        <span class="star">★ Priority</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Searching Document Images: ColPali, Late Interaction and Contextual Retrieval</h1>
+      <p class="dek">How to retrieve a scanned letter of credit without ever running OCR on it, why keeping many small vectors per page beats one big vector, what that costs in storage, and how a sentence of added context rescues text chunks that have lost their owner.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Instead of squeezing a page into one vector, keep one small vector per patch (or per token) and let each query word find its own best match, so a tiny stamp or a table cell is not averaged away; this is more accurate on scans and layouts, costs one to two orders of magnitude more storage, and a cheaper cousin for plain text is to prepend a line of context to each chunk before indexing it.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A trade-finance operations team has two million scanned pages: letters of credit, bills of lading, invoices, amendment letters, KYC packs. Some are Arabic, some English, many are both, with stamps, handwriting, tables and skewed photocopies. An officer asks: <em>"Which credit carried the amendment stamp about the shipment date?"</em></p>
+        <p>The standard pipeline from M3 is: run OCR and layout parsing, cut the text into chunks, embed each chunk into one vector, search. It works when every step works. On a scan, every step is a chance to lose something. OCR garbles an Arabic stamp. The table loses its row structure. The chunker cuts a clause away from its heading. By the time you search, the thing the officer is asking about may no longer exist in the index.</p>
+        <p><strong>ColPali's idea is to skip the pipeline.</strong> Show the page to a vision-language model as an image, and let it produce a small vector for each patch of the page, roughly a 32 by 32 grid of them. Do the same to the query, one vector per word-piece. Then score a page by asking, for each query word, <em>"what is the best-matching patch on this page?"</em>, and adding those answers up. That scoring rule is called <strong>late interaction</strong>, borrowed from a text model called ColBERT.</p>
+        <p>The word "late" means query and page are encoded separately and only meet at the end, in a cheap comparison. So the page vectors can be computed once, offline. The word "interaction" means the comparison is fine-grained, token against patch, rather than one summary against one summary.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>A single-vector embedding is a summary, and summaries lose the rare detail. Late interaction keeps the detail and pays for it in storage and compute. Almost everything in this lesson is a consequence of that one trade.</div>
+      <div class="prose" style="margin-top:20px">
+        <p>The second topic, <strong>contextual retrieval</strong>, attacks a different loss in the same spirit. A chunk such as <em>"Revenue grew 3% over the previous quarter"</em> is meaningless on its own: whose revenue, which quarter? Embedding it as is gives a vector for a sentence that fits a thousand companies. The fix is to ask an LLM to write one sentence of situating context per chunk and index the two together. Part 2 shows both ideas with numbers you can move.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-colpali">Page image to patch vectors, and MaxSim scoring (A6.1)</h3>
+      <div class="prose">
+        <p>The recipe, as published by Faysse and colleagues (ICLR 2025):</p>
+        <ol>
+          <li><strong>Start with a vision-language model</strong> (VLM). ColPali uses PaliGemma-3B: an image encoder that cuts the page into patches and turns each into a vector, feeding them into a language model (F5.3, attention; F5.4, self-supervised learning). The language model's job is to let patches see each other, so a patch containing "5,000" knows it sits under the heading "Amount".</li>
+          <li><strong>Add a small linear layer</strong> that projects each patch's output to 128 dimensions. Roughly 1,000 patches per page, so about 1,000 vectors of 128 numbers each. This is the "bag of embeddings".</li>
+          <li><strong>Encode the query the same way</strong>, as text through the same model: one 128-dimensional vector per query token.</li>
+          <li><strong>Score with MaxSim.</strong> For every query token, take its similarity (dot product of normalised vectors, so cosine) with every patch, keep the maximum, and sum over query tokens.</li>
+        </ol>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>S</mi><mo stretchy="false">(</mo><mi>q</mi><mo>,</mo><mi>d</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mrow><mi>i</mi><mo>∈</mo><mi>q</mi></mrow></munder><munder><mo>max</mo><mrow><mi>j</mi><mo>∈</mo><mi>d</mi></mrow></munder><mo stretchy="false">⟨</mo><msub><mi>q</mi><mi>i</mi></msub><mo>,</mo><msub><mi>d</mi><mi>j</mi></msub><mo stretchy="false">⟩</mo></math>
+        <p class="where"><i>q</i><sub>i</sub> is the vector of query token <i>i</i>; <i>d</i><sub>j</sub> is the vector of page patch <i>j</i>. The inner <b>max</b> says "find the one patch that best answers this word". The outer <b>sum</b> says "a good page answers all the words". Nothing is averaged across the page, so a small region can score fully.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Training uses the contrastive idea from F5.4: given a query and its page, push the MaxSim score up relative to the other pages in the batch. ColPali was trained on about 120,000 query-page pairs, a mix of public document question sets and synthetic queries that a language model wrote about web-crawled PDF pages. The authors also released <strong>ViDoRe</strong>, a benchmark of page-retrieval tasks across domains, and showed that the model beat pipelines built on OCR plus captioning plus text embeddings, while indexing faster, because there is no OCR or layout stage to run.</p>
+        <p>Try the scoring rule yourself. The page below is a toy: 48 patches, each carrying a hidden topic (amount, goods, stamp, and some others). A "query token" is a vector pointing at one topic. The brightness of each cell is its cosine similarity to the chosen token, and the ringed cell is the maximum.</p>
+      </div>
+
+      <figure class="figure" id="fig-grid">
+        <div class="fig-head"><span class="fig-title">Each query word finds its own best patch</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> pick "amount", then "goods", then "stamp". Each lights up different cells and the ring jumps. The page score is the sum of the three ringed values. Then drag the stamp size down to 1 patch: the stamp token still finds its patch and still scores near the top, because nothing was averaged.</p>
+        <div class="btns" role="group" aria-label="Query token">
+          <button class="btn" type="button" data-tok="0" aria-pressed="true">Token: amount</button>
+          <button class="btn" type="button" data-tok="1" aria-pressed="false">Token: goods</button>
+          <button class="btn" type="button" data-tok="2" aria-pressed="false">Token: stamp</button>
+        </div>
+        <div class="chart-wrap" id="grid-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--accent)"></i>Cosine similarity to the chosen token (brighter is higher)</span>
+          <span><i class="sq" style="background:none;border:2px solid var(--warn)"></i>Best patch (the MaxSim term)</span>
+          <span>Letters: A amount, G goods, S stamp, o other, blank background</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-k1">Size of the stamp on the page <output for="s-k1"></output></label><input type="range" id="s-k1" min="0" max="12" step="1" value="3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Best match, amount token</div><div class="v" id="g-a"></div><div class="s">cosine, 1 is identical</div></div>
+          <div class="stat"><div class="k">Best match, goods token</div><div class="v" id="g-g"></div><div class="s">cosine</div></div>
+          <div class="stat" id="g-s-b"><div class="k">Best match, stamp token</div><div class="v" id="g-s"></div><div class="s" id="g-s-s"></div></div>
+          <div class="stat"><div class="k">Page MaxSim score</div><div class="v" id="g-tot"></div><div class="s">sum of the three</div></div>
+        </div>
+        <p class="sim-note">Simulated: an invented 6 by 8 page of patches. Each patch vector is its topic's unit direction plus small random noise, in 8 dimensions instead of 128. Cosines are exact for that data. The stamp size changes how many background patches become stamp patches. Real models learn the vectors; here we only show how the scoring rule treats them.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two practical details. First, the query is short and the page is long, so the work at search time is: for each of about 10–20 query tokens, compare with each of about 1,000 patches of each candidate page. That is cheap per page but not free across millions, which is why systems retrieve candidates first (next topic) and run MaxSim as a second stage. Second, ColPali comes with a family: ColQwen2 and later models swap in other VLMs, and the open-source <code>colpali-engine</code> library and the Vespa, Qdrant, Weaviate and Elastic style vector stores now support multi-vector fields. Check the current model card for your language and licence needs.</p>
+      </div>
+
+      <h3 class="sub" id="m-late">Why late interaction beats one vector per page (A6.2)</h3>
+      <div class="prose">
+        <p>The usual dense retriever ("bi-encoder", F1.1) squeezes a page into <em>one</em> vector and compares by one dot product. Think of it as a page's average meaning. Averages are good at <em>gist</em> and bad at <em>needles</em>. If the answer is a stamp covering 3% of the page, it contributes 3% of the average and is easily outvoted by a distractor page that talks about amounts and goods at length.</p>
+        <p>The opposite end is a <strong>cross-encoder</strong>, which reads query and page together and is far more accurate but must be rerun for every pair, so it can only rerank a short list. Late interaction sits between: representations are precomputed (fast, indexable) but the comparison is fine-grained. ColBERT (Khattab and Zaharia, 2020) introduced it for text, getting close to cross-encoder quality at a fraction of the cost.</p>
+        <p>The simulation below makes the difference visible. There are 24 toy pages. A query asks for three things: an amount, goods and a stamp. The 23 distractors each mention amounts and goods heavily (7–14 patches each) but contain no stamp. The one correct page is ordinary on amounts and goods (5–7 patches each) and has the stamp. Slide the stamp's size and watch where the correct page ranks under each scoring rule.</p>
+      </div>
+
+      <figure class="figure" id="fig-rank">
+        <div class="fig-head"><span class="fig-title">One vector per page versus one vector per patch</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> at stamp size 3 the single-vector method buries the right page near the bottom of 24, while MaxSim puts it first. Drag the stamp up to 12 patches (a quarter of the page) and the single-vector rank slowly recovers. Set it to 0 to see what happens when the page does not contain the stamp at all.</p>
+        <div class="chart-wrap" id="rank-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--warn)"></i>Single mean vector per page</span>
+          <span><i style="background:var(--accent)"></i>Late interaction (MaxSim)</span>
+          <span><i style="background:var(--muted)"></i>Current stamp size</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-k2">Stamp size, in patches out of 48 <output for="s-k2"></output></label><input type="range" id="s-k2" min="0" max="12" step="1" value="3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="r-s-b"><div class="k">Correct page ranks, one vector</div><div class="v" id="r-s"></div><div class="s">of 24 (1 is best)</div></div>
+          <div class="stat" id="r-m-b"><div class="k">Correct page ranks, MaxSim</div><div class="v" id="r-m"></div><div class="s">of 24</div></div>
+          <div class="stat"><div class="k">Share of the page that is stamp</div><div class="v" id="r-share"></div><div class="s">the dilution in a mean vector</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: the same invented 24-page corpus as Simulation 1, 8 dimensions, seeded so the result is repeatable. One seed is one example, not a measured accuracy: with other seeds the exact ranks move but the direction does not. "Single vector" is the cosine between the mean patch vector and the mean query-token vector. No sampling noise beyond the fixed seed.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The failure of the single vector is not a bug in any one model. It is arithmetic: the mean of many patches is dominated by whatever occupies most of the page. Better training helps, and so does making the single vector bigger, but the information bottleneck remains. This is the same pressure behind hybrid search (M3.2): different scoring rules catch different needles. Late interaction is the dense version of what BM25 does with exact words (M3.1): every query term gets to find its own match.</p>
+      </div>
+
+      <h3 class="sub" id="m-cost">The price: storage, and how people shrink it</h3>
+      <div class="prose">
+        <p>One vector per patch is the cost. ColPali stores about 1,030 vectors of 128 numbers for each page. In 16-bit floats that is 1,030 × 128 × 2 bytes ≈ 264 kB per page, against 2 kB for a single 1,024-dimension vector. That is about 130 times more, before any index overhead. For two million pages: about 0.5 TB for ColPali against 4 GB for one vector each. For a hundred million pages it is a different conversation.</p>
+        <p>The standard ways to shrink it, all of which trade a little accuracy for a lot of space:</p>
+        <ul>
+          <li><strong>Pool the patches.</strong> Average neighbouring patches (for example merge 2 to 3 together) before storing. Fewer vectors per page, coarser detail. Reported results show a large storage saving for a modest quality drop on typical documents; a tiny stamp may be the thing that suffers, so test on your own needles.</li>
+          <li><strong>Quantise the numbers.</strong> 8-bit integers halve the size; binary vectors (one bit per dimension) cut it by 16, with a rescoring pass using the full-precision vectors on a short list. Same idea as P3.1 for model weights, applied to the index.</li>
+          <li><strong>Shrink the dimension.</strong> Matryoshka-style embeddings (R10.1) let you truncate vectors with graceful loss. Some newer multi-vector models are trained to do this.</li>
+          <li><strong>Two-stage retrieval.</strong> Use a cheap first stage (a single vector, BM25, or a compressed form) to find a few hundred candidates, then rescore only those with exact MaxSim. ColBERTv2 and PLAID (2021–22) did this for text with residual compression of token vectors and centroid-based candidate pruning. MUVERA (Google, NeurIPS 2024) turns a set of vectors into one fixed-size vector whose dot product approximates MaxSim, so ordinary single-vector search can do the candidate stage, reporting that it retrieves several times fewer candidates for the same recall.</li>
+        </ul>
+        <p>Use the calculator to see the shape of the problem.</p>
+      </div>
+
+      <figure class="figure" id="fig-cost">
+        <div class="fig-head"><span class="fig-title">What a page index costs</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> keep full precision and no pooling and slide the corpus to 10 million pages: terabytes. Now pool by 4 and store binary vectors: it falls by a factor of 64 to a size a single machine holds in memory. Whether recall survives is an experiment on your documents, not something this arithmetic can tell you.</p>
+        <div class="chart-wrap" id="cost-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-pages">Pages in the corpus <output for="s-pages"></output></label><input type="range" id="s-pages" min="4" max="8" step="0.05" value="6.3"></div>
+          <div class="ctl"><label for="s-pool">Patch pooling factor <output for="s-pool"></output></label><input type="range" id="s-pool" min="0" max="3" step="1" value="0"></div>
+          <div class="ctl"><label for="s-bits">Number precision <output for="s-bits"></output></label><input type="range" id="s-bits" min="0" max="2" step="1" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Vectors per page</div><div class="v" id="c-vec"></div><div class="s">of 128 numbers each</div></div>
+          <div class="stat"><div class="k">Size per page</div><div class="v" id="c-page"></div><div class="s" id="c-page-s"></div></div>
+          <div class="stat" id="c-tot-b"><div class="k">Whole corpus, multi-vector</div><div class="v" id="c-tot"></div><div class="s">vectors only, no index overhead</div></div>
+          <div class="stat"><div class="k">Whole corpus, one 1,024-d vector</div><div class="v" id="c-one"></div><div class="s">16-bit, for comparison</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: pure arithmetic with the published shape of ColPali (about 1,030 vectors of 128 dimensions per page) and an assumed single-vector baseline of 1,024 dimensions at 16 bits. Sizes use 1 TB = 10<sup>12</sup> bytes. Index structures, replicas and metadata add to real totals. Quality loss from pooling or quantisation is not simulated.</p>
+      </figure>
+
+      <h3 class="sub" id="m-context">Contextual retrieval: giving a chunk its owner back (A6.2)</h3>
+      <div class="prose">
+        <p>Everything above was about image pages. Plain text pipelines have a neighbouring problem. Chunking (M3.3) slices a long report into passages, and each passage loses the identity of the document it came from. <em>"The provision charge rose to AED 95 million."</em> Which bank, which period? Both the embedding and the keyword index see only the sentence.</p>
+        <p>Anthropic's <strong>contextual retrieval</strong> (September 2024) fixes this at indexing time: for every chunk, give an LLM the whole document plus the chunk and ask for a sentence or two that situates the chunk ("This is from Gulf Mercantile Bank's Q2 2025 results; it discusses group revenue growth"). Prepend that to the chunk, then embed it <em>and</em> build the BM25 index from the enriched text. Anthropic reported that this cut failed top-20 retrievals by about 49% on their test sets, and by about 67% when combined with a reranker (figures from memory of their post, internal benchmarks; verify before quoting). A related idea, <strong>late chunking</strong> (Jina, 2024), gets context a different way: run a long-context embedding model over the whole document first, then pool the token vectors into chunk vectors, so each chunk vector has already "seen" the rest of the document.</p>
+        <p>This is where the two topics meet. ColBERT-style token vectors are also contextual: each token's vector depends on its neighbours. The difference is where you keep the context: in extra words (contextual retrieval), in the vector (late chunking), or in many vectors (late interaction).</p>
+      </div>
+
+      <figure class="figure" id="fig-ctx">
+        <div class="fig-head"><span class="fig-title">The same query, with and without context</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> on raw chunks, the Q2 and Q1 revenue sentences, and even another bank's, all look alike to a keyword scorer. Switch on the generated context and the right chunk separates from the rest.</p>
+        <div class="btns" role="group" aria-label="Indexing mode">
+          <button class="btn" type="button" id="b-raw" aria-pressed="true">Index raw chunks</button>
+          <button class="btn" type="button" id="b-ctx" aria-pressed="false">Index chunk + generated context</button>
+        </div>
+        <p style="margin:12px 0 4px;font-size:14px"><b>Query:</b> <span id="q-text"></span></p>
+        <div class="chunks" id="chunk-list"></div>
+        <p class="verdict" id="s4-verdict" style="margin-top:12px"></p>
+        <p class="sim-note">Simulated: five invented chunks and invented context lines (an LLM would write these in a real system). Scoring is a simplified keyword scorer: the sum of inverse document frequency weights ln(1 + N/df) over distinct query terms found in the text, with N = 5 documents. Real systems use BM25 and embeddings and add a reranker; this only shows why added context changes what a lexical index can see.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Costs to be honest about: one LLM call per chunk at indexing time (made cheap by prompt caching, because the whole document is repeated for each chunk), longer chunks to embed, and a new failure mode, which is that the generated context can be wrong. A wrong "this is from Q2 2025" is now an index-level fact. Validate a sample, and log the model and prompt version (P2.3), because re-running the generator changes your index.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson is the frontier end of the retrieval stack. These are the places to link it to.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">M3.5 · Parsing messy PDFs and scans</span><span class="t"><a href="m3-parsing-messy-pdfs-and-scans.html">The pipeline ColPali tries to skip</a></span><p>OCR, layout and table extraction are the baseline to beat. They also give you text you can quote, filter and index; images alone do not.</p></div>
+        <div class="link-card"><span class="code">M3.1 · M3.2 · Keyword search and hybrid</span><span class="t"><a href="m3-keyword-search-and-bm25.html">BM25</a> and <a href="m3-hybrid-search-and-reciprocal-rank.html">fusion</a></span><p>Contextual retrieval is built on BM25 plus embeddings plus a reranker. Late interaction is the dense analogue of word-by-word matching.</p></div>
+        <div class="link-card"><span class="code">M3.3 · M3.4 · Chunking and query rewriting</span><span class="t"><a href="m3-chunking-strategies.html">Chunking</a> and <a href="m3-query-rewriting-hyde-and-multi.html">query rewriting</a></span><p>Chunking creates the orphaned-chunk problem. Rewriting the query and enriching the chunk are two ends of the same bridge.</p></div>
+        <div class="link-card"><span class="code">F5.3 · F5.4 · Attention and contrastive learning</span><span class="t"><a href="f5-attention.html">Attention</a> and <a href="f5-self-supervised-and-contrastive-learning.html">contrastive training</a></span><p>Patch vectors are contextual because of attention; the retriever is trained by pulling queries towards their pages and pushing others away.</p></div>
+        <div class="link-card"><span class="code">F1.1 · R10.1 · Vectors and Matryoshka</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Cosine and dot product</a> and <a href="r10-matryoshka-embeddings.html">shrinking vectors</a></span><p>MaxSim is a sum of cosines. Truncatable embeddings are one route to a smaller multi-vector index.</p></div>
+        <div class="link-card"><span class="code">A6.3 · Agentic RAG</span><span class="t"><a href="a6-agentic-rag.html">Retrieval as a tool an agent calls</a></span><p>A visual retriever becomes one tool among several: search images for the stamp, search text for the clause, then reconcile.</p></div>
+        <div class="link-card"><span class="code">B7.1 · A14.2 · Trade documents and Arabic OCR</span><span class="t"><a href="b7-document-ai-for-trade-finance.html">Trade finance</a> and <a href="a14-arabic-ocr-and-document-ai.html">Arabic document AI</a></span><p>The use case and the language problem. Retrieval finds the page; extraction (reading the fields off it) is still a separate job.</p></div>
+        <div class="link-card"><span class="code">M5 · A4.2 · Evaluation and groundedness</span><span class="t"><a href="a4-hallucination-detection-and-groundedness.html">Check the answer against the page</a></span><p>Retrieval quality caps answer quality. Measure recall at k on your own documents before judging the generator.</p></div>
+        <div class="link-card"><span class="code">P3.1 · A11 · Compression and sovereign hosting</span><span class="t"><a href="p3-quantization-pruning-and-distillation.html">Quantisation</a> and <a href="a11-sovereign-ai-g42-and-core42.html">in-country models</a></span><p>Open-weight visual retrievers can run on your own hardware, which matters when the pages are customer documents that cannot leave the bank.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Trade finance.</strong> Finding the amendment, the matching bill of lading or the prior presentation across thousands of scans, without waiting for a perfect OCR of Arabic and English side by side.</li>
+          <li><strong>KYC and onboarding packs.</strong> Passport pages, trade licences, board resolutions, with stamps, seals and photographs that carry meaning text does not.</li>
+          <li><strong>Policy and regulatory libraries.</strong> Circulars, with tables of limits and ratios that parsers flatten. Contextual retrieval helps when a clause only makes sense under its heading.</li>
+          <li><strong>Credit files and statements.</strong> Financial statements in PDF with multi-column tables, where "which year does this column belong to?" is the whole question.</li>
+          <li><strong>Internal copilots.</strong> Slides and diagrams in staff knowledge bases, which text-only retrieval ignores.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Visual document retrieval has moved from a single paper to a benchmark-and-model ecosystem in about two years. The live arguments: how much of the OCR pipeline is really redundant, how to make multi-vector indexes affordable, and how to evaluate on realistic, multilingual enterprise documents.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two light searches. Dates and venues below are ones I could confirm; the comparative claims about specific models after 2025 I did not verify.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2020</span><div><div class="t">ColBERT: late interaction for text</div><p>Token-level MaxSim over precomputed document token vectors, with quality near cross-encoders at far lower cost.</p><div class="src">Khattab &amp; Zaharia, SIGIR 2020</div></div></li>
+        <li><span class="yr">2021–22</span><div><div class="t">ColBERTv2 and PLAID: making it affordable</div><p>Residual compression of token vectors, and a centroid-based engine that prunes candidates before exact scoring.</p><div class="src">Santhanam et al., NAACL 2022; Santhanam et al., CIKM 2022</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">ColPali and the ViDoRe benchmark</div><p>Late interaction on page images using a VLM, beating OCR-based pipelines on the new ViDoRe benchmark and indexing faster. Presented at ICLR 2025.</p><div class="src">Faysse et al., arXiv 2407.01449</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Contextual retrieval and late chunking</div><p>Two ways to restore document context to chunks: LLM-written context lines (Anthropic) and pooling token vectors after running a long-context encoder over the whole document (Jina).</p><div class="src">Anthropic, Sept 2024; Günther et al., arXiv 2409.04701</div></div></li>
+        <li><span class="yr">2024–25</span><div><div class="t">MUVERA: multi-vector search with single-vector tools</div><p>Fixed-dimensional encodings whose inner product approximates MaxSim, so off-the-shelf nearest-neighbour search can generate candidates. Reports retrieving 2–5 times fewer candidates than earlier heuristics for the same recall; Google's 2025 write-up quotes 5–20 times.</p><div class="src">Dhulipala et al., NeurIPS 2024; Google Research blog, 2025</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">ViDoRe V3: realistic enterprise retrieval and RAG</div><p>A new benchmark from the ColPali authors' group with NVIDIA contributions: 10 datasets across industrial domains (8 public, 2 private), about 26,000 pages and 3,099 queries translated into 6 languages, with human-verified annotations. Its reported findings: visual retrievers beat textual ones, late interaction and textual reranking help substantially, and models still struggle with non-textual elements, open-ended queries and fine-grained visual grounding.</p><div class="src">arXiv 2601.08620 (via Hugging Face papers page); I did not read the full paper, so check which languages it covers before assuming Arabic</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>OCR, layout parse, chunk, hybrid search, rerank</b></td><td>The standard document RAG stack, with text you can inspect and cite.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Contextual chunk enrichment</b></td><td>LLM-written context lines prepended before embedding and BM25. Cheap to add to an existing text pipeline.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Visual page retrieval as a second index</b></td><td>ColPali-family retrievers alongside the text index, used for scans, slides and layout-heavy pages.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Visual retrieval replacing OCR entirely</b></td><td>Mostly in benchmarks and demos. Banks still need extracted text for fields, audit and search filters.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Pooled or binarised multi-vector indexes</b></td><td>Engineering practice to make the storage tolerable; published results are on public benchmarks, rarely on bank documents.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Keep the text pipeline, add a visual late-interaction index where layout and scans hurt it, enrich text chunks with context, and decide by measuring recall at k on your own documents, in your own languages.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each failure comes with its quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Benchmark scores taken as bank scores</div><p>ViDoRe-style benchmarks use public, mostly English and French documents. Your Arabic bill of lading with a handwritten annotation is out of distribution.</p><div class="spot"><b>Spot it</b>Build 100–200 real queries with known right pages and measure recall at 5 and 20 before choosing a model. Report it per language and per document type.</div></li>
+        <li><div class="t">Retrieval without reading</div><p>Visual retrieval finds the page. It does not extract the amount. Feeding the page to a generator that misreads a digit moves the error downstream.</p><div class="spot"><b>Spot it</b>For any number that drives a decision, require a second path: field extraction with checks, or a human view of the highlighted region.</div></li>
+        <li><div class="t">Storage and latency surprise</div><p>A pilot on 5,000 pages works; the full archive does not fit in memory.</p><div class="spot"><b>Spot it</b>Do the arithmetic in Simulation 3 before the pilot, and test pooled or binary variants for recall loss.</div></li>
+        <li><div class="t">Pooling erases the needle</div><p>Merging patches saves space and quietly blurs small stamps, digits and signatures, the exact things KYC cares about.</p><div class="spot"><b>Spot it</b>Include "small feature" queries in the test set and compare recall before and after pooling.</div></li>
+        <li><div class="t">Images carry instructions</div><p>A page can contain hidden or tiny text such as "ignore previous instructions". Once a VLM reads the retrieved page, that is a prompt injection (A3.1).</p><div class="spot"><b>Spot it</b>Treat retrieved pages as untrusted input; keep tool permissions narrow for the generating step.</div></li>
+        <li><div class="t">Wrong context baked into the index</div><p>The LLM that writes chunk context guesses the period or the entity wrongly. Every retrieval of that chunk is now misdirected, consistently.</p><div class="spot"><b>Spot it</b>Sample 100 enriched chunks and have a person check the context line. Store the prompt and model version alongside the index.</div></li>
+        <li><div class="t">No audit trail from an image embedding</div><p>A vector cannot explain why a page was returned. A reviewer asks "why did it surface this one?"</p><div class="spot"><b>Spot it</b>Show the best-matching patches for each query token (as in Simulation 1). It is a built-in, if rough, explanation.</div></li>
+        <li><div class="t">Near-duplicate pages</div><p>Template letters differ in one number. Both pages score almost the same and the system picks one.</p><div class="spot"><b>Spot it</b>Look at retrieved results at rank 1–5 for near-identical pairs; add metadata filters (customer, date, reference) before the vector search.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Today our document search depends on reading each scan correctly first, and Arabic scans with stamps and tables often are not read correctly. A newer approach searches the page as an image, so a stamp or a table cell can be found even when text extraction fails. It costs more storage, so I would try it on one use case, trade-finance amendments, against a test set of real questions and compare it with what we run now before we commit.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd keep the OCR-and-text pipeline as the baseline and add a ColPali-family late-interaction index for scans and layout-heavy pages, scored by MaxSim on patch embeddings, with a cheap first stage and exact rescoring on the shortlist. I'd budget storage at around 260 kB per page unquantised and test pooling and binarisation for recall loss on small features. On the text side I'd add LLM-generated chunk context to both BM25 and embeddings, then rerank. Everything is judged on recall at k over our own bilingual queries.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just OCR everything better?”</summary><div class="ans"><p>We should, and the text is needed anyway for extraction and audit. But retrieval over OCR inherits every OCR error and every loss of layout. A visual index gives a second path that does not depend on OCR succeeding. Whether it pays for itself is measured, not assumed: recall at k on our scans with and without it.</p></div></details>
+        <details class="reveal"><summary>“What does late interaction actually mean?”</summary><div class="ans"><p>The query and the page are encoded separately, so page vectors are precomputed. They meet late, in a cheap comparison where each query token takes the best match over the page's patches or tokens, and the matches are added up. It keeps fine detail that a single summary vector averages away.</p></div></details>
+        <details class="reveal"><summary>“The storage looks huge. Is this practical?”</summary><div class="ans"><p>Unquantised, about 130 times a single-vector index. In practice you pool patches, quantise to 8-bit or binary, and use a cheap candidate stage so only a few hundred pages get exact scoring. Each step costs some accuracy, so we measure it, and we only apply it to the collections that need layout awareness.</p></div></details>
+        <details class="reveal"><summary>“Does it work for Arabic?”</summary><div class="ans"><p>I would not assume. The underlying VLMs are multilingual to varying degrees and public benchmarks are mostly English and French plus a few other languages. I'd test candidate models on our own Arabic and mixed-language pages, including right-to-left tables and stamps, and report recall by language before choosing.</p></div></details>
+        <details class="reveal"><summary>“How is contextual retrieval different from just bigger chunks?”</summary><div class="ans"><p>Bigger chunks bring context but dilute the match and cost more at query time. Contextual retrieval keeps the chunk small and adds a short, targeted description of where it comes from, so both the keyword index and the embedding know whose revenue and which quarter. The costs are one LLM call per chunk at indexing and the risk of wrong context lines, so we audit a sample.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A query has 12 tokens; a page has 1,030 patch vectors. How many dot products does one MaxSim score need, and which operations are max and which are sum?</summary><div class="ans"><p>12 × 1,030 = 12,360 dot products. For each of the 12 query tokens, take the max over the 1,030 patches; then sum the 12 maxima. Across 1,000 candidate pages that is about 12 million dot products of 128-d vectors, trivial for a GPU but not for a naive scan of 100 million pages, hence the candidate stage.</p></div></details>
+        <details class="reveal"><summary>2. Compute the storage for 5 million pages at 1,030 vectors × 128 dims in 16-bit, and after pooling by 4 and binarising.</summary><div class="ans"><p>Per page: 1,030 × 128 × 2 = 263,680 bytes; × 5 million ≈ 1.32 TB. Pooling by 4 gives about 258 vectors; binary is 1 bit per number so 258 × 128 / 8 = 4,128 bytes per page; × 5 million ≈ 20.6 GB. A reduction by a factor of 64.</p></div></details>
+        <details class="reveal"><summary>3. Why does a single mean vector lose a stamp that covers 3 patches of 48?</summary><div class="ans"><p>The mean gives it weight 3/48 ≈ 6% of the page vector, while amounts and goods that cover many patches dominate the direction. A distractor with strong amounts and goods scores higher against a query mixing all three. MaxSim lets the stamp token match its patch at full strength.</p></div></details>
+        <details class="reveal"><summary>4. What is the difference between a bi-encoder, a cross-encoder and a late-interaction model?</summary><div class="ans"><p>Bi-encoder: one vector per item, precomputed, one dot product; fast, coarse. Cross-encoder: reads query and item together; accurate, but must run per pair, so used for reranking. Late interaction: many vectors per item, precomputed, compared token against token at query time; in between on both accuracy and cost.</p></div></details>
+        <details class="reveal"><summary>5. Name two ways contextual retrieval can make results worse.</summary><div class="ans"><p>The generated context can be wrong (wrong entity or period), which misdirects every query that reaches that chunk; and the added text can pull in generic words that make many chunks look alike for the query. Also, it raises indexing cost, and regenerating the context changes the index, so version it.</p></div></details>
+        <details class="reveal"><summary>6. A vendor says their visual retriever "scores 90% on ViDoRe". What do you ask?</summary><div class="ans"><p>Which version and which subsets and languages; the metric (nDCG@5 or recall@k); how the corpus size compares with ours; whether the model saw similar data in training; what the storage per page is; and the result on a sample of our own Arabic and English documents.</p></div></details>
+        <details class="reveal"><summary>7. When would you still prefer the OCR text pipeline?</summary><div class="ans"><p>When the documents are born-digital PDFs with a clean text layer, when you need exact quotes, filters, field extraction or audit trails, or when storage and latency budgets are tight. Often the answer is both: text as the backbone, visual retrieval as a second index for the hard pages.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>M. Faysse et al. <a href="https://arxiv.org/abs/2407.01449">ColPali: Efficient Document Retrieval with Vision Language Models</a>. ICLR 2025 (arXiv 2407.01449). Introduces ColPali and the ViDoRe benchmark.</li>
+        <li>O. Khattab, M. Zaharia. <a href="https://arxiv.org/abs/2004.12832">ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT</a>. SIGIR, 2020.</li>
+        <li>K. Santhanam et al. <a href="https://arxiv.org/abs/2112.01488">ColBERTv2: Effective and Efficient Retrieval via Lightweight Late Interaction</a>. NAACL, 2022.</li>
+        <li>K. Santhanam et al. <a href="https://arxiv.org/abs/2205.09707">PLAID: An Efficient Engine for Late Interaction Retrieval</a>. CIKM, 2022.</li>
+        <li>L. Dhulipala et al. <a href="https://arxiv.org/abs/2405.19504">MUVERA: Multi-Vector Retrieval via Fixed Dimensional Encodings</a>. NeurIPS, 2024.</li>
+        <li>Google Research. <a href="https://research.google/blog/muvera-making-multi-vector-retrieval-as-fast-as-single-vector-search/">MUVERA: Making multi-vector retrieval as fast as single-vector search</a>. Blog, 2025.</li>
+        <li>Anthropic. <a href="https://www.anthropic.com/news/contextual-retrieval">Introducing Contextual Retrieval</a>. September 2024. The 49% and 67% figures are theirs, on their own benchmarks.</li>
+        <li>M. Günther et al. <a href="https://arxiv.org/abs/2409.04701">Late Chunking: Contextual Chunk Embeddings Using Long-Context Embedding Models</a>. arXiv, 2024.</li>
+        <li>ViDoRe V3: A Comprehensive Evaluation of Retrieval Augmented Generation in Complex Real-World Scenarios. <a href="https://huggingface.co/papers/2601.08620">Hugging Face papers page</a> (arXiv 2601.08620), 2026.</li>
+        <li><a href="https://github.com/illuin-tech/colpali">colpali-engine on GitHub</a>. Code, model cards and the ViDoRe leaderboard links.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in A6: Agentic RAG (A6.3)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // ---------- toy corpus (seeded) ----------
+  const D = 8, NP = 24, NPATCH = 48, TARGET = 5, QT = [2, 3, 7], LET = { 0: "", 2: "A", 3: "G", 7: "S" };
+  function rng(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function build() {
+    const r = rng(116), pages = [];
+    for (let p = 0; p < NP; p++) {
+      const nz = [];
+      for (let i = 0; i < NPATCH; i++) { const v = []; for (let d = 0; d < D; d++) v.push(r() * 0.35); nz.push(v); }
+      const tp = new Array(NPATCH).fill(0);
+      const cnt = (lo, hi) => lo + Math.floor(r() * (hi - lo + 1));
+      let n2, n3;
+      if (p === TARGET) { n2 = cnt(5, 7); n3 = cnt(5, 7); } else { n2 = cnt(7, 14); n3 = cnt(7, 14); }
+      const others = cnt(2, 6);
+      const idx = [...Array(NPATCH).keys()].sort(() => r() - 0.5);
+      let c = 0;
+      for (let i = 0; i < n2; i++) tp[idx[c++]] = 2;
+      for (let i = 0; i < n3; i++) tp[idx[c++]] = 3;
+      for (let i = 0; i < others; i++) tp[idx[c++]] = [1, 4, 5, 6][Math.floor(r() * 4)];
+      pages.push({ nz, tp, order: idx });
+    }
+    const q = QT.map(t => { const v = []; for (let d = 0; d < D; d++) v.push(r() * 0.35); v[t] += 1; return v; });
+    return { pages, q };
+  }
+  const B = build();
+  const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0), nrm = a => Math.sqrt(dot(a, a)), cosv = (a, b) => dot(a, b) / (nrm(a) * nrm(b));
+  function topics(pg, k) {
+    const tp = pg.tp.slice();
+    if (k > 0) { let m = 0; for (let j = 0; j < NPATCH && m < k; j++) { const i = pg.order[NPATCH - 1 - j]; if (tp[i] === 0) { tp[i] = 7; m++; } } }
+    return tp;
+  }
+  function vecs(pg, tp) { return tp.map((t, i) => { const v = pg.nz[i].slice(); v[t] += 1; return v; }); }
+  function scoresFor(k) {
+    return B.pages.map((pg, p) => {
+      const P = vecs(pg, topics(pg, p === TARGET ? k : 0));
+      const mean = new Array(D).fill(0); P.forEach(v => v.forEach((x, i) => mean[i] += x / NPATCH));
+      const qm = new Array(D).fill(0); B.q.forEach(v => v.forEach((x, i) => qm[i] += x / B.q.length));
+      const per = B.q.map(qv => Math.max(...P.map(pv => cosv(qv, pv))));
+      return { single: cosv(mean, qm), maxsim: per.reduce((a, b) => a + b, 0) };
+    });
+  }
+  const rankOf = (sc, key) => 1 + sc.filter((s, i) => i !== TARGET && s[key] > sc[TARGET][key]).length;
+  const RANKS = []; for (let k = 0; k <= 12; k++) { const s = scoresFor(k); RANKS.push([rankOf(s, "single"), rankOf(s, "maxsim")]); }
+
+  // ---------- Sim 1 ----------
+  const S1 = { k: 3, tok: 0 };
+  const gridBox = $("grid-chart");
+  function renderGrid() {
+    const pg = B.pages[TARGET], tp = topics(pg, S1.k), P = vecs(pg, tp);
+    const cols = 8, rows = 6, W = Math.max(300, gridBox.clientWidth), cw = Math.min(46, (W - 8) / cols), ch = cw * 0.8, H = rows * ch + 8;
+    const svg = mk(gridBox, cols * cw + 8, H, "Patch grid of one page coloured by similarity to a query token");
+    const sims = P.map(v => cosv(B.q[S1.tok], v));
+    const best = sims.indexOf(Math.max(...sims));
+    P.forEach((v, i) => {
+      const x = 4 + (i % cols) * cw, y = 4 + Math.floor(i / cols) * ch;
+      L.svg("rect", { x, y, width: cw - 2, height: ch - 2, rx: 3, class: "cell-bg" }, svg);
+      L.svg("rect", { x, y, width: cw - 2, height: ch - 2, rx: 3, class: "cell-hot", "fill-opacity": Math.max(0, sims[i]).toFixed(3) }, svg);
+      const lt = LET[tp[i]] !== undefined ? LET[tp[i]] : "o";
+      if (lt) tx(svg, x + cw / 2 - 1, y + ch / 2 + 3, lt, { "text-anchor": "middle", class: "lbl-ink" });
+      if (i === best) L.svg("rect", { x, y, width: cw - 2, height: ch - 2, rx: 3, class: "cell-best" }, svg);
+    });
+    const best3 = B.q.map(qv => Math.max(...P.map(pv => cosv(qv, pv))));
+    $("g-a").textContent = best3[0].toFixed(2); $("g-g").textContent = best3[1].toFixed(2);
+    $("g-s").textContent = best3[2].toFixed(2); $("g-tot").textContent = best3[0] + best3[1] + best3[2] > 0 ? (best3[0] + best3[1] + best3[2]).toFixed(2) : "0";
+    cls($("g-s-b"), S1.k === 0 ? "bad" : "ok");
+    $("g-s-s").textContent = S1.k === 0 ? "no stamp on this page: only noise matches" : "stamp covers " + S1.k + " of 48 patches";
+  }
+  document.querySelectorAll("[data-tok]").forEach(b => b.addEventListener("click", () => {
+    S1.tok = +b.dataset.tok;
+    document.querySelectorAll("[data-tok]").forEach(o => o.setAttribute("aria-pressed", o === b ? "true" : "false"));
+    renderGrid();
+  }));
+  L.bind("s-k1", v => v + (v === 1 ? " patch" : " patches"), v => { S1.k = v; renderGrid(); });
+
+  // ---------- Sim 2 ----------
+  const S2 = { k: 3 };
+  const rankBox = $("rank-chart");
+  function renderRank() {
+    const W = Math.max(300, rankBox.clientWidth), H = 250, m = { l: 40, r: 14, t: 14, b: 38 };
+    const svg = mk(rankBox, W, H, "Rank of the correct page against stamp size for two scoring methods");
+    const x = L.scale(0, 12, m.l, W - m.r), y = L.scale(1, 24, m.t, H - m.b);
+    [1, 6, 12, 18, 24].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v, { "text-anchor": "end" }); });
+    [0, 3, 6, 9, 12].forEach(v => tx(svg, x(v), H - m.b + 16, v, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Stamp size, patches out of 48", { "text-anchor": "middle" });
+    tx(svg, 12, m.t + 4, "rank", { class: "lbl-ink" });
+    L.svg("line", { x1: x(S2.k), x2: x(S2.k), y1: m.t, y2: H - m.b, class: "cur" }, svg);
+    L.svg("path", { d: L.path(RANKS.map((r, k) => [x(k), y(r[0])])), class: "ln-single" }, svg);
+    L.svg("path", { d: L.path(RANKS.map((r, k) => [x(k), y(r[1])])), class: "ln-multi" }, svg);
+    L.svg("circle", { cx: x(S2.k), cy: y(RANKS[S2.k][0]), r: 5, class: "dot-single" }, svg);
+    L.svg("circle", { cx: x(S2.k), cy: y(RANKS[S2.k][1]), r: 5, class: "dot-multi" }, svg);
+    const [rs, rm] = RANKS[S2.k];
+    $("r-s").textContent = rs; $("r-m").textContent = rm;
+    cls($("r-s-b"), rs === 1 ? "ok" : rs <= 5 ? "warn" : "bad"); cls($("r-m-b"), rm === 1 ? "ok" : rm <= 5 ? "warn" : "bad");
+    $("r-share").textContent = (100 * S2.k / NPATCH).toFixed(0) + "%";
+    $("s2-verdict").innerHTML = S2.k === 0
+      ? "No stamp on the page: neither method should find it. MaxSim still ranks it " + rm + " of 24 because it is a decent match on amounts and goods; the single vector ranks it " + rs + "."
+      : "With the stamp at <b>" + (100 * S2.k / NPATCH).toFixed(0) + "%</b> of the page, one vector puts the right page at rank <b>" + rs + "</b>; MaxSim puts it at rank <b>" + rm + "</b>.";
+  }
+  L.bind("s-k2", v => v + (v === 1 ? " patch" : " patches"), v => { S2.k = v; renderRank(); });
+
+  // ---------- Sim 3 ----------
+  const S3 = { p: 6.3, pool: 0, bits: 0 };
+  const POOL = [1, 2, 4, 8], BITS = [16, 8, 1], BN = ["16-bit floats", "8-bit integers", "binary (1 bit)"];
+  const VEC = 1030, DIM = 128;
+  function fmtB(b) {
+    if (b >= 1e12) return (b / 1e12).toFixed(b >= 1e13 ? 0 : 1) + " TB";
+    if (b >= 1e9) return (b / 1e9).toFixed(b >= 1e11 ? 0 : 1) + " GB";
+    if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+    if (b >= 1e3) return (b / 1e3).toFixed(b >= 1e5 ? 0 : 1) + " kB";
+    return Math.round(b) + " B";
+  }
+  const costBox = $("cost-chart");
+  function renderCost() {
+    const pages = Math.pow(10, S3.p), pool = POOL[S3.pool], bits = BITS[S3.bits];
+    const vec = Math.ceil(VEC / pool), perPage = vec * DIM * bits / 8, full = VEC * DIM * 2, one = 1024 * 2;
+    const tot = pages * perPage, oneTot = pages * one;
+    $("c-vec").textContent = L.fmtInt(vec);
+    $("c-page").textContent = fmtB(perPage); $("c-page-s").textContent = (perPage / one).toFixed(perPage / one < 10 ? 1 : 0) + " times a single vector; " + (full / perPage).toFixed(0) + "x smaller than full";
+    $("c-tot").textContent = fmtB(tot); $("c-one").textContent = fmtB(oneTot);
+    cls($("c-tot-b"), tot > 1e12 ? "bad" : tot > 1e11 ? "warn" : "ok");
+    const W = Math.max(300, costBox.clientWidth), H = 130, m = { l: 112, r: 70, t: 10, b: 10 };
+    const svg = mk(costBox, W, H, "Corpus size, single vector against multi-vector, log scale");
+    const rows = [["Full multi-vector", pages * full, "bar-warn"], ["Your setting", tot, "bar-acc"], ["One vector per page", oneTot, "bar-neu"]];
+    const lo = 6, hi = 15, X = L.scale(lo, hi, m.l, W - m.r);
+    rows.forEach((r, i) => {
+      const y = m.t + i * 38, w = Math.max(2, X(Math.log10(Math.max(r[1], 1))) - m.l);
+      L.svg("rect", { x: m.l, y, width: w, height: 24, rx: 3, fill: i === 0 ? "var(--warn)" : i === 1 ? "var(--accent)" : "var(--neutral)", "fill-opacity": i === 0 ? 0.7 : 1 }, svg);
+      tx(svg, m.l - 8, y + 16, r[0], { "text-anchor": "end", class: "lbl-ink" });
+      tx(svg, m.l + w + 6, y + 17, fmtB(r[1]), { class: "lbl-strong" });
+    });
+    $("s3-verdict").innerHTML = "At <b>" + L.fmtInt(pages) + "</b> pages with pooling x" + pool + " and " + BN[S3.bits] + ": <b>" + fmtB(tot) + "</b>, which is " + (tot / oneTot).toFixed(tot / oneTot < 10 ? 1 : 0) + " times the size of a single-vector index. Bars share a logarithmic scale.";
+  }
+  L.bind("s-pages", v => L.fmtInt(Math.pow(10, v)), v => { S3.p = v; renderCost(); });
+  L.bind("s-pool", v => "x" + POOL[v], v => { S3.pool = v; renderCost(); });
+  L.bind("s-bits", v => BN[v], v => { S3.bits = v; renderCost(); });
+
+  // ---------- Sim 4 ----------
+  const CH = [
+    ["Revenue grew 3% over the previous quarter.", "From Gulf Mercantile Bank's Q2 2025 results, about group revenue growth."],
+    ["Revenue grew 6% over the previous quarter.", "From Gulf Mercantile Bank's Q1 2025 results, about group revenue growth."],
+    ["Revenue grew 11% over the previous quarter.", "From Al Noor Finance's Q2 2025 report, about revenue growth."],
+    ["Net profit was AED 412 million.", "From Gulf Mercantile Bank's Q2 2025 results, about net profit."],
+    ["The provision charge rose to AED 95 million.", "From Al Noor Finance's Q3 2024 report, about provisions."]
+  ];
+  const QUERY = "Gulf Mercantile Bank revenue grew Q2 2025";
+  const tok = s => s.toLowerCase().replace(/'s\b/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+  const QT4 = [...new Set(tok(QUERY))];
+  const S4 = { ctx: false };
+  function renderCtx() {
+    $("q-text").textContent = QUERY;
+    const docs = CH.map(c => new Set(tok(S4.ctx ? c[1] + " " + c[0] : c[0])));
+    const idf = t => { const df = docs.filter(d => d.has(t)).length; return df ? Math.log(1 + CH.length / df) : 0; };
+    const sc = docs.map(d => QT4.reduce((s, t) => s + (d.has(t) ? idf(t) : 0), 0));
+    const mx = Math.max(...sc), tops = sc.map((s, i) => Math.abs(s - mx) < 1e-9 ? i : -1).filter(i => i >= 0);
+    $("chunk-list").innerHTML = CH.map((c, i) => {
+      const k = tops.includes(i) ? (tops.length > 1 ? " tie" : " top") : "";
+      return `<div class="chunkrow${k}"><span>${c[0]}</span><span class="sc">${sc[i].toFixed(2)}</span>${S4.ctx ? `<span class="ctx">+ context: ${c[1]}</span>` : ""}</div>`;
+    }).join("");
+    $("s4-verdict").innerHTML = tops.length > 1
+      ? "Without context, <b>" + tops.length + " chunks tie</b> for first place (dashed outline). The words that would separate them, the bank and the quarter, are not in the text. The retriever cannot choose, and the generator may quote the wrong bank."
+      : "With context, the chunk from the right bank and quarter is <b>alone at the top</b> (score " + mx.toFixed(2) + "). The other revenue sentences drop because their context names a different quarter or bank.";
+    $("b-raw").setAttribute("aria-pressed", S4.ctx ? "false" : "true"); $("b-ctx").setAttribute("aria-pressed", S4.ctx ? "true" : "false");
+  }
+  $("b-raw").addEventListener("click", () => { S4.ctx = false; renderCtx(); });
+  $("b-ctx").addEventListener("click", () => { S4.ctx = true; renderCtx(); });
+
+  function renderAll() { renderGrid(); renderRank(); renderCost(); renderCtx(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

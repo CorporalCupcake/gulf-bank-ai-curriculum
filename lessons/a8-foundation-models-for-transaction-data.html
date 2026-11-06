@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Foundation Models for Transaction Data, and the Synthetic Data Privacy Trap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.dot { height: 10px; width: 10px; border-radius: 50%; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { font-family: var(--font-mono); font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--sunk); color: var(--ink); white-space: nowrap; }
+  .chip.a { color: var(--accent); }
+  .chip.w { color: var(--warn); }
+  .cv-a { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-b { stroke: var(--warn); stroke-width: 2.6; fill: none; }
+  .cv-now { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; }
+  .pt-mem { fill: var(--accent); fill-opacity: .75; }
+  .pt-hold { fill: none; stroke: var(--ink); stroke-width: 1.2; }
+  .pt-syn { fill: var(--warn); fill-opacity: .35; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track A · Applied frontier: banking, agents and the Gulf</span>
+    <span>Module A8 · Frontier models for bank data</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>A8.1 · A8.2</span>
+        <span class="pill n">90 days</span>
+        <span>★ Priority</span>
+        <span>About 35 minutes</span>
+      </div>
+      <h1>Foundation Models for Transaction Data, and the Synthetic Data Privacy Trap</h1>
+      <p class="dek">How a bank's transaction history becomes a "language" a transformer can pretrain on, why that helps most when labels are scarce, what Nubank, Stripe and Featurespace have actually claimed, and why synthetic tabular data that looks anonymous can still leak who was in the training set.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A transaction foundation model learns a general-purpose summary of customer behaviour from unlabelled history, which you then reuse for fraud, credit and marketing, while synthetic data is a useful way to share the shape of your data that is not automatically private and must be tested like an attack surface.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A large language model reads trillions of words with no labels and ends up knowing grammar, facts and style. Later you can point it at a small task, such as classifying a complaint, and it needs only a few examples because it already understands the language.</p>
+        <p>A bank has the same situation with money. Every card swipe, transfer and salary credit is a "word". A customer's year is a "sentence". The bank holds billions of these and almost none carry a label: fraud is confirmed on a tiny share, defaults on a few percent. The idea behind a <strong>transaction foundation model</strong> is to <em>pretrain</em> on the unlabelled sentences, by hiding the next transaction and asking the model to guess it. To do that well, the model must learn that this customer buys groceries on Fridays, that salary arrives on the 25th, that a taxi in Riyadh at 3 a.m. is odd for someone who never travels. That knowledge is stored as a vector per customer or per payment, an <strong>embedding</strong>, which fraud, credit and marketing models can then use.</p>
+        <p>The second half of this lesson is the reverse worry. To share or test on data without exposing customers, a team trains a generator on the real table and releases the <strong>synthetic</strong> rows. The generator is a model of the data too, and models can memorise. If it does, the "fake" table carries real customers inside it.</p>
+      </div>
+
+      <div class="callout key"><span class="k">Hold onto this</span>Both topics are about a model that has absorbed a lot of customer data. In the first you want it to absorb the patterns and hand you a reusable summary. In the second you need to prove it absorbed only the patterns and no individuals.</div>
+
+      <div class="prose">
+        <p>Three questions will keep you honest throughout.</p>
+        <ul>
+          <li><strong>What are the tokens?</strong> A transaction has an amount, a merchant, a time, a country. Turning that into something a transformer can read is the hardest design choice, and Simulation 1 shows why.</li>
+          <li><strong>Where does the gain come from?</strong> Mostly from labels being scarce, and from long histories that hand-built features squeeze too hard. Where labels are plentiful and features are good, a tuned gradient-boosted model is hard to beat. Simulation 2 gives the shape of this trade.</li>
+          <li><strong>Who could tell this row was in the training set?</strong> That is the question that decides whether synthetic data is safe. Simulation 3 runs the attack.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-ffm">A8.1 · Foundation models for transaction data</h3>
+      <div class="prose">
+        <p><strong>Step 1: turn transactions into tokens.</strong> A text model has a vocabulary of sub-words. A transaction is a bundle of mixed fields, and there are two broad ways to tokenise it.</p>
+        <ul>
+          <li><strong>Serialise it as text.</strong> "AED 212.40, Carrefour Marina, Dubai, 14:05". This reuses a language model and its tokeniser (see <a href="m1-tokenisation.html">tokenisation</a>), but a single transaction costs perhaps 15 tokens, numbers are split into fragments, and a context window fills after a few hundred transactions.</li>
+          <li><strong>Use a structured vocabulary.</strong> One token each for merchant category, a <em>bucket</em> of the amount, a <em>bucket</em> of the time since the previous transaction, and the country. Four tokens per transaction, and the model can see a long history. The price is rounding: a bucket stands for a range.</li>
+        </ul>
+        <p>Nubank's published design sits between the two: it keeps text tokens for descriptive fields but gives amount and date their own special tokens, and encodes time as a gap since the previous event rather than a calendar stamp (Nubank engineering blog; Braithwaite et al., 2025). Simulation 1 makes the bucket trade-off concrete.</p>
+      </div>
+
+      <figure class="figure" id="fig-tok">
+        <div class="fig-head"><span class="fig-title">Turning transactions into tokens: resolution against context</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> start at 64 buckets. Each amount is read back with a small error. Drop to 8 buckets and a coffee and a restaurant bill collapse into the same token. Raise it to 512 and the error vanishes, but the vocabulary grows and each bucket is seen far less often in training. Then look at how many transactions fit in a 2,048-token window under each encoding.</p>
+        <div class="table-wrap"><div id="tok-table"></div></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-k">Buckets for amount and for time gap <output for="s-k"></output></label><input type="range" id="s-k" min="2" max="9" step="0.1" value="6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Worst-case rounding error</div><div class="v" id="st1-err"></div><div class="s">on any amount, either direction</div></div>
+          <div class="stat"><div class="k">Numeric vocabulary added</div><div class="v" id="st1-voc"></div><div class="s">tokens for amounts plus gaps</div></div>
+          <div class="stat"><div class="k">Window holds (structured)</div><div class="v" id="st1-win"></div><div class="s">transactions in 2,048 tokens, 4 per transaction</div></div>
+          <div class="stat bad"><div class="k">Window holds (as text)</div><div class="v" id="st1-txt"></div><div class="s">assuming about 15 tokens each</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: six invented transactions. Amounts are bucketed on a logarithmic scale from AED 1 to AED 100,000, time gaps from 1 minute to about 69 days, with the same number of buckets for each. The read-back value is the geometric centre of the bucket; the error figures are exact. The "15 tokens as text" figure is an assumption for illustration, since real tokenisers differ.</p>
+      </figure>
+
+      <div class="prose">
+        <p><strong>Step 2: pretrain with a self-supervised objective.</strong> The standard choice is the same as for GPT-style models: predict the next token given the ones before (F5.7, <a href="f5-self-supervised-and-contrastive-learning.html">self-supervised learning</a>). Because the model uses <a href="f5-attention.html">attention</a> over the whole history, it can link a purchase today to a pattern from three months ago. No fraud label, no default label, no human annotation is needed, so every transaction the bank has ever seen is training signal. Variants mask random tokens instead (BERT-style), as IBM's TabFormer did on synthetic card data (Padhi et al., 2021), or train contrastively so that two windows from one customer land close together.</p>
+        <p><strong>Step 3: reuse it.</strong> Two patterns are common.</p>
+        <ul>
+          <li><strong>Frozen embedding as features.</strong> Run the customer's recent history through the model, take the final vector, and add its 64 or 256 numbers as columns next to your existing features in a gradient-boosted model. This is the lowest-risk path and fits the existing stack. Featurespace sells this pattern as an API (see Part 4).</li>
+          <li><strong>Fine-tune end to end.</strong> Attach a small head for one task and train the whole thing, often jointly with the hand-built tabular features. Nubank's reported nuFormer design does this and combines the learned user embedding with existing tabular inputs.</li>
+        </ul>
+      </div>
+
+      <div class="formula">
+        <math display="block"><mi>L</mi><mo>=</mo><mo>−</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mi>T</mi></munderover><mi>log</mi><mspace width="0.2em"></mspace><msub><mi>p</mi><mi>θ</mi></msub><mo stretchy="false">(</mo><msub><mi>x</mi><mi>t</mi></msub><mo>∣</mo><msub><mi>x</mi><mn>1</mn></msub><mo>,</mo><mo>…</mo><mo>,</mo><msub><mi>x</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">)</mo></math>
+        <p class="where">The pretraining loss. <i>x</i><sub>t</sub> is the <i>t</i>-th token in a customer's history and <i>p</i><sub>θ</sub> is the probability the model gave it, seen only what came before. Minimising this means the model gets better at predicting what a customer does next, which forces it to learn rhythms, habits and relationships between merchants. It is the same cross-entropy as language modelling (F1.5, <a href="f1-likelihood-entropy.html">likelihood and entropy</a>).</p>
+      </div>
+
+      <div class="prose" style="margin-top:1.2em">
+        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">Why this helps when labels are scarce</h4>
+        <p>A fraud classifier learned directly on 200 confirmed cases has to find structure in a high-dimensional input using very few positives (the effective sample size is the number of positives, as <a href="f3-imbalanced-data.html#m-ess">imbalanced data</a> showed). A pretrained embedding has already learned which directions of variation in behaviour matter, from billions of unlabelled events. The classifier then only needs to learn a boundary in a small, well-organised space. A stylised rule from classical statistics captures the effect: fitting a linear classifier in <i>d</i> dimensions from <i>n</i> positives costs accuracy roughly in proportion to <i>d</i> ÷ <i>n</i>. Cut the dimension that has to be learned and the penalty falls.</p>
+      </div>
+
+      <figure class="figure" id="fig-lab">
+        <div class="fig-head"><span class="fig-title">Labels are scarce: when does an embedding beat raw features?</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> at about 50 confirmed cases the embedding wins. Slide towards a few hundred and then thousands, and the raw-feature model catches up and overtakes, because the embedding threw away some signal. Now lower the "signal kept by the embedding" slider: the crossover moves left, which is why a weak foundation model rarely helps a bank with a large labelled base.</p>
+        <div class="chart-wrap" id="lab-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--warn)"></i>Hand-built / raw features, 200 dimensions</span>
+          <span><i style="background:var(--accent)"></i>Pretrained embedding, 10 effective dimensions</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Confirmed positive cases for training <output for="s-n"></output></label><input type="range" id="s-n" min="1" max="4" step="0.02" value="1.7"></div>
+          <div class="ctl"><label for="s-keep">Signal the embedding keeps (separation, raw = 2.2) <output for="s-keep"></output></label><input type="range" id="s-keep" min="1.2" max="2.2" step="0.02" value="1.8"></div>
+        </div>
+        <div class="stats">
+          <div class="stat warn"><div class="k">AUC from raw features</div><div class="v" id="st2-raw"></div><div class="s">at this many cases</div></div>
+          <div class="stat ok"><div class="k">AUC with the embedding</div><div class="v" id="st2-emb"></div><div class="s" id="st2-emb-s"></div></div>
+          <div class="stat"><div class="k">Crossover at about</div><div class="v" id="st2-x"></div><div class="s">positive cases</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Stylised, not measured on real data. Two Gaussian classes; a linear classifier fitted with <i>n</i> positives. Expected AUC is approximated as Φ(Δ/√2 ÷ √(1 + <i>d</i>/(<i>n</i>Δ²))), where Δ is the separation of the two classes in the features used and <i>d</i> the number of dimensions to fit. Raw: <i>d</i> = 200, Δ = 2.2. Embedding: <i>d</i> = 10, Δ set by the slider. It illustrates the shape of the trade-off; it is a rule of thumb, not a result from any bank. The case axis is logarithmic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three practical points follow from the picture.</p>
+        <ul>
+          <li><strong>The gain is often modest on a mature, label-rich task.</strong> Nubank's headline figure was a 1.25% relative AUC gain over a strong LightGBM baseline, which they described as about three times the lift of a typical model launch (Braithwaite et al., 2025). That is small as a number and large as an engineering win at a bank with 100 million customers.</li>
+          <li><strong>The embedding is shared infrastructure.</strong> One model can feed fraud, credit limit, churn and offers. Its cost is spread across all of them, but so is its risk: a flaw or bias in the embedding reaches every product. Treat it as a model that needs validation of its own (<a href="g3-independent-validation.html">independent validation</a>).</li>
+          <li><strong>Time is a first-class input.</strong> Models that ignore the gap between events lose the rhythm that makes behaviour predictable. That is why the time-gap bucket in Simulation 1 matters as much as the amount.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-synth">A8.2 · Synthetic tabular data and its privacy risks</h3>
+      <div class="prose">
+        <p>Why would a bank want synthetic customers? To give a vendor or a hackathon realistic data without sending real records, to test pipelines in a lower environment, to share data across entities, and to supplement rare cases. The approach: fit a generative model to the real table, then sample new rows. Common generators for tables are CTGAN and TVAE (Xu et al., 2019), diffusion models such as TabDDPM (Kotelnikov et al., 2023), and fine-tuned language models that write rows as text. Simpler approaches (resampling with noise, copulas, Bayesian networks) work too.</p>
+        <p>The argument "the rows are fake so there is no privacy issue" fails for a structural reason. A generator that fits the data <em>well</em> is a compressed copy of the data. How much of the copy is the general pattern and how much is individuals depends on model capacity, training length and how unusual each record is. Three attacks matter:</p>
+        <ul>
+          <li><strong>Membership inference.</strong> Given a real record, was it in the training set? If the attacker can tell, then they learn something about the person: that they were a customer of this bank, or in a particular segment (for example, a defaulters table).</li>
+          <li><strong>Attribute inference.</strong> The attacker knows some fields about a person and uses the synthetic data to guess a sensitive one, such as balance band or arrears flag.</li>
+          <li><strong>Reconstruction of outliers.</strong> A client with a unique profile, such as one extremely large transfer pattern, is often reproduced almost verbatim. Rows far from everyone else are the most exposed, and they are often the most sensitive people.</li>
+        </ul>
+        <p>A popular check is <strong>distance to closest record (DCR)</strong>: for each synthetic row, how far is the nearest real training row? Exact copies are easy to spot. Simulation 3 shows what the check does and does not catch.</p>
+      </div>
+
+      <figure class="figure" id="fig-syn">
+        <div class="fig-head"><span class="fig-title">A generator that memorises, attacked</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> at noise 0.05 the synthetic dots sit on top of the real members and the attacker, who only measures how close the nearest synthetic row is, separates members from non-members well. Raise the noise: privacy improves but the correlation between the two fields (true value 0.70) is blurred and rare large values shrink. Then press <b>Filter out near-copies</b>: the obvious copies go, yet the attacker now flips the test (members have <em>fewer</em> close neighbours than they should) and still wins.</p>
+        <div class="btns" role="group" aria-label="Filter">
+          <button class="btn" type="button" id="b-flt" aria-pressed="false">Filter out near-copies</button>
+        </div>
+        <div class="chart-wrap" id="syn-chart"></div>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--accent)"></i>Real training customers</span>
+          <span><i class="dot" style="border:1.5px solid var(--ink)"></i>Real customers not used</span>
+          <span><i class="dot" style="background:var(--warn);opacity:.5"></i>Synthetic rows</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-h">Noise added when generating (standard deviations) <output for="s-h"></output></label><input type="range" id="s-h" min="-1.7" max="0" step="0.05" value="-1.3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-auc-b"><div class="k">Membership attack, all customers</div><div class="v" id="st3-auc"></div><div class="s">AUC (50% = attacker learns nothing)</div></div>
+          <div class="stat" id="st3-out-b"><div class="k">Same attack on the 25 most unusual</div><div class="v" id="st3-out"></div><div class="s">outliers are exposed first</div></div>
+          <div class="stat"><div class="k">Correlation in synthetic data</div><div class="v" id="st3-cor"></div><div class="s">true value 0.70</div></div>
+          <div class="stat"><div class="k">Synthetic rows within 0.05 of a real member</div><div class="v" id="st3-cp"></div><div class="s" id="st3-cp-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated and actually computed in your browser with a fixed random seed: 200 training customers and 200 held-out customers with two standardised fields (correlation 0.70); the "generator" picks a random training row and adds Gaussian noise (a deliberately simple memorising model). 600 synthetic rows are drawn. The attacker scores each real customer by how close the nearest synthetic row is, and the figure shown is the best of the two directions. Single run, so expect a few points of noise. A real generator will not behave like this exactly.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The simulation shows why privacy evaluation of synthetic data is hard. Three lessons:</p>
+        <ul>
+          <li><strong>Utility and privacy trade off, and no free setting exists.</strong> The settings that preserve rare, valuable patterns (large exposures, unusual fraud) are the settings that preserve the individuals who produced them.</li>
+          <li><strong>Simple filters can leak by their own pattern.</strong> Dropping rows too close to a real record leaves a hole around each training customer. The hole is a signal. Recent work argues that distance-based privacy metrics give false comfort (see Part 4).</li>
+          <li><strong>The only formal guarantee is differential privacy.</strong> Train the generator with DP (for example with DP-SGD, or a DP marginal-based method) and the guarantee bounds what any attacker can learn about one record, whatever side information they hold (Dwork and Roth, 2014). The cost is lower fidelity, especially on small groups and rare events, exactly where banks care most. In practice you pick an epsilon, measure the fidelity loss, and run attacks anyway.</li>
+        </ul>
+        <p>On the Gulf regulatory side: the UAE and Saudi Arabia both have personal data protection laws, and banks are also subject to their central bank's rules on data handling and outsourcing. Whether a given synthetic dataset counts as personal data depends on whether people can be re-identified from it, and I have not seen a regulator-published threshold for synthetic data. Treat that as a question for your data protection officer and legal team, not something to assume.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Both topics sit at the crossing of sequence modelling, representation learning and privacy.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F5.7 · Self-supervised learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">The pretraining recipe</a></span><p>Next-token prediction and contrastive learning on unlabelled history are the engine of every model in A8.1.</p></div>
+        <div class="link-card"><span class="code">F5.3 · Attention</span><span class="t"><a href="f5-attention.html">Why long histories work</a></span><p>Attention lets today's transaction look at one from months ago directly, which is what recurrent models struggled with.</p></div>
+        <div class="link-card"><span class="code">R9 · Tabular and relational models</span><span class="t"><a href="r9-relational-deep-learning-relbench.html">Beyond a single table</a></span><p>Transactions live in a graph of customers, merchants and accounts. Relational deep learning and <a href="r9-time-series-foundation-models-chronos.html">time-series foundation models</a> attack the same problem from other angles.</p></div>
+        <div class="link-card"><span class="code">B1 · Transaction fraud</span><span class="t"><a href="b1-transaction-and-card-fraud-detection.html">The main customer for these embeddings</a></span><p>Fraud has scarce labels and fast-changing patterns. See also <a href="b1-delayed-labels-and-feedback-loops.html">delayed labels</a>: pretraining sidesteps the label delay, fine-tuning does not.</p></div>
+        <div class="link-card"><span class="code">B2 · AML monitoring</span><span class="t"><a href="b2-transaction-monitoring-rules-versus-ml.html">Behavioural baselines</a></span><p>A good customer-behaviour embedding supports "unusual for this customer" signals, valuable where confirmed cases are very rare.</p></div>
+        <div class="link-card"><span class="code">F3.3 · Feature engineering</span><span class="t"><a href="f3-feature-engineering.html">What the embedding replaces</a></span><p>Rolling sums, counts and ratios are hand-made summaries of a history. An embedding is a learned one. Point-in-time rules (<a href="f3-leakage-point-in-time.html">leakage</a>) apply fully.</p></div>
+        <div class="link-card"><span class="code">P1 · Feature stores</span><span class="t"><a href="p1-feature-stores-and-online-offline.html">Serving an embedding</a></span><p>Embeddings must be computed consistently offline and online, versioned, and refreshed. A stale vector is a drift source.</p></div>
+        <div class="link-card"><span class="code">R11 · Memorisation and privacy</span><span class="t"><a href="r11-memorisation-membership-inference-private-training.html">The same attack, on any model</a></span><p>Simulation 3 is membership inference. The foundation model itself can also memorise customers; the lesson covers defences such as DP training.</p></div>
+        <div class="link-card"><span class="code">G2.2 · Privacy basics</span><span class="t"><a href="g2-privacy-basics-minimisation-consent-anonymisation.html">Anonymisation has limits</a></span><p>Synthetic data does not remove the need for minimisation and purpose limits; it is a technique inside that framework. See also <a href="r2-synthetic-data-and-model-collapse.html">synthetic data and model collapse</a> for a different risk.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">Pretrained does not mean permanent</a></span><p>Spending patterns change with prices, seasons (Ramadan, Eid, summer travel) and new products. Plan refreshes and monitor embedding drift.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Card fraud and scams.</strong> Behavioural embeddings flag a payment that does not fit this customer, even if the amount and merchant look normal.</li>
+          <li><strong>Credit and limit decisions.</strong> Cash-flow behaviour from current accounts can complement bureau data, especially for thin-file customers. Explainability and fairness demands rise here: an opaque embedding needs a validation and a reason-code strategy.</li>
+          <li><strong>Marketing and personalisation.</strong> Next-best-offer and lifetime-value models share one customer representation.</li>
+          <li><strong>Testing and vendor work.</strong> Synthetic data for sandboxes, for sharing with a fintech partner, or for data science competitions. The privacy test must precede the release.</li>
+          <li><strong>Model risk.</strong> A shared embedding becomes a single point of failure; model risk teams will ask what it was trained on and how it is monitored.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Transaction foundation models moved from papers to vendor products and bank deployments between 2023 and 2026. The evidence is mostly company reports, which is worth knowing when you quote it. On synthetic data, the research story has been a steady erosion of trust in simple privacy checks.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Searches were light; items below are ones I could confirm in search results, and vendor figures are as reported by the vendors.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2019</span><div><div class="t">CTGAN and TVAE for tabular data</div><p>Handled mixed numeric and categorical columns and imbalanced categories, and set the reference for GAN-based table synthesis.</p><div class="src">Xu et al., NeurIPS 2019</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">TabFormer</div><p>A hierarchical transformer for multivariate tabular transaction sequences, pretrained with masked prediction on a synthetic card-transaction dataset.</p><div class="src">Padhi et al., ICASSP 2021 (from memory; check the paper)</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">TabDDPM</div><p>Diffusion models for tabular data, reporting higher fidelity than GAN approaches on many benchmarks.</p><div class="src">Kotelnikov et al., ICML 2023</div></div></li>
+        <li><span class="yr">Oct 2023</span><div><div class="t">Featurespace TallierLTM</div><p>Launched as the "first large transaction model", offered to institutions through an embedding API. Featurespace reported that adding its feature vectors to an industry-standard fraud model improved fraud value detection by up to 71%. Company figure, not independently benchmarked here. Press coverage describes Featurespace as now part of Visa.</p><div class="src">Payment Expert, 27 Oct 2023</div></div></li>
+        <li><span class="yr">May 2025</span><div><div class="t">Stripe Payments Foundation Model</div><p>Announced at Stripe Sessions as a self-supervised model of payments that turns each payment into an embedding. Stripe reports that card-testing attack detection on large users rose from 59% to 97% overnight. Company figure; architecture details are limited.</p><div class="src">Stripe newsroom, Sessions 2025</div></div></li>
+        <li><span class="yr">Jul 2025</span><div><div class="t">Nubank nuFormer</div><p>Pretrained transformer on transaction sequences, then jointly fine-tuned with tabular features. Reported a 1.25% relative test AUC improvement over a LightGBM baseline on a production task. Nubank's engineering blog describes the token interface, with time as gaps, in several follow-up posts.</p><div class="src">Braithwaite et al., arXiv 2507.23267 (a later version exists; check it)</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Membership inference on tabular diffusion models</div><p>The MIDST challenge at SaTML 2025 found that diffusion-generated tabular data is not free of privacy leakage. Contest-winning attacks were considerably stronger than naive baselines, with one reaching AUC about 0.79 on TabDDPM against about 0.65 for a simple loss attack, and the authors argue current evaluations underestimate risk. TabSyn appeared more resilient than TabDDPM to one attack. Whether the leakage is specific to diffusion models is unresolved.</p><div class="src">MIDST organisers, arXiv 2603.19185; Cheng &amp; Bahmani, arXiv 2510.16037</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">The DCR critique</div><p>Work with the title "The DCR Delusion" questions whether distance to closest record is a reliable way to measure the privacy of synthetic data. I have only seen the title and abstract-level description; read it before citing a specific finding.</p><div class="src">arXiv 2505.01524</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Gradient-boosted models on hand-built features</b></td><td>The incumbent for fraud and credit. The bar any foundation model must clear.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Vendor embedding APIs for fraud</b></td><td>Customer-behaviour vectors from a payments network or vendor, added as inputs to existing fraud models.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>In-house pretrained transaction transformers</b></td><td>Large consumer banks and fintechs train their own on proprietary history and fine-tune per task. Few disclose results.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Synthetic data for testing and sandboxes</b></td><td>Rule-based or simple statistical generators for non-production use, with no claim of anonymity.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Deep generative synthetic data released externally</b></td><td>CTGAN, diffusion or LLM-based tables shared with third parties, with attack-based privacy tests.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>DP-trained generators on production data</b></td><td>Formal guarantees, at a fidelity cost. Active research, limited public bank evidence.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Regulator guidance on synthetic data privacy for banks</b></td><td>I could not confirm specific published thresholds from UAE or Saudi regulators; check with your compliance team.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Transaction foundation models pay off most where labels are few and histories long, and the published gains are real but moderate. Synthetic data is a fidelity-privacy trade-off, to be measured with attacks, not asserted from the word "synthetic".</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each failure comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Comparing to a weak baseline</div><p>"The foundation model beats logistic regression by 8 points." A well-tuned boosted model with good rolling features may close most of that gap.</p><div class="spot"><b>Spot it</b>Ask what the baseline was, and whether it got the same effort and the same data. The honest comparison is against the best existing production model.</div></li>
+        <li><div class="t">Pretraining on the future</div><p>The embedding for a customer was computed on history that includes the label period, so it "knows" about the fraud it is predicting.</p><div class="spot"><b>Spot it</b>Ask for the cut-off date of every sequence fed to the model for each training row. Embeddings must be point-in-time (F3.2).</div></li>
+        <li><div class="t">Same customer in pretraining and test</div><p>The model memorised customer behaviour in pretraining; the test set contains the same customers' later months.</p><div class="spot"><b>Spot it</b>Check that the evaluation window and customers are separated in time, or that you evaluate on the future of known customers knowingly and deploy accordingly.</div></li>
+        <li><div class="t">Quantisation hides the signal</div><p>Coarse buckets merge small transfers and structured payments just under a reporting threshold, the pattern AML cares about.</p><div class="spot"><b>Spot it</b>Look at the bucket edges near regulatory or internal thresholds. Test whether fine amounts near them matter.</div></li>
+        <li><div class="t">Opaque, shared and stale</div><p>One embedding feeds many models. It drifts after a product launch or a holiday season, and nobody owns it.</p><div class="spot"><b>Spot it</b>Ask who owns the embedding, how often it is retrained, and whether downstream models are re-validated when it changes.</div></li>
+        <li><div class="t">Proxies in the embedding</div><p>Behavioural vectors can encode nationality, religion or gender through merchants and timing (prayer-time patterns, remittance corridors). A credit model using it can discriminate without any protected column.</p><div class="spot"><b>Spot it</b>Probe the embedding: can a simple model predict a protected attribute from it? If yes, test the downstream outputs for disparity (G2).</div></li>
+        <li><div class="t">"Synthetic, so it's anonymous"</div><p>Data released externally with no attack testing, on the theory that no row is a real person.</p><div class="spot"><b>Spot it</b>Ask for a membership-inference test on the real training set against the synthetic release, reported for outliers as well as on average.</div></li>
+        <li><div class="t">Trusting DCR alone</div><p>"No synthetic row is within a small distance of a real one, so nothing is copied." The gap itself is a signal, as Simulation 3 showed.</p><div class="spot"><b>Spot it</b>Ask whether distance was compared against held-out real data too, and whether stronger attacks were run.</div></li>
+        <li><div class="t">Averages hide the exposed few</div><p>Overall attack AUC looks near 50% but the ten wealthiest clients are identified.</p><div class="spot"><b>Spot it</b>Ask for results on the rarest 1% of records, not only the whole table.</div></li>
+        <li><div class="t">Small groups wrongly modelled</div><p>Synthetic data from a high-privacy setting erases rare segments such as a niche business line, so models trained on it fail where it matters.</p><div class="spot"><b>Spot it</b>Compare model performance trained on synthetic against trained on real, by segment, on real test data.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Instead of building each fraud or credit model from scratch, we can train one model on our whole transaction history, without needing any labels, so it learns what normal behaviour looks like for each customer. Other teams then reuse that. Published results from Nubank show a modest but real accuracy gain, about what three normal model upgrades would give. The upside is largest where confirmed cases are few. For synthetic data, I'd say it is useful for testing but not private by default; we should test every release the way an attacker would.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd begin with the strongest boosted baseline and test whether a pretrained sequence embedding adds lift on a time-ordered split, with embeddings computed point-in-time and customers separated across pretraining and evaluation. I'd choose a structured tokenisation with time-gap tokens and check bucket resolution near thresholds that matter. For synthetic data I'd measure fidelity by segment, and privacy with membership-inference attacks including on outliers, not only distance to closest record, and I'd use DP training if the release is external.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Is this just another LLM hype project?”</summary><div class="ans"><p>The mechanism is the same as language models, self-supervised pretraining then reuse, but applied to structured events, and it is justified by one specific condition: many unlabelled events, few labels. The published gains are modest and vendor numbers are vendor-reported. So I'd run it as a bounded experiment against our best current model and decide on measured lift, cost, and the added validation burden.</p></div></details>
+        <details class="reveal"><summary>“Why not just feed transactions to an LLM as text?”</summary><div class="ans"><p>You can, but numbers tokenise poorly, each transaction costs around 15 tokens, so context fills quickly, and a general language model has no training on payment dynamics. A purpose-built vocabulary with amount and time-gap tokens fits far more history per window and is cheaper to run. Hybrids that keep text for descriptions are reasonable.</p></div></details>
+        <details class="reveal"><summary>“Do we build one or buy one?”</summary><div class="ans"><p>It depends on scale and data position. A vendor embedding trained on a network sees more fraud across institutions, and is quick to integrate, but we depend on a black box and send data out. In-house needs enough history, GPUs and a team to validate and refresh it. A reasonable path: pilot a vendor embedding as extra features, measure lift, and decide whether our own data justifies building.</p></div></details>
+        <details class="reveal"><summary>“We generated synthetic data. Can we give it to the vendor?”</summary><div class="ans"><p>Not on that basis alone. I'd run membership-inference attacks using the real training set and a held-out set, report results including for outliers, compare fidelity with and without a differential privacy guarantee, and get sign-off from data protection and legal on whether the result counts as personal data. If the vendor only needs to test an integration, rule-based fake data may be safer and simpler.</p></div></details>
+        <details class="reveal"><summary>“Our DCR check shows no copies, so we're fine?”</summary><div class="ans"><p>It rules out exact copying, which is the weakest threat. Filtering by distance can itself leave a detectable gap, and stronger attacks use more than distance. I'd keep the DCR check as a minimum and add attack-based tests.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Why can a transaction foundation model be trained with no fraud labels at all?</summary><div class="ans"><p>Its pretraining target is the next token in the customer's own history. The data supplies the answer, so labels are not needed. The fraud label is only needed later, for the small fine-tuning or classifier step.</p></div></details>
+        <details class="reveal"><summary>2. Amounts are bucketed on a log scale from AED 1 to 100,000 into 64 buckets. What is the worst-case relative error?</summary><div class="ans"><p>Each bucket spans a factor e<sup>ln(100000)/64</sup> = e<sup>0.18</sup> ≈ 1.197. Reading back the geometric centre is off by at most half that in log terms: e<sup>0.09</sup> − 1 ≈ 9.4% too high, or about 8.6% too low from the other end. Roughly ±9%.</p></div></details>
+        <details class="reveal"><summary>3. Why does the pretrained embedding help most with a few dozen positives and little with 100,000?</summary><div class="ans"><p>With few positives (tens), learning a boundary in 200 raw dimensions is noisy; in 10 well-organised dimensions it is not. With 100,000 positives the raw model can learn the boundary precisely, and the embedding's lost signal becomes the limit. In Simulation 2 the crossover is at roughly 80 cases with the default settings; the exact point depends on how much signal the embedding keeps, and the whole curve is a stylised rule of thumb.</p></div></details>
+        <details class="reveal"><summary>4. Nubank reports a 1.25% relative AUC lift. Is that small?</summary><div class="ans"><p>A relative gain of 1.25% on an AUC like 0.80 is about one AUC point. That is small in absolute terms. Nubank described it as roughly three times a typical model launch's lift, and on millions of decisions it is financially significant. Quote both framings and say it is the company's figure.</p></div></details>
+        <details class="reveal"><summary>5. A frozen embedding was computed from the customer's last 12 months, up to the date the fraud case was closed. What is wrong?</summary><div class="ans"><p>Leakage. The window includes the period after the transaction being scored, and may include the fraud itself or its aftermath. The embedding must be computed using history up to the decision time only (point-in-time).</p></div></details>
+        <details class="reveal"><summary>6. Why are outlier customers the first to be exposed by a memorising generator?</summary><div class="ans"><p>The generator reproduces the training data it can fit. For typical customers, many other customers sit nearby, so a close synthetic row says little about any one of them. For an outlier, a close synthetic row is almost certainly a copy of that person.</p></div></details>
+        <details class="reveal"><summary>7. Removing synthetic rows that are too close to real ones sounds safe. Why can it leak?</summary><div class="ans"><p>It leaves empty space around each real training record. An attacker who finds that a candidate has no synthetic neighbours nearby, more than expected for a random person, infers membership. The pattern of absence is as informative as the pattern of presence.</p></div></details>
+        <details class="reveal"><summary>8. What does differential privacy give you that attack testing does not, and what does it cost?</summary><div class="ans"><p>A mathematical bound on what can be learned about any single record, against any attacker. Attack testing only shows resistance to the attacks you tried. The cost is lower fidelity, particularly on rare groups and tails, which are often what a bank needs.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>W. Braithwaite et al. <a href="https://arxiv.org/abs/2507.23267">Your Spending Needs Attention: Modeling Financial Habits with Transformers</a>. arXiv 2507.23267, 2025. The nuFormer paper.</li>
+        <li>Building Nubank. <a href="https://building.nu.com/defining-an-interface-between-transaction-data-and-foundation-models/">Defining an Interface Between Transaction Data and Foundation Models</a> and <a href="https://building.nu.com/giving-foundation-models-a-notion-of-now/">Giving Foundation Models a Notion of Now</a>. Company engineering blog.</li>
+        <li>Stripe. <a href="https://stripe.com/newsroom/news/sessions-2025">Sessions 2025 announcements</a>. Source of the Payments Foundation Model and card-testing figures.</li>
+        <li>Payment Expert. <a href="https://paymentexpert.com/2023/10/27/featurespace-ai-large-transaction/">Featurespace launches 'world first' AI large transaction model</a>, 27 October 2023.</li>
+        <li>I. Padhi et al. Tabular Transformers for Modeling Multivariate Time Series (TabFormer). ICASSP, 2021. arXiv 2011.01843 (cited from memory).</li>
+        <li>L. Xu, M. Skoularidou, A. Cuesta-Infante, K. Veeramachaneni. <a href="https://arxiv.org/abs/1907.00503">Modeling Tabular Data using Conditional GAN</a>. NeurIPS, 2019.</li>
+        <li>A. Kotelnikov, D. Baranchuk, I. Rubachev, A. Babenko. <a href="https://arxiv.org/abs/2209.15421">TabDDPM: Modelling Tabular Data with Diffusion Models</a>. ICML, 2023.</li>
+        <li><a href="https://arxiv.org/abs/2510.16037">Membership Inference over Diffusion-models-based Synthetic Tabular Data</a>. arXiv 2510.16037.</li>
+        <li><a href="https://arxiv.org/abs/2603.19185">MIDST Challenge at SaTML 2025: Membership Inference over Diffusion-models-based Synthetic Tabular data</a>. arXiv 2603.19185.</li>
+        <li><a href="https://arxiv.org/abs/2505.01524">The DCR Delusion: Measuring the Privacy Risk of Synthetic Data</a>. arXiv 2505.01524.</li>
+        <li>C. Dwork, A. Roth. <a href="https://www.cis.upenn.edu/~aaroth/Papers/privacybook.pdf">The Algorithmic Foundations of Differential Privacy</a>. Foundations and Trends in Theoretical Computer Science, 2014.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Module A8: Frontier models for bank data</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+
+  // =====================================================================
+  // Simulation 1: tokenising transactions
+  // =====================================================================
+  const TX = [
+    ["Costa Coffee, Dubai Mall", 5814, 18.5, 140, "AE"],
+    ["Carrefour, Marina", 5411, 212.4, 2600, "AE"],
+    ["Careem ride, Riyadh", 4121, 46, 4300, "SA"],
+    ["Salary credit, employer", 6012, 24500, 21000, "AE"],
+    ["Jewellery, Gold Souk", 5944, 12900, 8600, "AE"],
+    ["Online electronics, abroad", 5732, 3150, 12, "GB"]
+  ];
+  const LOA = 1, HIA = 1e5;
+  const S1 = { k: 6 };
+  function bin(v, K) { return Math.min(K - 1, Math.max(0, Math.floor(K * Math.log(v / LOA) / Math.log(HIA / LOA)))); }
+  function rep(i, K) { return LOA * Math.exp((i + 0.5) * Math.log(HIA / LOA) / K); }
+  function fmtV(v) { return v >= 100 ? L.fmtInt(v) : v.toFixed(1); }
+  function gapTxt(m) { return m >= 1440 ? (m / 1440).toFixed(1) + " d" : m >= 60 ? (m / 60).toFixed(1) + " h" : m + " min"; }
+  function renderTok() {
+    const K = Math.round(Math.pow(2, S1.k));
+    let html = '<table class="data"><thead><tr><th>Transaction</th><th>Tokens</th><th>Amount read back</th><th>Gap read back</th></tr></thead><tbody>';
+    TX.forEach(t => {
+      const a = bin(t[2], K), g = bin(t[3], K), ra = rep(a, K), rg = rep(g, K);
+      html += `<tr><td><b>${t[0]}</b><br><span style="color:var(--muted);font-size:12px">AED ${fmtV(t[2])}, ${gapTxt(t[3])} after the previous one</span></td>` +
+        `<td><div class="chips"><span class="chip">MCC ${t[1]}</span><span class="chip a">AMT ${a}</span><span class="chip w">GAP ${g}</span><span class="chip">${t[4]}</span></div></td>` +
+        `<td>AED ${fmtV(ra)}<br><span style="color:var(--muted);font-size:12px">${((ra - t[2]) / t[2] * 100 >= 0 ? "+" : "") + ((ra - t[2]) / t[2] * 100).toFixed(1)}%</span></td>` +
+        `<td>${gapTxt(Math.round(rg))}<br><span style="color:var(--muted);font-size:12px">${((rg - t[3]) / t[3] * 100 >= 0 ? "+" : "") + ((rg - t[3]) / t[3] * 100).toFixed(1)}%</span></td></tr>`;
+    });
+    $("tok-table").innerHTML = html + "</tbody></table>";
+    const err = Math.exp(Math.log(HIA / LOA) / (2 * K)) - 1;
+    $("st1-err").textContent = "±" + (err * 100).toFixed(err < 0.1 ? 1 : 0) + "%";
+    $("st1-voc").textContent = L.fmtInt(2 * K);
+    $("st1-win").textContent = L.fmtInt(Math.floor(2048 / 4));
+    $("st1-txt").textContent = L.fmtInt(Math.floor(2048 / 15));
+    const a1 = bin(18.5, K), a2 = bin(46, K);
+    $("s1-verdict").innerHTML = "With <b>" + K + "</b> buckets the biggest rounding error is <b>±" + (err * 100).toFixed(1) + "%</b>. " +
+      (a1 === a2 ? "The AED 18.50 coffee and the AED 46 ride now share one amount token, so the model cannot tell them apart by amount." : "A coffee and a taxi ride still get different amount tokens.") +
+      " The same history takes 4 tokens per transaction when structured, so a window holds about <b>512</b> transactions instead of about 136 as text.";
+  }
+  L.bind("s-k", v => L.fmtInt(Math.round(Math.pow(2, v))), v => { S1.k = v; renderTok(); });
+
+  // =====================================================================
+  // Simulation 2: label scarcity
+  // =====================================================================
+  const S2 = { n: 1.7, keep: 1.8 };
+  const auc = (n, d, D) => L.normCdf(D / Math.SQRT2 / Math.sqrt(1 + d / (n * D * D)));
+  const aRaw = n => auc(n, 200, 2.2), aEmb = n => auc(n, 10, S2.keep);
+  const labBox = $("lab-chart");
+  function renderLab() {
+    const W = Math.max(300, labBox.clientWidth), H = 260, m = { l: 46, r: 14, t: 14, b: 44 };
+    const svg = mk(labBox, W, H, "AUC against number of confirmed cases for raw features and embedding");
+    const x = L.scale(1, 4, m.l, W - m.r), y = L.scale(0.5, 1, H - m.b, m.t);
+    [0.5, 0.6, 0.7, 0.8, 0.9, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v.toFixed(1), { "text-anchor": "end" }); });
+    [[1, "10"], [2, "100"], [3, "1,000"], [4, "10,000"]].forEach(([v, s]) => tx(svg, x(v), H - m.b + 16, s, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Confirmed positive cases (log scale)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Expected AUC", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const pr = [], pe = [];
+    for (let k = 1; k <= 4.001; k += 0.05) { const n = Math.pow(10, k); pr.push([x(k), y(aRaw(n))]); pe.push([x(k), y(aEmb(n))]); }
+    L.svg("path", { d: L.path(pr), class: "cv-b" }, svg);
+    L.svg("path", { d: L.path(pe), class: "cv-a" }, svg);
+    L.svg("line", { x1: x(S2.n), x2: x(S2.n), y1: m.t, y2: H - m.b, class: "cv-now" }, svg);
+    const n = Math.pow(10, S2.n), r = aRaw(n), e = aEmb(n);
+    let cross = null;
+    for (let k = 1; k <= 4.001; k += 0.01) { const nn = Math.pow(10, k); if (aRaw(nn) >= aEmb(nn)) { cross = nn; break; } }
+    $("st2-raw").textContent = pct(r, 1);
+    $("st2-emb").textContent = pct(e, 1);
+    $("st2-emb-s").textContent = (e >= r ? "+" : "") + ((e - r) * 100).toFixed(1) + " points vs raw";
+    $("st2-x").textContent = cross ? L.fmtInt(Math.round(cross / 10) * 10) : "beyond 10,000";
+    $("s2-verdict").innerHTML = e > r
+      ? "At <b>" + L.fmtInt(Math.round(n)) + "</b> cases the embedding is ahead by <b>" + ((e - r) * 100).toFixed(1) + "</b> points: the raw model is spending its few positives estimating 200 coefficients."
+      : "At <b>" + L.fmtInt(Math.round(n)) + "</b> cases the raw model is ahead by <b>" + ((r - e) * 100).toFixed(1) + "</b> points. There are enough labels to learn the full boundary, and the embedding's lost signal now costs more than it saves.";
+  }
+  L.bind("s-n", v => L.fmtInt(Math.round(Math.pow(10, v))) + " cases", v => { S2.n = v; renderLab(); });
+  L.bind("s-keep", v => v.toFixed(2), v => { S2.keep = v; renderLab(); });
+
+  // =====================================================================
+  // Simulation 3: synthetic data memorisation
+  // =====================================================================
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const R = rng(119);
+  const gauss = () => Math.sqrt(-2 * Math.log(1 - R())) * Math.cos(2 * Math.PI * R());
+  const RHO = 0.7, NR = 200, NS = 600;
+  const mkPt = () => { const a = gauss(), b = gauss(); return [a, RHO * a + Math.sqrt(1 - RHO * RHO) * b]; };
+  const mem = Array.from({ length: NR }, mkPt), hold = Array.from({ length: NR }, mkPt);
+  const pick = Array.from({ length: NS }, () => Math.floor(R() * NR));
+  const nz = Array.from({ length: NS }, () => [gauss(), gauss()]);
+  const S3 = { lh: -1.3, flt: false };
+  const synBox = $("syn-chart");
+  const d2 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+  function dcr(p, syn) { let b = 1e9; for (const s of syn) { const d = d2(p, s); if (d < b) b = d; } return b; }
+  function aucOf(neg, pos) { // P(pos score > neg score) with score = -dcr; ties half
+    let w = 0;
+    for (const a of pos) for (const b of neg) w += a < b ? 1 : a === b ? 0.5 : 0;
+    return w / (pos.length * neg.length);
+  }
+  const radius = p => Math.hypot(p[0], p[1]);
+  const outM = mem.slice().sort((a, b) => radius(b) - radius(a)).slice(0, 25);
+  const outH = hold.slice().sort((a, b) => radius(b) - radius(a)).slice(0, 25);
+  function renderSyn() {
+    const h = Math.pow(10, S3.lh);
+    let syn = pick.map((i, j) => [mem[i][0] + h * nz[j][0], mem[i][1] + h * nz[j][1]]);
+    if (S3.flt) syn = syn.filter(s => dcr(s, mem) >= 0.15);
+    const dm = mem.map(p => dcr(p, syn)), dh = hold.map(p => dcr(p, syn));
+    const a0 = aucOf(dh, dm), A = Math.max(a0, 1 - a0);
+    const om = outM.map(p => dcr(p, syn)), oh = outH.map(p => dcr(p, syn));
+    const o0 = aucOf(oh, om), O = Math.max(o0, 1 - o0);
+    const n = syn.length, mx = syn.reduce((s, p) => s + p[0], 0) / n, my = syn.reduce((s, p) => s + p[1], 0) / n;
+    let sxy = 0, sxx = 0, syy = 0; syn.forEach(p => { sxy += (p[0] - mx) * (p[1] - my); sxx += (p[0] - mx) ** 2; syy += (p[1] - my) ** 2; });
+    const cor = sxy / Math.sqrt(sxx * syy);
+    const close = syn.filter(s => dcr(s, mem) < 0.05).length;
+
+    const W = Math.max(300, synBox.clientWidth), H = Math.min(330, W), m = { l: 30, r: 10, t: 10, b: 28 };
+    const svg = mk(synBox, W, H, "Real and synthetic customers on two fields");
+    const x = L.scale(-3.5, 3.5, m.l, W - m.r), y = L.scale(-3.5, 3.5, H - m.b, m.t);
+    [-3, -2, -1, 0, 1, 2, 3].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); });
+    tx(svg, (m.l + W - m.r) / 2, H - 8, "Field 1 (standardised)", { "text-anchor": "middle" });
+    tx(svg, 10, (m.t + H - m.b) / 2, "Field 2", { "text-anchor": "middle", transform: `rotate(-90 10 ${(m.t + H - m.b) / 2})` });
+    const inb = p => Math.abs(p[0]) < 3.5 && Math.abs(p[1]) < 3.5;
+    syn.filter(inb).forEach(p => L.svg("circle", { cx: x(p[0]), cy: y(p[1]), r: 2.6, class: "pt-syn" }, svg));
+    hold.filter(inb).forEach(p => L.svg("circle", { cx: x(p[0]), cy: y(p[1]), r: 3.6, class: "pt-hold" }, svg));
+    mem.filter(inb).forEach(p => L.svg("circle", { cx: x(p[0]), cy: y(p[1]), r: 3, class: "pt-mem" }, svg));
+
+    $("st3-auc").textContent = pct(A, 0); $("st3-auc-b").className = "stat " + (A > 0.65 ? "bad" : A > 0.55 ? "warn" : "ok");
+    $("st3-out").textContent = pct(O, 0); $("st3-out-b").className = "stat " + (O > 0.7 ? "bad" : O > 0.58 ? "warn" : "ok");
+    $("st3-cor").textContent = cor.toFixed(2);
+    $("st3-cp").textContent = L.fmtInt(close) + " of " + L.fmtInt(n);
+    $("st3-cp-s").textContent = S3.flt ? "after the near-copy filter" : "close to a training customer";
+    $("s3-verdict").innerHTML = S3.flt
+      ? "Near-copies are gone (<b>" + close + "</b> left within 0.05), but the attacker still scores <b>" + pct(A, 0) + "</b> overall and <b>" + pct(O, 0) + "</b> on the unusual customers, because training customers now sit in conspicuous gaps. The filter was a patch on the symptom, not a privacy guarantee."
+      : "At this noise level the attacker identifies training customers with AUC <b>" + pct(A, 0) + "</b> (<b>" + pct(O, 0) + "</b> for the most unusual 25), while the synthetic correlation is <b>" + cor.toFixed(2) + "</b> against a true 0.70. " + (h < 0.15 ? "Fidelity is excellent because the generator is mostly copying." : h > 0.6 ? "Privacy is better, but fidelity is visibly degraded: correlation is blurred and the tails are filled in with noise." : "Both numbers are partial: no setting gives full fidelity and no leakage.");
+  }
+  L.bind("s-h", v => Math.pow(10, v).toFixed(2), v => { S3.lh = v; renderSyn(); });
+  $("b-flt").addEventListener("click", e => { S3.flt = !S3.flt; e.currentTarget.setAttribute("aria-pressed", String(S3.flt)); renderSyn(); });
+
+  function renderAll() { renderTok(); renderLab(); renderSyn(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

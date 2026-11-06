@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Catching Hallucinations, and Promising When to Abstain</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  .bar-0 { fill: var(--neutral); }
+  .bar-1 { fill: var(--accent); }
+  .bar-2 { fill: var(--warn); fill-opacity: .8; }
+  .hist { fill: var(--accent); fill-opacity: .55; }
+  .hist.low { fill: var(--bad); fill-opacity: .6; }
+  .ln-target { stroke: var(--warn); stroke-width: 1.6; stroke-dasharray: 4 3; }
+  .ln-mean { stroke: var(--ink); stroke-width: 2; }
+  .d-true { fill: none; stroke: var(--accent); stroke-width: 2.4; }
+  .d-false { fill: none; stroke: var(--bad); stroke-width: 2.4; }
+  .d-cut { stroke: var(--ink); stroke-width: 1.6; stroke-dasharray: 4 3; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .chip { font-size: 13px; padding: 4px 9px; border-radius: 999px; background: var(--sunk); border: 1px solid var(--rule, currentColor); }
+  .chip.c0 { border-color: var(--accent); }
+  .chip.c1 { border-color: var(--warn); }
+  .chip.c2 { border-color: var(--bad); }
+  .chip.c3 { border-color: var(--muted); }
+  .claimbox { background: var(--sunk); border-radius: 8px; padding: 12px 14px; font-size: 15px; max-width: var(--measure); }
+  .claimbox p { margin: 0 0 8px; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track A · Applied frontier: banking, agents and the Gulf</span>
+    <span>Module A4 · Advanced testing of LLM systems</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>A4.3 · A4.4</span>
+        <span class="pill e">Edge</span>
+        <span>About 42 minutes</span>
+      </div>
+      <h1>Catching Hallucinations, and Promising When to Abstain</h1>
+      <p class="dek">How to tell when a language model is making things up: disagreement between its own samples, claim-by-claim checks against the source, and conformal prediction, which turns a rough confidence score into a statistical promise about how often the answers you let through are wrong.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A hallucination detector is a noisy score, not a verdict; the useful questions are whether the answer is supported by the source you gave it, whether the model would say the same thing twice, and how to choose a cut-off on the score so that the error rate among answers you release is provably below a number you picked, provided tomorrow looks like your calibration data.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A relationship manager asks the bank's internal assistant: <em>"What is the late-payment fee on the Gold card?"</em> The assistant answers in a calm, fluent sentence: "AED 230 per late payment." The real figure in the product sheet is AED 200. Nothing in the tone gives it away. A language model is trained to produce plausible text, and a wrong figure is exactly as plausible as a right one.</p>
+        <p>Three ideas make this manageable, and the lesson is built on them.</p>
+        <ul>
+          <li><strong>Ask again.</strong> If you ask the same question ten times and get "AED 200" nine times and something different once, the model is fairly sure. If you get four different amounts, it is guessing. Disagreement between a model's own answers is a signal of ignorance. The catch: the answers must be compared by <em>meaning</em>, not by wording. "AED 200" and "a fee of 200 dirhams" agree.</li>
+          <li><strong>Check against the source.</strong> If the assistant was given the product sheet, every claim in its answer should be traceable to a sentence in it. That is a smaller, more checkable problem than "is this true of the world".</li>
+          <li><strong>Decide when to stay quiet, with a guarantee.</strong> Every detector produces a score. Somewhere you must draw a line: below it, the assistant says "I'm not sure, please check with the product team". Conformal prediction picks that line using held-out examples so that the error rate among answers released is at most, say, 5%, with a statement you can defend to a validator.</li>
+        </ul>
+        <p>None of these makes a model truthful. They make its unreliability <em>measurable</em>, and a measurable error rate is something a bank can govern.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Detection is not truth. A detector has its own false alarms and misses, so it needs the same treatment as any other classifier: a threshold chosen from costs, an honest test set, and an interval. Conformal prediction is the tool that makes the threshold choice carry a guarantee.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-types">What "hallucination" means, and why models do it</h3>
+      <div class="prose">
+        <p>Two different failures hide under one word, and the tests differ.</p>
+        <ul>
+          <li><strong>Unfaithful to the context</strong> (a groundedness failure). The model was given a document, such as a retrieved policy or a loan agreement, and says something the document does not support or contradicts. You can check this against the document.</li>
+          <li><strong>Unfactual</strong> (a world-knowledge failure). The model answers from memory and is wrong. To check, you need an external truth, which is much harder to get.</li>
+        </ul>
+        <p>For a bank, the first matters most day to day: retrieval-augmented assistants, summarisers of credit memos, and contact-centre copilots are all supposed to stay inside supplied text. A separate failure is the <em>silent omission</em> or a fabricated citation: the answer names "clause 7.2" that does not exist.</p>
+        <p>Why does it happen? A model is trained to predict the next token. When the training data contains a fact many times, the right continuation gets high probability. For a fact seen once or never, such as one bank's fee schedule, there is no pattern to learn, but the model still must produce <em>something</em>. A 2025 OpenAI analysis (Kalai and colleagues) makes the point sharply: much of this is a statistical inevitability for rarely seen facts, and common benchmark scoring, which gives zero for "I don't know" and a chance of credit for a guess, trains models to guess rather than abstain. That is the formal reason abstention, the second half of this lesson, matters.</p>
+      </div>
+
+      <h3 class="sub" id="m-entropy">Disagreement as a signal: sampling consistency and semantic entropy</h3>
+      <div class="prose">
+        <p>A model can give you a probability for every token. The obvious uncertainty measure, the entropy of the sequence, fails because one meaning has many wordings. If the model is certain the fee is AED 200 but could phrase that six ways, the probability is split across six strings and looks uncertain. Wording variation is noise, not doubt.</p>
+        <p><strong>Semantic entropy</strong> (Kuhn, Gal and Farquhar, 2023; developed in Farquhar and colleagues, Nature, 2024) fixes this in three steps:</p>
+        <ol>
+          <li>Sample several answers (typically 5 to 10) at a non-zero temperature.</li>
+          <li>Group them by meaning. In the published method a second model checks bidirectional entailment: A and B go in the same group if each implies the other.</li>
+          <li>Compute the entropy of the group sizes. One big group means low entropy and confidence. Many small groups means high entropy and a likely confabulation.</li>
+        </ol>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>H</mi><mtext>sem</mtext></msub><mo>=</mo><mo>−</mo><munder><mo>∑</mo><mi>c</mi></munder><msub><mi>p</mi><mi>c</mi></msub><msub><mi>log</mi><mn>2</mn></msub><msub><mi>p</mi><mi>c</mi></msub></math>
+        <p class="where"><i>p<sub>c</sub></i> is the share of sampled answers falling in meaning-group <i>c</i> (in the full method, the share of probability mass). Zero bits: every sample means the same thing. One bit: a coin flip between two meanings. Ten samples split 9 to 1 give 0.47 bits. Ten samples in ten different groups give 3.3 bits.</p>
+      </div>
+
+      <figure class="figure" id="fig-se">
+        <div class="fig-head"><span class="fig-title">Wording noise versus real doubt</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> set the model's confidence in its top answer to 90% and raise "ways to phrase it" to 6. String-level entropy jumps; semantic entropy does not move. Now drop confidence to 35%: semantic entropy climbs towards 2 bits, the sign of a guess. Press <b>Draw 10 samples</b> several times to see how noisy a ten-sample estimate is.</p>
+        <div class="chart-wrap" id="se-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-conf">Model's probability on its top meaning <output for="s-conf"></output></label><input type="range" id="s-conf" min="0.25" max="0.99" step="0.01" value="0.9"></div>
+          <div class="ctl"><label for="s-forms">Ways the model phrases each answer <output for="s-forms"></output></label><input type="range" id="s-forms" min="1" max="6" step="1" value="4"></div>
+        </div>
+        <div class="btns" role="group" aria-label="Sampling">
+          <button class="btn" type="button" id="b-draw">Draw 10 samples</button>
+        </div>
+        <div class="chips" id="se-chips" aria-live="polite"></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Exact semantic entropy</div><div class="v" id="st1-sem"></div><div class="s">bits, from the true distribution</div></div>
+          <div class="stat" id="st1-str-b"><div class="k">String-level entropy</div><div class="v" id="st1-str"></div><div class="s">bits, counting wordings as different</div></div>
+          <div class="stat"><div class="k">Last 10 draws: groups found</div><div class="v" id="st1-groups">-</div><div class="s">distinct meanings</div></div>
+          <div class="stat"><div class="k">Last 10 draws: estimated entropy</div><div class="v" id="st1-est">-</div><div class="s">bits, plug-in estimate</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: a made-up question with four possible fee amounts (the figures are invented, not any bank's real fees). The top meaning gets your probability; the other three share the rest 50/33/17. Each meaning has the chosen number of equally likely wordings. The two entropies on the bars are exact; the draws use random numbers and are noisy on purpose. Clustering is assumed perfect, which a real entailment model is not.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three practical points. First, samples cost money: ten answers plus pairwise entailment checks is an order of magnitude more than one call, so teams use it for sampling audits and high-stakes answers rather than every request. Second, <strong>semantic entropy probes</strong> (2024) train a small classifier on the model's hidden states to predict the semantic entropy from a single pass, getting most of the signal at near-zero cost, but they need white-box access, which excludes hosted API models. Third, <strong>SelfCheckGPT</strong> (Manakul and colleagues, 2023) is the black-box cousin: sample extra answers and check each sentence of the main answer against them. A sentence that the other samples do not support is likely invented.</p>
+        <p>The limit: consistency is not correctness. A model can be consistently wrong, repeating a mistake from its training data every time. Semantic entropy catches confabulation, the arbitrary, different-each-time kind of error, and misses stable misconceptions. This is why it is one signal among several.</p>
+      </div>
+
+      <h3 class="sub" id="m-grounded">Groundedness: claim verification and citation checks</h3>
+      <div class="prose">
+        <p>When the model answers from supplied documents, you can check it directly. The standard pipeline has four stages:</p>
+        <ol>
+          <li><strong>Decompose</strong> the answer into atomic claims, each a single checkable statement. ("The Gold card has a late fee of AED 200 and it is waived in the first year" is two claims.) An LLM usually does this. FActScore (Min and colleagues, 2023) popularised the method for long-form text.</li>
+          <li><strong>Retrieve</strong> the relevant passage for each claim from the source.</li>
+          <li><strong>Verify</strong> each claim against its passage: supported, contradicted, or not enough information. This is natural language inference (NLI), done by a specialised small model or an LLM judge (A4.2 explains judge biases).</li>
+          <li><strong>Aggregate</strong>: a faithfulness score is the share of claims supported; or you flag the answer if any claim fails.</li>
+        </ol>
+        <p><strong>Citation checks</strong> are the cheap, mechanical layer. If the assistant cites "[Policy 4.2, p.7]", confirm that the document and the passage exist (a plain lookup), then confirm the cited passage supports the claim (an NLI call). Fabricated references fail at the first step. A subtler failure is a real citation attached to a claim it does not support; only the second step catches that.</p>
+        <p>One quantity decides how hard this is: the <em>answer-level</em> error compounds claim-level error. A verifier with a small false alarm rate per claim produces many false alarms per answer, because a long answer has many chances to trip it. The simulation shows how quickly.</p>
+      </div>
+
+      <figure class="figure" id="fig-claim">
+        <div class="fig-head"><span class="fig-title">A claim verifier on long answers</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> keep claims per answer at 5 and slide the cut-off up until almost every wrong claim is caught. Look at the "good answers wrongly flagged" figure: the reviewer queue fills with answers that were fine. Then lengthen answers to 12 claims at the same cut-off.</p>
+        <div class="chart-wrap" id="cl-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Supported claims: verifier score</span>
+          <span><i style="background:var(--bad)"></i>Unsupported claims: verifier score</span>
+          <span><i style="background:var(--ink)"></i>Your cut-off (flag below it)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-cut">Flag claims scoring below <output for="s-cut"></output></label><input type="range" id="s-cut" min="0.2" max="0.95" step="0.01" value="0.58"></div>
+          <div class="ctl"><label for="s-sep">How well the verifier separates them <output for="s-sep"></output></label><input type="range" id="s-sep" min="0.5" max="3.5" step="0.05" value="1.7"></div>
+          <div class="ctl"><label for="s-k">Claims per answer <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="12" step="1" value="5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Wrong claims caught</div><div class="v" id="st2-tpr"></div><div class="s">claim-level recall</div></div>
+          <div class="stat"><div class="k">Share of claim flags that are right</div><div class="v" id="st2-prec"></div><div class="s">claim-level precision</div></div>
+          <div class="stat" id="st2-bad-b"><div class="k">Answers with an error that get flagged</div><div class="v" id="st2-bad"></div><div class="s" id="st2-bad-s"></div></div>
+          <div class="stat" id="st2-good-b"><div class="k">Good answers wrongly flagged</div><div class="v" id="st2-good"></div><div class="s" id="st2-good-s"></div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: 10% of claims are unsupported. Verifier scores are bell-shaped with spread 0.15; supported claims centre on 0.70 and unsupported ones sit lower by the separation (in spreads). Real verifier scores are not this tidy and errors correlate within an answer. All numbers are exact expected values under these assumptions.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The simulation holds a lesson that applies to any detector: you cannot pick the cut-off from the score alone. How many wrong claims you are willing to let through, against how many reviewer hours you can spend, is a business decision. The next step is to make that decision with a guarantee.</p>
+      </div>
+
+      <h3 class="sub" id="m-conformal">Conformal prediction: a promise from a calibration set</h3>
+      <div class="prose">
+        <p>Conformal prediction (Vovk and colleagues; a gentle modern introduction is Angelopoulos and Bates, 2021) wraps any model and turns its scores into guaranteed statements. It needs no assumption about the model or the shape of the score. It needs one thing: <strong>exchangeability</strong>, meaning the calibration examples and future examples are drawn from the same process, in any order. The recipe is short:</p>
+        <ol>
+          <li>Hold out <em>n</em> labelled examples that the model never trained on. These are the calibration set.</li>
+          <li>For each, compute a <strong>nonconformity score</strong>: a number that is large when the model is wrong or surprised.</li>
+          <li>Take the <strong>⌈(n+1)(1−α)⌉-th smallest</strong> of these scores as the threshold τ. The "+1" accounts for the new example being one more draw from the same pool.</li>
+          <li>On a new example, use τ to decide what to output.</li>
+        </ol>
+        <p>The guarantee, marginal over the random draw of calibration set and test example, is that the new example's score falls below τ with probability at least 1−α. The proof is a counting argument: if the new example is exchangeable with the <em>n</em> others, its rank among all n+1 is equally likely to be anywhere.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>P</mi><mo stretchy="false">(</mo><msub><mi>s</mi><mtext>new</mtext></msub><mo>≤</mo><mi>τ</mi><mo stretchy="false">)</mo><mo>≥</mo><mn>1</mn><mo>−</mo><mi>α</mi></math>
+        <p class="where">The probability that a fresh example is "covered" is at least 1−α. It is also at most 1−α+1/(n+1), so it is tight: the promise is not conservative by more than the size of one calibration example. With α = 5% and n = 199, coverage lies between 95% and 95.5%.</p>
+      </div>
+      <div class="prose">
+        <p>Notice what the guarantee is <em>not</em>. It is an <strong>average</strong> over examples, not a promise for each question type: coverage can be 99% on easy questions and 80% on hard ones and still average 95%. And it holds for a <em>random</em> calibration set: with a small one, your particular τ can be unlucky, so realised coverage varies from calibration set to calibration set. Simulation 3 shows that spread.</p>
+      </div>
+
+      <h3 class="sub" id="m-cllm">Conformal prediction for LLMs: filtering claims and abstaining</h3>
+      <div class="prose">
+        <p>Applying this to free text needs a good definition of "correct" and of the score. Three published approaches show the range:</p>
+        <ul>
+          <li><strong>Conformal factuality</strong> (Mohri and Hashimoto, 2024). Decompose each calibration answer into claims, score each claim with any confidence measure, and let each answer's nonconformity be the <em>highest score among its false claims</em>. Set τ at the ⌈(n+1)(1−α)⌉-th smallest. At test time, delete every claim scoring at or below τ. The promise: with probability at least 1−α, <em>all remaining claims are true</em>. You trade completeness for factuality, and the guarantee tells you exactly how.</li>
+          <li><strong>Conformal language modelling</strong> (Quach and colleagues, 2024). Sample answers until a stopping rule says that, with calibrated probability, at least one in the set is acceptable, with a rejection rule to drop redundant or low-quality samples. The output is a <em>set</em> of answers.</li>
+          <li><strong>Abstention by threshold.</strong> The simplest design: answer only if a confidence score (semantic entropy, verifier score, or a combination) is on the safe side of a calibrated line; otherwise hand over to a human. Controlling the error rate <em>among answered questions</em>, rather than coverage over all questions, is the subject of conformal risk control (Angelopoulos and colleagues) and related "learn then test" methods. Naive versions need care, because you choose τ by looking at the same errors you then claim to control.</li>
+        </ul>
+        <p>Simulation 3 uses the conformal-factuality recipe on invented data, with the same verifier model as before.</p>
+      </div>
+
+      <figure class="figure" id="fig-conf">
+        <div class="fig-head"><span class="fig-title">Calibrate once, delete claims, count what survives</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> set the error budget to 10% and calibration size to 50. The black line (average coverage over 200 recalibrations) sits just above the target, but the histogram is wide and a slice of bars falls below it: your single calibration set could be one of the unlucky ones. Raise it to 1,000 and the histogram tightens. Then cut the budget to 2% and watch how many true claims you must delete to get there.</p>
+        <div class="chart-wrap" id="cf-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--warn)"></i>Target 1 − α</span>
+          <span><i style="background:var(--ink)"></i>Average realised coverage</span>
+          <span><i class="sq" style="background:var(--bad)"></i>Calibration sets that missed the target</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-alpha">Error budget α (answers allowed to contain a surviving wrong claim) <output for="s-alpha"></output></label><input type="range" id="s-alpha" min="0.02" max="0.4" step="0.01" value="0.1"></div>
+          <div class="ctl"><label for="s-n">Calibration answers <output for="s-n"></output></label><input type="range" id="s-n" min="20" max="1000" step="10" value="100"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Answers fully correct after filtering</div><div class="v" id="st3-cov"></div><div class="s" id="st3-cov-s"></div></div>
+          <div class="stat" id="st3-miss-b"><div class="k">Calibration sets below target</div><div class="v" id="st3-miss"></div><div class="s">of 200 recalibrations</div></div>
+          <div class="stat" id="st3-keep-b"><div class="k">Correct claims kept</div><div class="v" id="st3-keep"></div><div class="s">the price of the promise</div></div>
+          <div class="stat"><div class="k">Unfiltered answers fully correct</div><div class="v" id="st3-raw"></div><div class="s">no filtering at all</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: answers of 5 claims, each unsupported with probability 10%; the same bell-shaped verifier scores as Simulation 2 (supported 0.70, unsupported 0.45, spread 0.15). Each of the 200 recalibrations draws a fresh calibration set, finds τ by the conformal rule, and the realised coverage on new answers is computed exactly from τ. Calibration and test data are exchangeable by construction, which real deployments must earn.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two honest details. A calibration answer with no false claims gets nonconformity minus infinity, so it never raises τ. And the whole guarantee depends on how the calibration labels were produced: if "false claim" was marked by an LLM judge rather than a person, the promise holds for the judge's idea of truth. Calibrate on human-verified claims, and re-verify a sample regularly.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Detection sits between evaluation statistics, retrieval design, and the bank's risk appetite.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">A4.1 · A4.2 · Statistics for evals, LLM-as-judge</span><span class="t"><a href="a4-statistics-for-evals.html">The tools you test the detector with</a></span><p>A claim verifier is often an LLM judge, with its biases. Its precision and recall need intervals, and the labelled set it is checked on must be big enough to mean something.</p></div>
+        <div class="link-card"><span class="code">F7.1 – F7.4 · Thresholds and calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">The same classifier problem</a></span><p>A hallucination flag is a binary classifier, and Simulation 2 is the base-rate lesson again: errors in 10% of claims make flags noisy. A calibrated confidence turns a score into a probability.</p></div>
+        <div class="link-card"><span class="code">F7.8 · Uncertainty quantification</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">Where conformal sits</a></span><p>Conformal prediction is one of the few uncertainty methods with a finite-sample guarantee, in exchange for the exchangeability assumption.</p></div>
+        <div class="link-card"><span class="code">R8.1 · Conformal prediction</span><span class="t"><a href="r8-conformal-prediction.html">The classical theory</a></span><p>Prediction sets for classifiers and regressors, and the proof of the quantile guarantee used above. This lesson applies it to generated text.</p></div>
+        <div class="link-card"><span class="code">F2.1 · F2.2 · Intervals and the bootstrap</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">Spread between calibration sets</a></span><p>The histogram in Simulation 3 is a resampling picture of how much a single calibration set can mislead.</p></div>
+        <div class="link-card"><span class="code">A6.3 · Agentic RAG</span><span class="t"><a href="a6-agentic-rag.html">Groundedness needs good retrieval</a></span><p>If retrieval fetches the wrong clause, a perfectly grounded answer is still wrong. Test retrieval and generation separately.</p></div>
+        <div class="link-card"><span class="code">M5.3 · M5.4 · Human labels and test sets</span><span class="t"><a href="m5-human-evaluation-and-annotator-agreement.html">Where the ground truth comes from</a></span><p>Conformal guarantees and verifier accuracy are only as good as the human labels behind them.</p></div>
+        <div class="link-card"><span class="code">M4.5 · A15.3 · Guardrails</span><span class="t"><a href="m4-guardrails-and-approval-gates.html">Where the abstention goes</a></span><p>A detector is a guardrail; the question is what happens on a flag: block, caveat, or route to a human approval step.</p></div>
+        <div class="link-card"><span class="code">A14.1 · A14.4 · Arabic LLMs and benchmarks</span><span class="t"><a href="a14-arabic-llms-jais-allam-falcon.html">Detection in Arabic</a></span><p>Entailment checkers and decomposers are weaker in Arabic and in mixed Arabic-English text. Calibrate per language.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Policy and product assistants.</strong> Staff and customers ask about fees, eligibility, cut-off times. Wrong figures create complaints and conduct risk. Groundedness against the current policy store, plus a "not sure, ask the product team" route, is the standard defence.</li>
+          <li><strong>Credit memo and covenant summaries.</strong> A summary that invents a covenant or misstates a ratio is dangerous. Claim-level checks against the source filings give the reviewer a list of unsupported lines instead of a vague warning (see <a href="a10-llms-for-credit-memos-and.html">A10.3</a>).</li>
+          <li><strong>AML investigation copilots.</strong> A narrative for a suspicious activity report must not contain facts absent from the case file. Every sentence should link to a transaction or document.</li>
+          <li><strong>Contact-centre agent assist.</strong> Real-time, so latency limits you to a cheap verifier; sampling-heavy methods are for after-the-fact audits.</li>
+          <li><strong>Model risk and validation.</strong> A statement such as "no more than 5% of released answers contain an unsupported claim, measured on 400 human-labelled answers" is the kind of claim a validator can examine and challenge.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The picture has settled into a pattern: no single detector is reliable, strong systems combine several signals, and conformal calibration is increasingly the last layer that sets the cut-off. The argument is about cost, about language coverage, and about how to get the guarantee to survive long answers and shifting data.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with one light search. Items from before 2025 are from memory of the papers; the 2026 items below are as reported in search results, and I did not read the full papers.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2022</span><div><div class="t">Models partly know what they know</div><p>Kadavath and colleagues showed that large models' own probability that an answer is correct is reasonably calibrated on multiple-choice tasks, and that they can be trained to predict whether they know the answer. The root of self-assessment methods.</p><div class="src">Kadavath et al., arXiv 2207.05221</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Semantic uncertainty, SelfCheckGPT, FActScore</div><p>Meaning-level entropy, black-box sentence checking against extra samples, and decomposition into atomic facts all arrived within a year.</p><div class="src">Kuhn et al., ICLR 2023; Manakul et al., EMNLP 2023; Min et al., EMNLP 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Semantic entropy in Nature; conformal factuality and conformal language modelling</div><p>Farquhar and colleagues showed semantic entropy detects confabulations across several tasks. In the same year conformal methods were extended to claim-level guarantees and to sampled answer sets. Cheap single-pass probes that mimic semantic entropy appeared.</p><div class="src">Farquhar et al., Nature 2024; Mohri &amp; Hashimoto, ICML 2024; Quach et al., ICLR 2024</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Why models hallucinate: the incentive problem</div><p>Kalai and colleagues argued that hallucination arises from statistical limits on rare facts and is then reinforced because common evaluations reward confident guesses over abstention. The suggested fix is to change the scoring to penalise confident errors.</p><div class="src">Kalai et al., arXiv 2509.04664</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Detection as hypothesis testing, and conformal wrappers on detectors</div><p>Reported in search results: work that combines several evaluation scores through conformal p-values to control the false alarm rate (arXiv August 2025, later in ACL 2026 Findings), and a December 2025 paper arguing that embedding-similarity detection alone is not enough for production RAG, with a conformal approach added.</p><div class="src">arXiv 2508.18473; ACL 2026 Findings; arXiv 2512.15068</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Entropy alone is not enough; adaptive sampling; calibrated abstention</div><p>As reported: a March 2026 preprint finds that entropy signals by themselves are insufficient for safe selective prediction and that adding a correctness probe helps; other 2026 preprints reduce the sampling bill by adapting the number of samples and report conformal calibration on semantic entropy to give an error guarantee among accepted answers. Treat the headline benchmark numbers in these as unverified by me.</p><div class="src">arXiv 2603.21172; arXiv 2603.22812</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Citation existence and quote checks</b></td><td>Verify that cited documents and passages exist and that quoted text appears verbatim.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>LLM-judge or NLI faithfulness scoring on RAG answers</b></td><td>Claim decomposition and verification as an offline test and a sampled production monitor.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Abstain and route to human on low confidence</b></td><td>A threshold on a verifier or confidence score; thresholds usually set by hand on a test set.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Sampling-based checks (semantic entropy, SelfCheckGPT)</b></td><td>Used for audits and high-stakes review; the cost of extra samples limits real-time use.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Conformal calibration of the abstention line</b></td><td>Cut-off chosen from a labelled calibration set with a stated error budget. Fits model-risk thinking; I know of little public evidence of bank adoption.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Hidden-state probes for hallucination</b></td><td>Needs weights access, so mostly self-hosted open-weight models, relevant to on-premises deployments (A5.2).</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Ground the model in retrieved text, check claims and citations against it, combine more than one uncertainty signal, and choose the abstention line on human-labelled calibration data, so the error rate you quote is a measurement and not a hope.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Most failures are about the detector or the guarantee, not the model. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Consistent but wrong</div><p>The model repeats the same mistake in every sample, so semantic entropy is zero and the answer passes.</p><div class="spot"><b>Spot it</b>Test on known stable misconceptions and on bank-specific facts that older versions of a policy used to say. Pair sampling with a source check.</div></li>
+        <li><div class="t">Grounded in the wrong document</div><p>The answer is faithful to the retrieved passage, but that passage was an outdated or irrelevant version.</p><div class="spot"><b>Spot it</b>Evaluate retrieval separately: for a set of questions with known right passages, is the right one in the top results, and is it the current version?</div></li>
+        <li><div class="t">Verifier with the model's own blind spots</div><p>The same family of model writes the answer and judges it, so both make correlated errors, and the judge favours fluent text.</p><div class="spot"><b>Spot it</b>Measure the verifier against human labels on a hard set, with an interval, and include answers that are fluent but wrong.</div></li>
+        <li><div class="t">Answer-level alarms drown the reviewers</div><p>A claim-level false alarm rate that looks low produces a high answer-level one on long outputs.</p><div class="spot"><b>Spot it</b>Compute 1 − (1 − f)<sup>k</sup> for k claims per answer, and watch the queue volume in a pilot.</div></li>
+        <li><div class="t">Calibration set that does not match the traffic</div><p>Calibrated on easy FAQ questions, deployed on complex corporate-lending queries. Exchangeability fails and the guarantee is void.</p><div class="spot"><b>Spot it</b>Compare the distribution of question types, languages and lengths in calibration against live traffic. Recalibrate when they diverge; monitor the realised error rate on a labelled live sample.</div></li>
+        <li><div class="t">Tuning the model or prompt on the calibration set</div><p>The set was reused to pick prompts, so errors seen in it are no longer a fair draw.</p><div class="spot"><b>Spot it</b>Ask when the calibration set was last touched and whether anything was selected using it. Keep a sealed set for the guarantee.</div></li>
+        <li><div class="t">Quoting the average as a per-case promise</div><p>"95% of answers are right" gets heard as "this answer is 95% likely to be right", or as holding in every customer segment.</p><div class="spot"><b>Spot it</b>Report coverage by subgroup: language, product, question type. Averages can hide a segment at 80%.</div></li>
+        <li><div class="t">A tiny calibration set</div><p>With 30 examples, a single unlucky draw gives a threshold that misses the target by a wide margin.</p><div class="spot"><b>Spot it</b>Ask for the calibration size. The distribution of realised coverage narrows only slowly, roughly with the square root of n (Simulation 3).</div></li>
+        <li><div class="t">Filtering that deletes the answer</div><p>A strict error budget removes so many claims that what remains is useless, like "the card has a fee".</p><div class="spot"><b>Spot it</b>Report completeness (share of true claims kept) next to the guarantee, and show users a sample of filtered outputs.</div></li>
+        <li><div class="t">Arabic and mixed-language text</div><p>Clustering and entailment models treat "٢٣٠ درهم" and "AED 230" as different, or miss negation in Arabic.</p><div class="spot"><b>Spot it</b>Build a small test set of paraphrase pairs, digit variants and negations in each language and measure the clustering step on it.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“We can't make the assistant never wrong, but we can measure how often it is wrong and make it say 'I'm not sure' when it should. We check every statement against the policy documents it was given, and we pick the point at which it steps back by testing on a few hundred answers that our own staff have marked. That gives us a sentence like 'at most one answer in twenty released contains an unsupported statement', and we can monitor that number every month.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“For grounded tasks I'd decompose answers into atomic claims, verify each against retrieved evidence with an NLI model or a judge validated on human labels, and report claim-level and answer-level precision and recall with intervals. For the abstention rule I'd use split-conformal calibration on human-verified claims, in the Mohri and Hashimoto style, with a held-out set never used for prompt selection, and report realised coverage by language and product. The guarantee is marginal and needs exchangeability, so I'd add drift monitoring on the input distribution and a rolling labelled sample.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Can't we just ask the model how confident it is?”</summary><div class="ans"><p>You can, and for some models and tasks the stated confidence is informative, but it is often overconfident and shifts with phrasing. Use it as one feature, check it against labelled outcomes, and let calibration decide the cut-off. Sampling-based and source-based checks add information that a single stated number does not.</p></div></details>
+        <details class="reveal"><summary>“Why not use temperature zero so it gives the same answer every time?”</summary><div class="ans"><p>It makes the output repeatable, not correct. A deterministic model that is wrong is wrong every time and hides its uncertainty. Semantic entropy needs variation to measure; you can sample for the audit and serve the greedy answer if you want.</p></div></details>
+        <details class="reveal"><summary>“What exactly does 'guaranteed' mean in conformal prediction?”</summary><div class="ans"><p>If calibration and future data are exchangeable, then averaged over calibration sets and test cases, the share of released answers meeting the criterion is at least 1−α. It is not a guarantee for each case, each customer segment, or a shifted population, and with a small calibration set any single threshold may be off. It is a precise statement under a stated assumption, which is why it is auditable.</p></div></details>
+        <details class="reveal"><summary>“The verifier flags 3% of claims wrongly. Is that good enough?”</summary><div class="ans"><p>Depends on answer length. With five claims, about 14% of correct answers get flagged; with ten, about 26%. Ask about volume per day times review minutes, not the per-claim rate. And ask what share of real errors it catches.</p></div></details>
+        <details class="reveal"><summary>“Does RAG fix hallucination?”</summary><div class="ans"><p>It reduces it for questions the documents answer, by giving the model something to quote. It does not remove it: the model can ignore, misread or embellish the passage, and retrieval can fetch the wrong one. That is why groundedness checks stay in place after RAG.</p></div></details>
+        <details class="reveal"><summary>“How many labelled examples do we need to calibrate?”</summary><div class="ans"><p>Enough that the spread in realised coverage is acceptable. With α = 10%, a few hundred answers give a tight result; below about 50 the outcome varies a lot between calibration sets. I'd start with a few hundred human-labelled answers per major language and product area, and treat it as a test-set cost alongside the evaluation budget.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. You sample 10 answers and cluster them by meaning: 6, 3 and 1. Compute the semantic entropy and say whether it indicates doubt.</summary><div class="ans"><p>H = −(0.6 log₂0.6 + 0.3 log₂0.3 + 0.1 log₂0.1) = 0.442 + 0.521 + 0.332 ≈ <strong>1.30 bits</strong>. Three competing meanings with the top one holding only 60% is clear doubt; a confident answer would be near 0.5 bits or less.</p></div></details>
+        <details class="reveal"><summary>2. Why can plain string entropy mislead, and how does semantic entropy avoid it?</summary><div class="ans"><p>Different wordings of the same answer are counted as different outcomes, so a model that is sure but varied in phrasing looks uncertain. Semantic entropy first merges answers that mean the same (mutual entailment), so only disagreement of meaning adds entropy.</p></div></details>
+        <details class="reveal"><summary>3. A claim verifier flags 3% of correct claims. Answers have 8 claims. What share of fully correct answers get flagged?</summary><div class="ans"><p>1 − 0.97⁸ = 1 − 0.784 ≈ <strong>22%</strong>. False alarms compound with answer length.</p></div></details>
+        <details class="reveal"><summary>4. With n = 99 calibration scores and α = 0.1, which ranked score is the threshold? What coverage range is guaranteed?</summary><div class="ans"><p>⌈(n+1)(1−α)⌉ = ⌈100 × 0.9⌉ = the 90th smallest. Coverage is at least 90% and at most 90% + 1/100 = 91%.</p></div></details>
+        <details class="reveal"><summary>5. Two teams have the same average coverage of 95%. One has 100 calibration examples and one has 2,000. Which would you trust for a single deployment, and why?</summary><div class="ans"><p>The 2,000. The average over calibration sets is the same, but realised coverage for one particular set varies much more with 100, so your deployed threshold may fall well short of 95%. Spread shrinks roughly with the square root of n.</p></div></details>
+        <details class="reveal"><summary>6. In conformal factuality, what is the nonconformity score of a calibration answer, and what does the final guarantee say?</summary><div class="ans"><p>The highest confidence score among that answer's false claims (or minus infinity if it has none). After removing all test claims scoring at or below τ, the probability that every remaining claim is true is at least 1−α, under exchangeability.</p></div></details>
+        <details class="reveal"><summary>7. The assistant was calibrated on retail FAQs and is now rolled out to corporate-trade-finance questions. What breaks, and what do you do?</summary><div class="ans"><p>Exchangeability: the new questions are harder and the score-to-error relationship changes, so the stated coverage no longer holds. Build a labelled calibration set from the new domain, recalibrate (or calibrate per domain), and monitor realised error on a labelled live sample.</p></div></details>
+        <details class="reveal"><summary>8. Name a hallucination that semantic entropy will miss, and what catches it.</summary><div class="ans"><p>A stable falsehood: the model gives the same wrong answer every time, such as an out-of-date fee. Checking claims against the current source document catches it, which is why groundedness checks and sampling checks are combined.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>L. Kuhn, Y. Gal, S. Farquhar. <a href="https://arxiv.org/abs/2302.09664">Semantic Uncertainty: Linguistic Invariances for Uncertainty Estimation in Natural Language Generation</a>. ICLR, 2023.</li>
+        <li>S. Farquhar, J. Kossen, L. Kuhn, Y. Gal. <a href="https://doi.org/10.1038/s41586-024-07421-0">Detecting hallucinations in large language models using semantic entropy</a>. Nature, 2024.</li>
+        <li>J. Kossen et al. <a href="https://arxiv.org/abs/2406.15927">Semantic Entropy Probes: Robust and Cheap Hallucination Detection in LLMs</a>. arXiv, 2024.</li>
+        <li>P. Manakul, A. Liusie, M. Gales. <a href="https://arxiv.org/abs/2303.08896">SelfCheckGPT: Zero-Resource Black-Box Hallucination Detection for Generative Large Language Models</a>. EMNLP, 2023.</li>
+        <li>S. Min et al. <a href="https://arxiv.org/abs/2305.14251">FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation</a>. EMNLP, 2023.</li>
+        <li>S. Kadavath et al. <a href="https://arxiv.org/abs/2207.05221">Language Models (Mostly) Know What They Know</a>. arXiv, 2022.</li>
+        <li>A. Kalai, O. Nachum, S. Vempala, E. Zhang. <a href="https://arxiv.org/abs/2509.04664">Why Language Models Hallucinate</a>. arXiv, 2025.</li>
+        <li>L. Huang et al. <a href="https://arxiv.org/abs/2311.05232">A Survey on Hallucination in Large Language Models</a>. arXiv, 2023.</li>
+        <li>C. Niu et al. <a href="https://arxiv.org/abs/2401.00396">RAGTruth: A Hallucination Corpus for Developing Trustworthy Retrieval-Augmented Language Models</a>. ACL, 2024.</li>
+        <li>A. Angelopoulos, S. Bates. <a href="https://arxiv.org/abs/2107.07511">A Gentle Introduction to Conformal Prediction and Distribution-Free Uncertainty Quantification</a>. arXiv, 2021.</li>
+        <li>V. Vovk, A. Gammerman, G. Shafer. <em>Algorithmic Learning in a Random World</em>. Springer, 2005. The original textbook.</li>
+        <li>C. Mohri, T. Hashimoto. <a href="https://arxiv.org/abs/2402.10978">Language Models with Conformal Factuality Guarantees</a>. ICML, 2024.</li>
+        <li>V. Quach et al. <a href="https://arxiv.org/abs/2306.10193">Conformal Language Modeling</a>. ICLR, 2024.</li>
+        <li>A. Angelopoulos, S. Bates, A. Fisch, L. Lei, T. Schuster. <a href="https://arxiv.org/abs/2208.02814">Conformal Risk Control</a>. ICLR, 2024.</li>
+        <li><a href="https://arxiv.org/abs/2508.18473">Principled Detection of Hallucinations in Large Language Models via Multiple Testing</a>. arXiv 2508.18473, 2025 (conformal p-values; later in ACL 2026 Findings).</li>
+        <li><a href="https://arxiv.org/abs/2603.21172">Entropy alone is insufficient for safe selective prediction in LLMs</a>. arXiv 2603.21172, 2026 (preprint; title as I understand it from search results, please check).</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in A4: Simulation testing for agents (A4.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  const Q = x => 1 - L.normCdf(x);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+  // =====================================================================
+  // Simulation 1: semantic vs string entropy
+  // =====================================================================
+  const AMT = [200, 230, 250, 100];
+  const TPL = [a => "AED " + a, a => a + " dirhams", a => "A fee of " + a + " AED", a => "The charge is AED " + a + ".", a => a + " AED per late payment", a => "د.إ " + a];
+  const S1 = { conf: 0.9, m: 4, last: null };
+  const seBox = $("se-chart");
+  const H = ps => -ps.reduce((s, p) => s + (p > 0 ? p * Math.log2(p) : 0), 0);
+  function probs() { const r = 1 - S1.conf; return [S1.conf, r * 0.5, r * 0.33, r * 0.17]; }
+  function renderSE() {
+    const ps = probs(), hs = H(ps), hstr = hs + Math.log2(S1.m);
+    const W = Math.max(300, seBox.clientWidth), Hh = 120, m = { l: 118, r: 60, t: 8, b: 26 };
+    const svg = mk(seBox, W, Hh, "Semantic and string-level entropy");
+    const X = L.scale(0, 5, m.l, W - m.r);
+    [0, 1, 2, 3, 4, 5].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: m.t, y2: Hh - m.b, class: "grid" }, svg);
+      tx(svg, X(v), Hh - m.b + 16, v + " bits", { "text-anchor": "middle" });
+    });
+    [["Semantic entropy", hs, 1], ["String-level entropy", hstr, 2]].forEach(([n, v, i], k) => {
+      const y = m.t + 8 + k * 38;
+      L.svg("rect", { x: X(0), y, width: Math.max(1, X(v) - X(0)), height: 26, rx: 3, class: "bar-" + i }, svg);
+      tx(svg, m.l - 8, y + 17, n, { "text-anchor": "end", class: "lbl-ink" });
+      tx(svg, X(v) + 6, y + 18, v.toFixed(2), { class: "lbl-strong" });
+    });
+    $("st1-sem").textContent = hs.toFixed(2); cls($("st1-str-b").previousElementSibling, hs > 1 ? "bad" : (hs > 0.6 ? "warn" : "ok"));
+    $("st1-str").textContent = hstr.toFixed(2);
+    const lines = [];
+    if (hs < 0.6) lines.push("Low semantic entropy (" + hs.toFixed(2) + " bits): the model keeps meaning the same thing. " + (S1.m > 1 ? "String entropy is " + hstr.toFixed(2) + " bits only because it words the answer " + S1.m + " ways." : ""));
+    else if (hs < 1.2) lines.push("Moderate semantic entropy (" + hs.toFixed(2) + " bits): a real minority of samples disagree. Worth a source check.");
+    else lines.push("High semantic entropy (" + hs.toFixed(2) + " bits): the model is guessing between meanings. A good case to abstain or escalate.");
+    lines.push("With an illustrative cut-off of 1 bit, this question would " + (hs > 1 ? "<b>be flagged</b>." : "<b>pass</b>.") + " Whether the top answer is <i>right</i> is a separate matter: a confident model can be confidently wrong.");
+    $("s1-verdict").innerHTML = "<ul><li>" + lines.join("</li><li>") + "</li></ul>";
+  }
+  function draw() {
+    const ps = probs(), out = [], cnt = [0, 0, 0, 0];
+    for (let i = 0; i < 10; i++) {
+      let u = Math.random(), c = 0; while (c < 3 && u > ps[c]) { u -= ps[c]; c++; }
+      cnt[c]++; out.push({ c, f: Math.floor(Math.random() * S1.m) });
+    }
+    $("se-chips").innerHTML = out.map(o => `<span class="chip c${o.c}">${TPL[o.f](AMT[o.c])}</span>`).join("");
+    const groups = cnt.filter(x => x > 0).length, est = H(cnt.map(x => x / 10));
+    $("st1-groups").textContent = groups; $("st1-est").textContent = est.toFixed(2);
+  }
+  L.bind("s-conf", v => Math.round(v * 100) + "%", v => { S1.conf = v; renderSE(); });
+  L.bind("s-forms", v => v + (v === 1 ? " way" : " ways"), v => { S1.m = v; renderSE(); });
+  $("b-draw").addEventListener("click", draw);
+
+  // =====================================================================
+  // Simulation 2: claim verifier
+  // =====================================================================
+  const MT = 0.70, SD = 0.15, HF = 0.10;
+  const S2 = { cut: 0.58, sep: 1.7, k: 5 };
+  const clBox = $("cl-chart");
+  function renderClaim() {
+    const mf = MT - S2.sep * SD, t = S2.cut, k = S2.k;
+    const tpr = L.normCdf((t - mf) / SD), fpr = L.normCdf((t - MT) / SD);
+    const flagC = HF * tpr + (1 - HF) * fpr, precC = flagC > 0 ? HF * tpr / flagC : 0;
+    const pClean = Math.pow(1 - HF, k), pBad = 1 - pClean;
+    const pFlag = 1 - Math.pow(1 - flagC, k);
+    const cleanFlag = pClean * (1 - Math.pow(1 - fpr, k)), badFlag = pFlag - cleanFlag;
+    const W = Math.max(300, clBox.clientWidth), Hh = 190, m = { l: 14, r: 14, t: 12, b: 28 };
+    const svg = mk(clBox, W, Hh, "Verifier score distributions for supported and unsupported claims");
+    const X = L.scale(0, 1.1, m.l, W - m.r);
+    const dens = (x, mu) => L.normPdf((x - mu) / SD) / SD;
+    const ymax = dens(MT, MT) * (1 - HF) * 1.05, Y = L.scale(0, ymax, Hh - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { tx(svg, X(v), Hh - m.b + 16, v.toFixed(2), { "text-anchor": "middle" }); });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: Hh - m.b, y2: Hh - m.b, class: "grid" }, svg);
+    [[MT, 1 - HF, "d-true"], [mf, HF, "d-false"]].forEach(([mu, w, c]) => {
+      let d = "";
+      for (let i = 0; i <= 120; i++) { const x = 1.1 * i / 120; d += (i ? "L" : "M") + X(x).toFixed(1) + " " + Y(w * dens(x, mu)).toFixed(1); }
+      L.svg("path", { d, class: c }, svg);
+    });
+    L.svg("line", { x1: X(t), x2: X(t), y1: m.t, y2: Hh - m.b, class: "d-cut" }, svg);
+    $("st2-tpr").textContent = pct(tpr, 0);
+    $("st2-prec").textContent = pct(precC, 0);
+    $("st2-bad").textContent = pct(badFlag / pBad, 0); $("st2-bad-s").textContent = pct(pBad, 0) + " of answers contain one";
+    cls($("st2-bad-b"), badFlag / pBad > 0.9 ? "ok" : "warn");
+    $("st2-good").textContent = pct(cleanFlag / pClean, 0); $("st2-good-s").textContent = "of fully correct answers";
+    cls($("st2-good-b"), cleanFlag / pClean > 0.3 ? "bad" : (cleanFlag / pClean > 0.1 ? "warn" : "ok"));
+    $("s2-verdict").innerHTML = "At " + k + " claims per answer, about <b>" + pct(pBad, 0) + "</b> of answers contain an unsupported claim. This cut-off flags <b>" + pct(pFlag, 0) + "</b> of all answers, of which <b>" + pct(badFlag / pFlag, 0) + "</b> really contain an error. A claim-level false alarm rate of " + pct(fpr, 1) + " becomes <b>" + pct(cleanFlag / pClean, 0) + "</b> at answer level.";
+  }
+  L.bind("s-cut", v => v.toFixed(2), v => { S2.cut = v; renderClaim(); });
+  L.bind("s-sep", v => v.toFixed(2) + " spreads", v => { S2.sep = v; renderClaim(); });
+  L.bind("s-k", v => v + (v === 1 ? " claim" : " claims"), v => { S2.k = v; renderClaim(); });
+
+  // =====================================================================
+  // Simulation 3: conformal factuality
+  // =====================================================================
+  const K3 = 5, MF3 = 0.45, T3 = 200, NMAX = 1000;
+  const S3 = { a: 0.1, n: 100 };
+  const cfBox = $("cf-chart");
+  const rng = mulberry(112);
+  const gauss = () => Math.sqrt(-2 * Math.log(1 - rng())) * Math.cos(2 * Math.PI * rng());
+  const R = [];
+  for (let t = 0; t < T3; t++) {
+    const row = new Float64Array(NMAX);
+    for (let i = 0; i < NMAX; i++) {
+      let mx = -Infinity;
+      for (let j = 0; j < K3; j++) if (rng() < HF) mx = Math.max(mx, MF3 + SD * gauss());
+      row[i] = mx;
+    }
+    R.push(row);
+  }
+  function renderConf() {
+    const a = S3.a, n = S3.n, target = 1 - a;
+    const idx = Math.ceil((n + 1) * (1 - a));
+    const covs = [];
+    let keepSum = 0;
+    for (let t = 0; t < T3; t++) {
+      let tau;
+      if (idx > n) tau = Infinity;
+      else { const s = Array.from(R[t].subarray(0, n)).sort((x, y) => x - y); tau = s[idx - 1]; }
+      const pf = HF * Q((tau - MF3) / SD);
+      covs.push(Math.pow(1 - pf, K3));
+      keepSum += tau === Infinity ? 0 : Q((tau - MT) / SD);
+    }
+    const mean = covs.reduce((s, v) => s + v, 0) / T3, below = covs.filter(v => v < target - 1e-9).length, keep = keepSum / T3;
+    const raw = Math.pow(1 - HF, K3);
+    const W = Math.max(300, cfBox.clientWidth), Hh = 220, m = { l: 36, r: 12, t: 12, b: 36 };
+    const svg = mk(cfBox, W, Hh, "Realised coverage across 200 calibration sets");
+    const lo = 0.5, hi = 1.0, NB = 25;
+    const X = L.scale(lo, hi, m.l, W - m.r);
+    const bins = new Array(NB).fill(0);
+    covs.forEach(v => { bins[Math.min(NB - 1, Math.max(0, Math.floor((v - lo) / (hi - lo) * NB)))]++; });
+    const bm = Math.max(...bins, 1), Y = L.scale(0, bm, Hh - m.b, m.t);
+    bins.forEach((c, i) => {
+      const x0 = lo + (hi - lo) * i / NB, x1 = lo + (hi - lo) * (i + 1) / NB;
+      if (c) L.svg("rect", { x: X(x0) + 1, y: Y(c), width: Math.max(1, X(x1) - X(x0) - 2), height: Hh - m.b - Y(c), class: "hist" + (x1 <= target + 1e-9 ? " low" : "") }, svg);
+    });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: Hh - m.b, y2: Hh - m.b, class: "grid" }, svg);
+    [0.5, 0.6, 0.7, 0.8, 0.9, 1].forEach(v => tx(svg, X(v), Hh - m.b + 16, Math.round(v * 100) + "%", { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, Hh - 4, "Share of new answers whose surviving claims are all correct", { "text-anchor": "middle", class: "lbl-ink" });
+    L.svg("line", { x1: X(target), x2: X(target), y1: m.t, y2: Hh - m.b, class: "ln-target" }, svg);
+    L.svg("line", { x1: X(Math.min(hi, Math.max(lo, mean))), x2: X(Math.min(hi, Math.max(lo, mean))), y1: m.t, y2: Hh - m.b, class: "ln-mean" }, svg);
+    $("st3-cov").textContent = pct(mean, 1); $("st3-cov-s").textContent = "target " + pct(target, 0) + "; theory says it lies in " + pct(target, 1) + " to " + pct(Math.min(1, target + 1 / (n + 1)), 1);
+    $("st3-miss").textContent = below; cls($("st3-miss-b"), below / T3 > 0.3 ? "warn" : "ok");
+    $("st3-keep").textContent = pct(keep, 0); cls($("st3-keep-b"), keep < 0.5 ? "bad" : (keep < 0.8 ? "warn" : "ok"));
+    $("st3-raw").textContent = pct(raw, 0);
+    $("s3-verdict").innerHTML = idx > n ? "With only " + n + " calibration answers, a budget of " + pct(a, 0) + " cannot be certified: the rule would delete every claim. Add calibration data or relax α." :
+      "To reach " + pct(target, 0) + " fully correct answers (up from " + pct(raw, 0) + ") the filter keeps <b>" + pct(keep, 0) + "</b> of correct claims. On average the promise holds; but <b>" + below + " of 200</b> calibration sets of this size would have delivered less than the target, which is the cost of a small calibration set.";
+  }
+  L.bind("s-alpha", v => Math.round(v * 100) + "%", v => { S3.a = v; renderConf(); });
+  L.bind("s-n", v => L.fmtInt(v), v => { S3.n = v; renderConf(); });
+
+  function renderAll() { renderSE(); renderClaim(); renderConf(); }
+  renderAll();
+  draw();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

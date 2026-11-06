@@ -128,7 +128,17 @@ window.CATALOG = [
   {file: "a2-long-running-agents.html", module: "A2", title: "Long-Running Agents and Autonomy Levels: Letting an Agent Work for Hours, Safely", codes: ["A2.3","A2.4"], label: "A2.3 · A2.4", tier: "n", minutes: 35},
   {file: "a3-indirect-prompt-injection.html", module: "A3", title: "Indirect Prompt Injection and the Designs That Survive It", codes: ["A3.1","A3.2"], label: "A3.1 · A3.2", tier: "d", minutes: 42, star: true, fast: true},
   {file: "a3-mcp-tool-poisoning-and-malicious.html", module: "A3", title: "MCP Tool Poisoning, Malicious Servers and the OWASP Vocabulary", codes: ["A3.3","A3.4"], label: "A3.3 · A3.4", tier: "n", minutes: 28, fast: true},
-  {file: "a3-deepfakes-against-ekyc-and-call.html", module: "A3", title: "Deepfakes at the Door: eKYC, Call Centres and the AI Supply Chain", codes: ["A3.5","A3.6"], label: "A3.5 · A3.6", tier: "n", minutes: 40, star: true, fast: true}
+  {file: "a3-deepfakes-against-ekyc-and-call.html", module: "A3", title: "Deepfakes at the Door: eKYC, Call Centres and the AI Supply Chain", codes: ["A3.5","A3.6"], label: "A3.5 · A3.6", tier: "n", minutes: 40, star: true, fast: true},
+  {file: "a4-statistics-for-evals.html", module: "A4", title: "Statistics for Evals, and Judges You Can Trust", codes: ["A4.1","A4.2"], label: "A4.1 · A4.2", tier: "n", minutes: 40, star: true},
+  {file: "a4-hallucination-detection-and-groundedness.html", module: "A4", title: "Catching Hallucinations, and Promising When to Abstain", codes: ["A4.3","A4.4"], label: "A4.3 · A4.4", tier: "e", minutes: 42},
+  {file: "a4-simulation-testing-for-agents-tau.html", module: "A4", title: "Testing Systems With No Single Right Answer: Simulated Users, Metamorphic Tests, Private Evals", codes: ["A4.5","A4.6","A4.7"], label: "A4.5 – A4.7", tier: "n", minutes: 40, fast: true},
+  {file: "a5-reasoning-models-and-test-time.html", module: "A5", title: "Paying for Thought: Reasoning Models, Test-Time Compute and Models You Run Yourself", codes: ["A5.1","A5.2"], label: "A5.1 · A5.2", tier: "d", minutes: 35, star: true, fast: true},
+  {file: "a5-why-inference-got-cheap-moe.html", module: "A5", title: "Why Inference Got Cheap: MoE, Speculative Decoding, Caching, Routing, and Where a Model Gets Its Knowledge", codes: ["A5.3","A5.4","A5.5"], label: "A5.3 – A5.5", tier: "n", minutes: 40},
+  {file: "a6-search-over-document-images-colpali.html", module: "A6", title: "Searching Document Images: ColPali, Late Interaction and Contextual Retrieval", codes: ["A6.1","A6.2"], label: "A6.1 · A6.2", tier: "n", minutes: 40, star: true},
+  {file: "a6-agentic-rag.html", module: "A6", title: "Agentic RAG, GraphRAG and Permission-Aware Retrieval", codes: ["A6.3","A6.4","A6.5"], label: "A6.3 – A6.5", tier: "n", minutes: 40},
+  {file: "a7-what-validators-can-accept-today.html", module: "A7", title: "Validating an LLM You Cannot Explain: Evidence Packages, Test Bounds and Probes", codes: ["A7.1","A7.2"], label: "A7.1 · A7.2", tier: "n", minutes: 30, fast: true},
+  {file: "a8-foundation-models-for-transaction-data.html", module: "A8", title: "Foundation Models for Transaction Data, and the Synthetic Data Privacy Trap", codes: ["A8.1","A8.2"], label: "A8.1 · A8.2", tier: "n", minutes: 35, star: true, fast: true},
+  {file: "a9-scams-on-instant-payment-rails.html", module: "A9", title: "Scams on Instant Rails, and the Mules Who Cash Them Out", codes: ["A9.1","A9.2"], label: "A9.1 · A9.2", tier: "n", minutes: 40, star: true, fast: true}
 ];
 
 // Per-viewer progress, kept in this browser only. Every access is guarded: storage can be blocked.

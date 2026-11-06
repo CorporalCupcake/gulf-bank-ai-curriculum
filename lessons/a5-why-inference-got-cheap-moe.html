@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Why Inference Got Cheap: MoE, Speculative Decoding, Caching, Routing, and Where a Model Gets Its Knowledge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .bar-0 { fill: var(--neutral); }
+  .bar-1 { fill: var(--warn); fill-opacity: .8; }
+  .bar-2 { fill: var(--accent); }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-ideal { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; fill: none; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track A · Applied frontier: banking, agents and the Gulf</span>
+    <span>Module A5 · Reasoning and inference in practice</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>A5.3 – A5.5</span>
+        <span class="pill n">90 days</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Why Inference Got Cheap: MoE, Speculative Decoding, Caching, Routing, and Where a Model Gets Its Knowledge</h1>
+      <p class="dek">Why the price per token fell so far, which of the tricks behind it change the answers and which do not, how to send easy questions to cheap models, and how to choose between long context, retrieval and memory for what a system knows.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Serving a language model is limited by moving memory, not by arithmetic, so the cheap-inference tricks all avoid moving or recomputing things (use only some of the weights, verify several tokens per pass, reuse the prefix, give easy questions to a small model), and the same cost logic decides whether a system should read everything, retrieve what it needs, or remember a summary.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A bank's customer-service assistant answers 200,000 questions a day. Each carries the same 6,000-word instruction block: tone, policy, escalation rules. A naive bill treats every call as brand new. A smart one notices that 95% of the input is identical every time, that most questions are "what is my card limit", and that the answer is only needed as fast as a person reads it.</p>
+        <p>Each of those observations is a cost lever, and together they explain why the price of a given level of capability has fallen sharply, by large factors over a few years, without any one miracle. The key fact underneath is that <strong>generating text is memory-bound</strong>. To produce one token, the accelerator must read every active weight from memory, and then it does a tiny amount of arithmetic with them. The chip is mostly waiting. Anything that reads fewer weights per token, produces more tokens per read, or avoids doing the work twice, makes serving cheaper.</p>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Trick</th><th>What it avoids</th><th>Does it change the answer?</th></tr></thead>
+          <tbody>
+            <tr><td><b>Mixture of experts (MoE)</b></td><td>Reading and multiplying most of the weights for each token</td><td>It is a different model: quality is its own, not a free copy of a dense one</td></tr>
+            <tr><td><b>Speculative decoding</b></td><td>Running the big model once per token</td><td>No. The output distribution is provably the same</td></tr>
+            <tr><td><b>Prompt caching</b></td><td>Re-reading and re-processing a repeated prefix</td><td>No (apart from numerical noise)</td></tr>
+            <tr><td><b>Routing and cascades</b></td><td>Using a big model on an easy question</td><td>Yes. Some answers come from the small model, so you must measure</td></tr>
+            <tr><td><b>Retrieval or memory instead of stuffing</b></td><td>Paying to read the whole corpus on every call</td><td>Yes. It changes what the model can see</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>That last column is the useful sorting. Some tricks are free lunches (speculative decoding, caching); some trade quality for money and need evaluation (routing, smaller experts, retrieval). A good engineer knows which is which, and a good manager asks.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Price per token is a story about memory traffic and utilisation, not about clever mathematics. When a vendor cuts a price, ask which of the five levers moved. When your own bill is high, check the same five.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-moe">Mixture of experts: a big model that only uses a slice per token</h3>
+      <div class="prose">
+        <p>In a standard (dense) transformer, every token passes through every weight. Most of those weights sit in the feed-forward blocks, one per layer (see <a href="f5-attention.html">attention</a> for the other half). An MoE layer replaces that one block with <i>E</i> parallel blocks, called experts, plus a small <strong>router</strong>: a linear layer that scores the experts for each token and sends the token to the top <i>k</i> (often 1, 2 or a handful), mixing their outputs by the router's weights. Everything else, attention and embeddings, is shared and runs for every token.</p>
+        <p>Two numbers then separate what the model <em>is</em> from what it <em>costs</em>:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>N</mi><mtext>total</mtext></msub><mo>=</mo><msub><mi>N</mi><mtext>shared</mtext></msub><mo>+</mo><mi>E</mi><mo>·</mo><msub><mi>N</mi><mtext>expert</mtext></msub><mspace width="2em"></mspace><msub><mi>N</mi><mtext>active</mtext></msub><mo>=</mo><msub><mi>N</mi><mtext>shared</mtext></msub><mo>+</mo><mi>k</mi><mo>·</mo><msub><mi>N</mi><mtext>expert</mtext></msub></math>
+        <p class="where">Total parameters set the memory you must hold and, loosely, how much the model can store. Active parameters set the arithmetic and, at small batch sizes, the weights read per token. A model with 600 billion total and 35 billion active parameters stores like a very large model and computes per token like a mid-sized one.</p>
+      </div>
+      <figure class="figure" id="fig-moe">
+        <div class="fig-head"><span class="fig-title">Total versus active parameters</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start at 64 experts and top-4. Raise the experts to 256 and see the total balloon while the active slice barely moves. Then raise <i>k</i>: that is what you pay per token. Look at the GPU count: the memory bill arrives even though the compute bill does not.</p>
+        <div class="chart-wrap" id="moe-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-E">Experts per layer <output for="s-E"></output></label><input type="range" id="s-E" min="8" max="256" step="8" value="64"></div>
+          <div class="ctl"><label for="s-k">Experts used per token (top-k) <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="8" step="1" value="4"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Total parameters</div><div class="v" id="m-tot"></div><div class="s">what you store</div></div>
+          <div class="stat"><div class="k">Active per token</div><div class="v" id="m-act"></div><div class="s" id="m-act-s"></div></div>
+          <div class="stat" id="m-gpu-b"><div class="k">80 GB GPUs for weights alone</div><div class="v" id="m-gpu"></div><div class="s">at 1 byte per parameter (8-bit)</div></div>
+          <div class="stat"><div class="k">Compute per token vs a dense model of the same total size</div><div class="v" id="m-ratio"></div><div class="s">lower is cheaper</div></div>
+        </div>
+        <p class="verdict" id="m-verdict"></p>
+        <p class="sim-note">Simulated and illustrative: a fixed 8 billion shared parameters and 2 billion per expert, summed over all layers. Real models split sizes differently. Arithmetic is exact for these made-up sizes; weights only, no KV cache or overhead. Speed depends on batch size and hardware, so only the ratio of active to total is shown.</p>
+      </figure>
+      <div class="prose">
+        <p>Why this is cheaper in practice but not simply "free":</p>
+        <ul>
+          <li><strong>Training the router is delicate.</strong> Left alone it sends most tokens to a few favourite experts and the rest never learn. Training adds a load-balancing loss (Shazeer et al., 2017; Fedus et al., 2021), or in some recent designs a bias term adjusted during training, so experts share the work. Production systems also cap how many tokens one expert accepts per batch.</li>
+          <li><strong>Memory does not shrink.</strong> All experts must sit in fast memory, spread over several accelerators, with tokens shipped between them (expert parallelism). The cost is network traffic and GPU count, not arithmetic. Under heavy traffic with large batches the saving is real, because every expert gets work. A single user at small batch may touch only a few experts per token and wastes the idle ones.</li>
+          <li><strong>Experts are not subject specialists.</strong> Analysis of trained models suggests they specialise on syntax or token patterns more than on topics like "banking" or "French". Do not expect to hand-pick an "Arabic expert".</li>
+          <li><strong>Quality rule of thumb.</strong> An MoE tends to perform like a dense model with more parameters than its active count but fewer than its total. It is a trade, not a loophole. The R1 lesson (<a href="r1-mixture-of-experts-at-scale.html">Mixture-of-experts at scale</a>) goes into routing, fine-grained experts and the research frontier.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-spec">Speculative decoding: verify many tokens for the price of one</h3>
+      <div class="prose">
+        <p>Decoding is sequential: token 17 needs token 16. But the expensive part is reading the weights, and reading them once can check many tokens at once, the same way a model scores a whole prompt in parallel. Speculative decoding exploits that asymmetry (Leviathan et al., 2023; Chen et al., 2023).</p>
+        <ol>
+          <li>A small <strong>draft</strong> model quickly proposes γ tokens, say 4.</li>
+          <li>The big <strong>target</strong> model scores all of them in a single forward pass.</li>
+          <li>Walk from the left. Each draft token is accepted with a probability that depends on how closely the draft and target agree; at the first rejection, discard the rest and sample a corrected token from the target.</li>
+          <li>You always gain at least one token per big-model pass, and often several.</li>
+        </ol>
+        <p>The accept-or-correct rule is built so the final text has <strong>exactly the target model's distribution</strong>. This is a speed trick, not a quality trade. If the draft is useless, you lose a little time on wasted drafts, but never accuracy. With an average acceptance probability α per token (assumed independent, which is only roughly true), the expected number of tokens per big-model pass is</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>E</mi><mo stretchy="false">[</mo><mtext>tokens</mtext><mo stretchy="false">]</mo><mo>=</mo><mfrac><mrow><mn>1</mn><mo>−</mo><msup><mi>α</mi><mrow><mi>γ</mi><mo>+</mo><mn>1</mn></mrow></msup></mrow><mrow><mn>1</mn><mo>−</mo><mi>α</mi></mrow></mfrac><mspace width="2em"></mspace><mtext>speed-up</mtext><mo>=</mo><mfrac><mrow><mi>E</mi><mo stretchy="false">[</mo><mtext>tokens</mtext><mo stretchy="false">]</mo></mrow><mrow><mi>γ</mi><mi>c</mi><mo>+</mo><mn>1</mn></mrow></mfrac></math>
+        <p class="where"><i>c</i> is the cost of one draft token relative to one big-model pass (say 0.1 if the draft is a tenth as costly). One pass of the target is the unit of time. With α = 0.8, γ = 4 and c = 0.1 you get (1 − 0.8<sup>5</sup>) ÷ 0.2 = 3.36 tokens per pass for a cost of 1.4 passes: a <strong>2.4× speed-up</strong>.</p>
+      </div>
+      <figure class="figure" id="fig-spec">
+        <div class="fig-head"><span class="fig-title">How far can drafting go?</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> the curve rises, peaks, then falls. Raise the acceptance rate (easy, predictable text such as templated letters) and the best draft length moves right. Lower it (creative or unusual text) and long drafts waste time. Make the draft expensive and the whole benefit disappears.</p>
+        <div class="chart-wrap" id="spec-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-a">Acceptance rate per draft token (α) <output for="s-a"></output></label><input type="range" id="s-a" min="0.3" max="0.95" step="0.01" value="0.8"></div>
+          <div class="ctl"><label for="s-g">Draft length (γ) <output for="s-g"></output></label><input type="range" id="s-g" min="1" max="12" step="1" value="4"></div>
+          <div class="ctl"><label for="s-c">Draft cost, relative to one big pass (c) <output for="s-c"></output></label><input type="range" id="s-c" min="0.02" max="0.5" step="0.01" value="0.1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Tokens per big-model pass</div><div class="v" id="p-tok"></div></div>
+          <div class="stat" id="p-sp-b"><div class="k">Speed-up</div><div class="v" id="p-sp"></div><div class="s">against plain decoding</div></div>
+          <div class="stat"><div class="k">Best draft length here</div><div class="v" id="p-best"></div><div class="s" id="p-best-s"></div></div>
+        </div>
+        <p class="verdict" id="p-verdict"></p>
+        <p class="sim-note">Simulated: exact evaluation of the formula above, assuming independent acceptance with the same α at every position and ignoring batching, verification overhead and memory limits. Real acceptance varies by text type, so measure it on your own traffic.</p>
+      </figure>
+      <div class="prose">
+        <p>Variants you will see named: draft models trained alongside the target; heads attached to the target itself (Medusa, EAGLE) that predict several future tokens; and self-speculation that skips layers. Another family, multi-token prediction, trains the model to predict ahead and then reuses that as a free draft. The mechanics differ but the verify-in-one-pass logic is the same. The benefit is biggest for single-user latency, and shrinks when the server is already saturated with large batches, since the hardware then has no spare capacity to spend on verification.</p>
+      </div>
+
+      <h3 class="sub" id="m-cache">Caching, and the KV cache behind it</h3>
+      <div class="prose">
+        <p>While reading a prompt, the model computes, for every token and layer, a key and a value vector that later tokens attend to. Stored, these form the <strong>KV cache</strong> (see <a href="m1-context-windows-and-the-kv.html">context windows and the KV cache</a>). It has two jobs. Within one request it avoids recomputing the whole past for every new token. Across requests it makes <strong>prefix caching</strong> possible: if a new prompt starts with exactly the same tokens as one the server processed recently, it can reuse those stored vectors and skip the work, then only process the new tail.</p>
+        <p>Three consequences matter for a bank.</p>
+        <ul>
+          <li><strong>Order matters.</strong> The match is on an exact prefix. Put the stable material first (system prompt, policy documents, tool definitions, few-shot examples) and the varying part last (the customer's question). One changed token at the front, such as a timestamp in the header, breaks the whole cache.</li>
+          <li><strong>Pricing reflects the saving.</strong> Providers typically charge a fraction of the normal input price for cache reads, sometimes with a small extra charge for the first write, and caches expire after minutes to hours unless refreshed. Terms differ by provider and change often, so read the current pricing page. I could not confirm current figures from reliable sources for this lesson, so the simulation uses clearly labelled illustrative numbers.</li>
+          <li><strong>Memory is the limit.</strong> KV cache per token is large and grows with context. Serving engines manage it like virtual memory, paging it in blocks (vLLM's PagedAttention, Kwon et al., 2023), which lets the server fit many more concurrent requests. That utilisation gain is as big a part of falling prices as any model trick.</li>
+        </ul>
+        <p>Caching also has a security and data-governance side: cached prefixes are tied to an account or tenant, and a shared cache across customers could in principle leak timing information. Ask your provider how isolation works before putting customer data in cached prompts.</p>
+      </div>
+
+      <h3 class="sub" id="m-route">Model routing and cascades</h3>
+      <div class="prose">
+        <p>Models come in sizes with prices that differ by an order of magnitude or more, and most questions are easy. A <strong>router</strong> decides which model sees each request. Three common designs:</p>
+        <ul>
+          <li><strong>Cascade.</strong> Always try the cheap model; if its answer looks unreliable, escalate to the expensive one (Chen et al., 2023, FrugalGPT). Costs the cheap call on every request, plus the expensive call on escalations.</li>
+          <li><strong>Pre-router.</strong> A small classifier looks only at the query and picks a model before any answer is generated (Ong et al., 2024, RouteLLM). Cheaper than a cascade, but it cannot see the answer's quality.</li>
+          <li><strong>Rules.</strong> Product-level logic: balance enquiries go to the small model; credit-memo drafting and anything with a complaint flag goes to the big one. Boring and often the best start.</li>
+        </ul>
+        <p>Everything depends on one question: <strong>how well can you tell easy from hard?</strong> A cascade needs a confidence signal: token probabilities, a self-reported score, agreement among several samples, or a small verifier. Self-reported confidence from language models is often overconfident, so this needs calibration (F7.4) against labelled examples. The simulation uses the classic picture of two overlapping score distributions: the better they separate, the cheaper the cascade at a given quality.</p>
+      </div>
+      <figure class="figure" id="fig-casc">
+        <div class="fig-head"><span class="fig-title">A cascade: cost against quality</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> keep separation at 2 and slide the threshold. A low bar accepts everything the cheap model says: cheap, but hard questions slip through wrongly. A high bar escalates nearly everything: accurate, but you pay for both models. Then lower the separation to 0.5 (a poor confidence signal) and notice that no threshold gives a good deal.</p>
+        <div class="chart-wrap" id="casc-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-d">How well confidence separates easy from hard <output for="s-d"></output></label><input type="range" id="s-d" min="0" max="3.5" step="0.1" value="2"></div>
+          <div class="ctl"><label for="s-t">Confidence bar for accepting the cheap answer <output for="s-t"></output></label><input type="range" id="s-t" min="-1" max="3.5" step="0.05" value="1"></div>
+          <div class="ctl"><label for="s-e">Share of questions that are easy <output for="s-e"></output></label><input type="range" id="s-e" min="0.2" max="0.9" step="0.05" value="0.6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Cost per 1,000 questions</div><div class="v" id="c-cost"></div><div class="s" id="c-cost-s"></div></div>
+          <div class="stat" id="c-acc-b"><div class="k">Answer accuracy</div><div class="v" id="c-acc"></div><div class="s" id="c-acc-s"></div></div>
+          <div class="stat"><div class="k">Escalated to the big model</div><div class="v" id="c-esc"></div></div>
+          <div class="stat" id="c-lost-b"><div class="k">Wrong answers the cheap model got through</div><div class="v" id="c-lost"></div><div class="s">per 1,000 questions</div></div>
+        </div>
+        <p class="verdict" id="c-verdict"></p>
+        <p class="sim-note">Simulated: cheap model costs AED 2 per 1,000 questions and is right 96% on easy and 50% on hard; the big model costs AED 30 and is right 98% on easy and 86% on hard. Confidence is normal with unit spread, centred at the separation value for easy questions and zero for hard ones. The cheap model runs on every question. All figures are made up; the logic is exact expected values.</p>
+      </figure>
+      <div class="prose">
+        <p>Two cautions. The cost saving is certain; the accuracy loss is what you must <em>measure</em>, per category, on labelled data from your own traffic. And for regulated decisions, route by <strong>risk</strong> as well as difficulty: a cheap model should not be the sole author of anything that reaches a customer as an adverse decision.</p>
+      </div>
+
+      <h3 class="sub" id="m-know">Long context, retrieval or memory: choosing how a system knows things</h3>
+      <div class="prose">
+        <p>A model knows three kinds of things: what training baked into its weights (stale, unauditable), what is in its context window right now, and what the system fetches or stores for it. For the last two there are three designs.</p>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Design</th><th>How it works</th><th>Strengths</th><th>Weaknesses</th></tr></thead>
+          <tbody>
+            <tr><td><b>Long context ("stuff it all in")</b></td><td>Put the whole document or corpus in the prompt.</td><td>Simplest. Cross-document reasoning. No retrieval errors.</td><td>Pay to read it all every call (unless cached). Slower. Accuracy can fall as context grows, with evidence often under-used in the middle (Liu et al., 2023; Hsieh et al., 2024). Capped by the window. Access control is all-or-nothing.</td></tr>
+            <tr><td><b>Retrieval (RAG)</b></td><td>Search an index, put only the best few chunks in the prompt. See <a href="m3-chunking-strategies.html">chunking</a> and <a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a>.</td><td>Cheap per call. Scales to any corpus. Citations point to a source. Per-user permissions can be applied at retrieval.</td><td>If retrieval misses the passage, the model never sees it. Needs chunking, an index, evaluation. Weak at "summarise everything" or questions needing many scattered facts.</td></tr>
+            <tr><td><b>Memory</b></td><td>The system writes down what it learns (preferences, case notes, summaries) and reloads it later. See <a href="m4-memory-short-term-long-term.html">memory</a>.</td><td>Personalisation and continuity across sessions. Compact.</td><td>Summaries lose detail and can fix in errors. Stale or wrongly stored facts persist. Privacy and retention duties apply to what is stored.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>A useful rule: <strong>long context for one-off analysis of a bounded document, retrieval for a large or changing corpus with permissions and citations, memory for continuity about a person or case</strong>. Real systems mix them, and the lines are blurring: caching makes repeated long contexts far cheaper, and agentic retrieval (<a href="a6-agentic-rag.html">agentic RAG</a>) lets the model decide what to look up. Prompting-versus-RAG-versus-fine-tuning is covered in <a href="m2-prompting-versus-rag-versus-fine.html">M2</a>; this section is the cost-and-fit view among the in-context options.</p>
+      </div>
+      <figure class="figure" id="fig-know">
+        <div class="fig-head"><span class="fig-title">What each design costs per question</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> a 400-page credit policy is about 200,000 tokens. Stuffing it in costs thousands of times more than retrieval per call. Now push the cache hit rate to 95%: stuffing becomes affordable but is still well above retrieval. Slide the corpus past 1 million tokens and stuffing stops being possible at all.</p>
+        <div class="chart-wrap" id="know-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-corp">Size of the knowledge base <output for="s-corp"></output></label><input type="range" id="s-corp" min="4" max="8" step="0.05" value="5.3"></div>
+          <div class="ctl"><label for="s-hit">Share of calls that hit the prompt cache <output for="s-hit"></output></label><input type="range" id="s-hit" min="0" max="0.99" step="0.01" value="0"></div>
+          <div class="ctl"><label for="s-q">Questions per day <output for="s-q"></output></label><input type="range" id="s-q" min="3" max="6" step="0.1" value="4.7"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="k-st-b"><div class="k">Stuff everything: per question</div><div class="v" id="k-st"></div><div class="s" id="k-st-s"></div></div>
+          <div class="stat"><div class="k">Retrieval: per question</div><div class="v" id="k-rag"></div><div class="s">about 3,500 tokens</div></div>
+          <div class="stat"><div class="k">Memory summary plus retrieval</div><div class="v" id="k-mem"></div><div class="s">about 4,300 tokens</div></div>
+          <div class="stat"><div class="k">Stuffing vs retrieval, per day</div><div class="v" id="k-day"></div><div class="s" id="k-day-s"></div></div>
+        </div>
+        <p class="verdict" id="k-verdict"></p>
+        <p class="sim-note">Simulated, illustrative prices: input AED 10 per million tokens, cached input 10% of that, output ignored (equal across designs). Context window assumed 1 million tokens. Retrieval uses 5 chunks of 500 tokens plus 1,000 for the instructions; memory adds an 800-token summary. Cost only: quality, latency and security differ and are discussed in the text. Sliders are logarithmic.</p>
+      </figure>
+      <div class="prose">
+        <p>Cost is only one axis. A stuffed prompt that fits and is cached can still lose to retrieval on <em>accuracy</em> (the model gets distracted), on <em>latency</em> (reading 200,000 tokens takes seconds even when cached) and on <em>access control</em> (a customer-facing assistant cannot hold documents the customer must not see). Conversely, retrieval loses when the answer needs the whole document, such as "find every clause that contradicts this one". The honest procedure is to build an evaluation set (see <a href="a4-statistics-for-evals.html">statistics for evals</a>) and compare all three on it.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Cost engineering links models, infrastructure, evaluation and governance. Places it comes back:</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">R1.1 – R1.2 · Mixture of experts</span><span class="t"><a href="r1-mixture-of-experts-at-scale.html">The research side of MoE</a></span><p>Routing, fine-grained and shared experts, and the recurrent challengers. This lesson gives you the economics; that one gives the design space.</p></div>
+        <div class="link-card"><span class="code">M1.5 – M1.7 · Context and the KV cache</span><span class="t"><a href="m1-context-windows-and-the-kv.html">Why context costs memory</a></span><p>Where the KV cache comes from and why long prompts are expensive. Caching and paging build directly on it.</p></div>
+        <div class="link-card"><span class="code">P3 · Quantization, pruning, distillation</span><span class="t"><a href="p3-quantization-pruning-and-distillation.html">The other half of the cost story</a></span><p>Smaller numbers, smaller models trained from bigger ones. Often the cheap model in a cascade is a distilled one.</p></div>
+        <div class="link-card"><span class="code">M2 · Model choice, cost and latency</span><span class="t"><a href="m2-model-choice-cost-and-latency.html">Choosing the tier</a></span><p>Routing is model choice made per request instead of per project.</p></div>
+        <div class="link-card"><span class="code">A5.1 – A5.2 · Reasoning models</span><span class="t"><a href="a5-reasoning-models-and-test-time.html">Thinking tokens are the new cost driver</a></span><p>A reasoning model can spend many times more output tokens per answer. Routing hard questions to it and easy ones away from it is the obvious combination.</p></div>
+        <div class="link-card"><span class="code">M3 · Retrieval</span><span class="t"><a href="m3-chunking-strategies.html">Chunking and search</a></span><p>The retrieval option rests on chunking, <a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a> and query rewriting. Their quality decides whether RAG beats stuffing.</p></div>
+        <div class="link-card"><span class="code">M4 · Memory</span><span class="t"><a href="m4-memory-short-term-long-term.html">What to remember between sessions</a></span><p>The third option in the knowledge choice, with its own failure modes and retention duties.</p></div>
+        <div class="link-card"><span class="code">A15 · Gateways and token budgets</span><span class="t"><a href="a15-ai-gateways-guardrails-and-token.html">Where routing and caching live</a></span><p>In many banks the router, cache and token budgets sit in a central AI gateway, so every team gets the savings and the controls.</p></div>
+        <div class="link-card"><span class="code">A4 · Evaluation</span><span class="t"><a href="a4-statistics-for-evals.html">Prove the cheap path is good enough</a></span><p>Every quality-changing trick needs a test set and intervals. The question is always "how much accuracy did I trade, and is the difference real".</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Customer-service assistants.</strong> Huge volume, mostly easy intents, a long shared system prompt. Caching and routing give the largest savings here.</li>
+          <li><strong>Document processing.</strong> KYC files, trade documents and contracts: bounded documents, where long context often beats building a retrieval pipeline.</li>
+          <li><strong>Policy and regulation search.</strong> A large, changing corpus (CBUAE or SAMA circulars, internal policy) with citations: retrieval, with caching of the instructions.</li>
+          <li><strong>Relationship-manager copilots.</strong> Client history across sessions: memory plus retrieval, with careful retention rules.</li>
+          <li><strong>Deployment choice.</strong> An MoE you host yourself needs several GPUs for its total size even if compute is light, which matters for on-premises and sovereign setups (<a href="p4-hybrid-and-on-premises-deployment.html">hybrid and on-premises</a>).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The techniques are mature and mostly bundled inside providers' serving stacks. The live arguments are how far MoE can be pushed, how much of the price fall is hardware and utilisation versus algorithms, and what happens to costs when reasoning models make each answer far longer.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Checked 6 November 2026. My web search for current prices returned only low-quality aggregator pages, so I have used no current price figures. Dated items below are from papers and documentation I know and have not re-verified against live pages.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2017</span><div><div class="t">Sparsely-gated mixture of experts</div><p>Shazeer and colleagues introduced the top-k routed expert layer with a load-balancing loss in language models, showing very large parameter counts at modest compute.</p><div class="src">Shazeer et al., ICLR 2017</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">Switch Transformer</div><p>Simplified routing to a single expert per token and showed stable training at trillion-parameter scale.</p><div class="src">Fedus, Zoph, Shazeer, JMLR 2022 (arXiv 2021)</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Speculative decoding and paged KV cache</div><p>Two independent papers gave the lossless draft-and-verify method. The same year, PagedAttention (vLLM) showed that managing KV memory in blocks substantially raises serving throughput.</p><div class="src">Leviathan et al.; Chen et al.; Kwon et al., SOSP 2023</div></div></li>
+        <li><span class="yr">2023–24</span><div><div class="t">Routing and cascades studied formally</div><p>FrugalGPT argued that a cascade of models can match the best model at a fraction of the cost. RouteLLM trained routers on preference data to choose between a strong and a weak model.</p><div class="src">Chen et al., 2023; Ong et al., 2024</div></div></li>
+        <li><span class="yr">2023–24</span><div><div class="t">Open MoE models become competitive</div><p>Mixtral showed an open eight-expert, top-2 model matching much larger dense ones, and DeepSeek-V3 used a very large number of fine-grained experts with a small active share and a bias-based balancing method.</p><div class="src">Jiang et al., 2024; DeepSeek-AI, 2024</div></div></li>
+        <li><span class="yr">2023–24</span><div><div class="t">Long context is not the same as using long context</div><p>Evidence in the middle of a long prompt is used less reliably than at the ends, and the RULER benchmark found that many models with large advertised windows degrade on harder long-context tasks well before the limit.</p><div class="src">Liu et al., TACL 2024; Hsieh et al., 2024</div></div></li>
+        <li><span class="yr">Now</span><div><div class="t">Prompt caching is standard at major providers</div><p>Large API providers offer prefix caching with discounted cache reads. Terms, lifetimes and write charges differ and change; check the provider's documentation rather than relying on summaries.</p><div class="src">Provider documentation (see Sources)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically (my judgement, not a survey):</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Using MoE models via a provider</b></td><td>Invisible to the user; you see lower price per token or higher speed.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Prompt caching with stable prefixes</b></td><td>System prompts and policy text placed first and reused across calls.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Rule-based routing by use case</b></td><td>Small model for simple intents, large for drafting and exceptions.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Learned routers and confidence cascades</b></td><td>Router or verifier decides per request; evaluated against labelled traffic.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Self-hosted MoE with speculative decoding</b></td><td>Sovereign or on-premises serving engines with the technique switched on.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Long context replacing retrieval for large corpora</b></td><td>Argued for, often tried; production systems mostly still retrieve.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Learned or agent-managed memory across sessions</b></td><td>Active area; retention, accuracy and privacy controls still maturing.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Take the free savings (caching, a good serving stack), use the model tier that matches the task and measure the quality cost of every cheaper path. Choose long context, retrieval or memory by the shape of the knowledge, then test all three.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Judging an MoE by its total parameter count</div><p>"It has 600 billion parameters, so it is as good as a 600 billion dense model", or "it only uses 35 billion, so it is a small model that is cheap to host."</p><div class="spot"><b>Spot it</b>Ask for both numbers. Quality sits between active and total; hosting memory follows total.</div></li>
+        <li><div class="t">Expecting speculative decoding to help a saturated server</div><p>The saving shows on a single request; at full batch the spare compute is gone.</p><div class="spot"><b>Spot it</b>Benchmark at your real concurrency, not with one request.</div></li>
+        <li><div class="t">Breaking the cache by accident</div><p>A timestamp, user name or random ID near the top of the prompt makes every call a miss. The bill stays high and nobody knows why.</p><div class="spot"><b>Spot it</b>Check the cache-hit field in the API usage output. Move variable text to the end.</div></li>
+        <li><div class="t">Caching customer data across users</div><p>Personal data placed in a shared prefix.</p><div class="spot"><b>Spot it</b>Review what sits in cached prefixes; keep personal data after the cache boundary and confirm tenant isolation with the provider.</div></li>
+        <li><div class="t">A router that sends hard cases to the cheap model</div><p>Confidence is miscalibrated, so the model is sure and wrong. Complaints, edge cases and rare products are exactly the ones that look unfamiliar.</p><div class="spot"><b>Spot it</b>Measure accuracy of the accepted answers by category, with the rare categories oversampled in the test set. Look at escalation rate over time.</div></li>
+        <li><div class="t">Measuring the saving but not the loss</div><p>The dashboard shows cost per question falling and no one checks quality.</p><div class="spot"><b>Spot it</b>Require a quality metric beside every cost metric, with a confidence interval (a 2-point drop on 200 test cases is noise).</div></li>
+        <li><div class="t">Trusting the advertised context window</div><p>The window is how much fits, not how much the model uses well.</p><div class="spot"><b>Spot it</b>Test on your documents with the evidence placed in the middle, at the length you plan to use.</div></li>
+        <li><div class="t">RAG with a retrieval step that silently misses</div><p>The right clause is not in the top five; the model answers confidently from the wrong one.</p><div class="spot"><b>Spot it</b>Measure retrieval recall separately from answer quality, on questions where you know the source.</div></li>
+        <li><div class="t">Memory that stores mistakes</div><p>A wrongly summarised preference or an outdated fact persists across sessions and is stated as truth.</p><div class="spot"><b>Spot it</b>Let staff and customers view and correct stored memory; log what was written and when; set expiry.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Most of what we pay for is repeated and easy. Our assistant sends the same long instruction block with every call, and most customer questions are simple. If we arrange the prompt so that block is cached and send simple questions to a smaller model, I'd expect a large cut in cost without touching the hard cases. The part to be careful about is the smaller model: I'd test it on our own questions, report the accuracy next to the saving, and keep complaints and credit decisions on the stronger model.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or architect</span>
+          <blockquote>“Decoding is memory-bandwidth bound, so the levers are fewer weights read per token, more tokens per read, and no recomputation. MoE cuts active parameters but not memory footprint. Speculative decoding is lossless but helps most at low batch size. Prefix caching needs stable prefixes and a look at tenant isolation. Routing changes outputs, so it needs calibrated confidence and per-category evaluation. For knowledge, I'd retrieve for a large governed corpus, stuff for a bounded document, and add memory only with retention controls, and I'd compare them on a labelled set rather than argue.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why did the price per token fall so much?”</summary><div class="ans"><p>Several things stacked: better hardware and much better utilisation of it (batching, paged memory), sparse MoE models that compute with a fraction of their weights, quantization, distillation into smaller models with the same capability, caching, and competition. Only some of those preserve exact outputs. I'd avoid giving one figure for how much each contributed, since the split is not public.</p></div></details>
+        <details class="reveal"><summary>“Does speculative decoding make answers worse?”</summary><div class="ans"><p>No. The accept-and-correct rule guarantees the same distribution as the big model alone, so it is a pure speed-up. It is not free to run, since you need a draft model and spare capacity, and the benefit shrinks when the server is already busy.</p></div></details>
+        <details class="reveal"><summary>“If MoE only uses 5% of the parameters, can we run it on one GPU?”</summary><div class="ans"><p>Not usually. All experts have to be in memory, because any token might need any of them. Compute drops, memory does not. You still need enough accelerator memory for the total, unless you quantize hard or offload and accept slower speed.</p></div></details>
+        <details class="reveal"><summary>“Why not just put all our policies in the prompt? Context windows are huge now.”</summary><div class="ans"><p>It can work for a bounded set, and caching helps with cost. But we pay to process it on every call, latency rises, accuracy tends to suffer when the relevant passage is buried, and everyone using the assistant sees the same documents, which breaks permissions. For a large, changing corpus with citations I'd retrieve. I'd test both on questions we already know the answers to.</p></div></details>
+        <details class="reveal"><summary>“How do we know the router is not sending hard questions to the cheap model?”</summary><div class="ans"><p>By measurement. Build a labelled set that deliberately over-represents the hard and rare categories, run the cascade, and report accuracy of accepted cheap answers per category with intervals. Track the escalation rate in production, as a falling rate may mean the router is getting overconfident, and review a random sample of accepted answers each week.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. An MoE has 16 billion shared parameters and 128 experts of 4 billion each, with top-2 routing. What are its total and active counts, and how many 80 GB GPUs do the weights need at 8 bits?</summary><div class="ans"><p>Total = 16 + 128 × 4 = 528 billion. Active = 16 + 2 × 4 = 24 billion. At 1 byte each the weights are 528 GB, so at least 7 GPUs (528 ÷ 80 = 6.6), before the KV cache and overhead. Compute per token is about 24 ÷ 528 = 4.5% of a dense model of the same total size.</p></div></details>
+        <details class="reveal"><summary>2. With acceptance α = 0.7, draft length γ = 3 and draft cost c = 0.1, what is the speed-up from speculative decoding?</summary><div class="ans"><p>Expected tokens per pass = (1 − 0.7<sup>4</sup>) ÷ 0.3 = (1 − 0.2401) ÷ 0.3 = 2.53. Time per iteration = 3 × 0.1 + 1 = 1.3. Speed-up = 2.53 ÷ 1.3 ≈ <strong>1.9×</strong>.</p></div></details>
+        <details class="reveal"><summary>3. Why does speculative decoding not change the model's outputs, while a cascade does?</summary><div class="ans"><p>In speculative decoding every token is accepted or corrected by a rule that makes the result follow the target model's distribution exactly; the small model only proposes. In a cascade, the cheap model's answer is the final answer whenever it is accepted, so the output comes from a different model and quality may differ.</p></div></details>
+        <details class="reveal"><summary>4. Your prompt is a 5,000-token policy followed by the customer's message, but the header begins with "Today is 6 November 2026, 14:03:22". Cache hit rate is zero. Why, and what is the fix?</summary><div class="ans"><p>Prefix caching needs an identical beginning. The timestamp changes every second, so the prefix differs from the first tokens onward and nothing matches. Move the timestamp (and any user-specific text) after the stable policy block, or drop the seconds.</p></div></details>
+        <details class="reveal"><summary>5. A cascade accepts 60% of questions at the cheap model, which costs AED 2 per 1,000 and the big model AED 30. What is the cost per 1,000?</summary><div class="ans"><p>The cheap model runs on all questions: 2. The remaining 40% escalate: 0.4 × 30 = 12. Total AED 14 per 1,000, against AED 30 for the big model alone (a 53% saving). Note that the quality of the 60% accepted is the thing still to be measured.</p></div></details>
+        <details class="reveal"><summary>6. A 300,000-token policy library is queried 50,000 times a day at AED 10 per million input tokens. What does stuffing cost per day without caching, compared with retrieval at 3,500 tokens per call?</summary><div class="ans"><p>Stuffing: 300,000 × 10 ÷ 1,000,000 = AED 3 per call, so AED 150,000 per day. Retrieval: 3,500 × 10 ÷ 1,000,000 = AED 0.035 per call, so AED 1,750 per day: about 86 times cheaper. A 90% cache hit rate at a 10% read price cuts stuffing to about 19% of the original, roughly AED 28,500 per day, still over 16 times retrieval.</p></div></details>
+        <details class="reveal"><summary>7. Name two situations where long context beats retrieval and two where retrieval wins.</summary><div class="ans"><p>Long context wins for one bounded document that must be understood as a whole (a contract and its amendments) and for questions that need every part, such as "find contradictions". Retrieval wins for a large corpus that changes, and wherever different users may see different documents or answers must cite a source.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>N. Shazeer et al. <a href="https://arxiv.org/abs/1701.06538">Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer</a>. ICLR, 2017.</li>
+        <li>W. Fedus, B. Zoph, N. Shazeer. <a href="https://arxiv.org/abs/2101.03961">Switch Transformers</a>. JMLR, 2022.</li>
+        <li>A. Jiang et al. <a href="https://arxiv.org/abs/2401.04088">Mixtral of Experts</a>. arXiv, 2024.</li>
+        <li>DeepSeek-AI. <a href="https://arxiv.org/abs/2412.19437">DeepSeek-V3 Technical Report</a>. arXiv, 2024.</li>
+        <li>Y. Leviathan, M. Kalman, Y. Matias. <a href="https://arxiv.org/abs/2211.17192">Fast Inference from Transformers via Speculative Decoding</a>. ICML, 2023.</li>
+        <li>C. Chen et al. <a href="https://arxiv.org/abs/2302.01318">Accelerating Large Language Model Decoding with Speculative Sampling</a>. arXiv, 2023.</li>
+        <li>W. Kwon et al. <a href="https://arxiv.org/abs/2309.06180">Efficient Memory Management for Large Language Model Serving with PagedAttention</a>. SOSP, 2023.</li>
+        <li>L. Chen, M. Zaharia, J. Zou. <a href="https://arxiv.org/abs/2305.05176">FrugalGPT</a>. arXiv, 2023.</li>
+        <li>I. Ong et al. <a href="https://arxiv.org/abs/2406.18665">RouteLLM: Learning to Route LLMs with Preference Data</a>. arXiv, 2024.</li>
+        <li>N. Liu et al. <a href="https://arxiv.org/abs/2307.03172">Lost in the Middle: How Language Models Use Long Contexts</a>. TACL, 2024.</li>
+        <li>C.-P. Hsieh et al. <a href="https://arxiv.org/abs/2404.06654">RULER: What's the Real Context Size of Your Long-Context Language Models?</a> arXiv, 2024.</li>
+        <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching">Anthropic documentation: prompt caching</a>. Current terms, lifetimes and pricing; check for changes.</li>
+        <li><a href="https://platform.openai.com/docs/guides/prompt-caching">OpenAI documentation: prompt caching</a>.</li>
+        <li><a href="https://docs.vllm.ai/">vLLM documentation</a>. Open serving engine with paged attention, prefix caching and speculative decoding.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in A5: see the module list on the contents page</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const Q = x => 1 - L.normCdf(x);
+  const pct = (v, d = 0) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function hbars(box, label, rows, fmt, logScale) {
+    const W = 560, rh = 40, H = rows.length * rh + 14, ml = 150, mr = 90;
+    const svg = mk(box, W, H, label);
+    const vals = rows.map(r => r.v).filter(v => v > 0);
+    const mx = Math.max(...vals), mn = Math.min(...vals) / 3;
+    const sc = logScale ? L.scale(Math.log10(mn), Math.log10(mx), 4, W - ml - mr) : L.scale(0, mx, 0, W - ml - mr);
+    rows.forEach((r, i) => {
+      const y = 8 + i * rh;
+      tx(svg, ml - 8, y + 20, r.name, { class: "lbl-ink", "text-anchor": "end" });
+      if (r.v == null) { tx(svg, ml, y + 20, r.note || "n/a", { class: "lbl-warn" }); return; }
+      const w = Math.max(2, logScale ? sc(Math.log10(r.v)) : sc(r.v));
+      L.svg("rect", { x: ml, y: y + 6, width: w, height: 22, rx: 3, class: r.cls || "bar-0" }, svg);
+      tx(svg, ml + w + 6, y + 22, fmt(r.v), { class: "lbl-ink" });
+    });
+  }
+
+  // ---------- Sim 1: MoE ----------
+  const SH = 8, EX = 2, M = { E: 64, k: 4 };
+  function renderMoE() {
+    const tot = SH + M.E * EX, act = SH + M.k * EX, gpus = Math.ceil(tot / 80), ratio = act / tot;
+    $("m-tot").textContent = tot + " B"; $("m-act").textContent = act + " B";
+    $("m-act-s").textContent = pct(ratio, 1) + " of the total";
+    $("m-gpu").textContent = gpus; cls($("m-gpu-b"), gpus > 4 ? "warn" : "");
+    $("m-ratio").textContent = pct(ratio, 1);
+    hbars($("moe-chart"), "Total and active parameters",
+      [{ name: "Total (stored)", v: tot, cls: "bar-0" }, { name: "Active per token", v: act, cls: "bar-2" }],
+      v => v + " B", false);
+    $("m-verdict").innerHTML = M.k > M.E ? "" : "This model stores <b>" + tot + " B</b> parameters but computes with <b>" + act + " B</b> per token. You need about <b>" + gpus + "</b> accelerators to hold it, whatever the compute saving.";
+  }
+  L.bind("s-E", v => v, v => { M.E = v; renderMoE(); });
+  L.bind("s-k", v => v, v => { M.k = v; renderMoE(); });
+
+  // ---------- Sim 2: speculative decoding ----------
+  const P = { a: 0.8, g: 4, c: 0.1 };
+  const etok = (a, g) => (1 - Math.pow(a, g + 1)) / (1 - a);
+  const speed = (a, g, c) => etok(a, g) / (g * c + 1);
+  function renderSpec() {
+    const W = 560, H = 230, m = { l: 44, r: 16, t: 14, b: 36 };
+    const svg = mk($("spec-chart"), W, H, "Speed-up against draft length");
+    let best = 1, bv = 0, mxv = 1;
+    for (let g = 1; g <= 12; g++) { const s = speed(P.a, g, P.c); if (s > bv) { bv = s; best = g; } mxv = Math.max(mxv, s); }
+    const top = Math.ceil(Math.max(mxv, 1.5) * 2) / 2;
+    const x = L.scale(1, 12, m.l, W - m.r), y = L.scale(0, top, H - m.b, m.t);
+    for (let v = 0; v <= top; v += 0.5) {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, v.toFixed(1) + "×", { "text-anchor": "end" });
+    }
+    for (let g = 1; g <= 12; g++) tx(svg, x(g), H - m.b + 16, g, { "text-anchor": "middle" });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(1), y2: y(1), class: "cv-ideal" }, svg);
+    const pts = []; for (let g = 1; g <= 12; g++) pts.push([x(g), y(speed(P.a, g, P.c))]);
+    L.svg("path", { d: L.path(pts), class: "cv-curve" }, svg);
+    L.svg("circle", { cx: x(P.g), cy: y(speed(P.a, P.g, P.c)), r: 6, class: "cv-now" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Draft length γ (dashed line: no speed-up)", { "text-anchor": "middle" });
+    const sp = speed(P.a, P.g, P.c);
+    $("p-tok").textContent = etok(P.a, P.g).toFixed(2);
+    $("p-sp").textContent = sp.toFixed(2) + "×"; cls($("p-sp-b"), sp < 1 ? "bad" : sp > 1.8 ? "ok" : "warn");
+    $("p-best").textContent = "γ = " + best; $("p-best-s").textContent = "gives " + bv.toFixed(2) + "×";
+    $("p-verdict").innerHTML = sp < 1
+      ? "Slower than not drafting: the draft costs more than the tokens it saves. Same quality, worse speed."
+      : "Each big-model pass now yields about <b>" + etok(P.a, P.g).toFixed(1) + "</b> tokens at a cost of <b>" + (P.g * P.c + 1).toFixed(2) + "</b> passes. Output quality is identical to the big model alone.";
+  }
+  L.bind("s-a", v => v.toFixed(2), v => { P.a = v; renderSpec(); });
+  L.bind("s-g", v => v, v => { P.g = v; renderSpec(); });
+  L.bind("s-c", v => v.toFixed(2), v => { P.c = v; renderSpec(); });
+
+  // ---------- Sim 3: cascade ----------
+  const C = { d: 2, t: 1, e: 0.6 };
+  const CE = { ce: 0.96, ch: 0.5, be: 0.98, bh: 0.86 }, CP = { cheap: 2, big: 30 };
+  function renderCasc() {
+    const W = 560, H = 230, m = { l: 44, r: 16, t: 14, b: 36 };
+    const svg = mk($("casc-chart"), W, H, "Confidence distributions for easy and hard questions");
+    const xs = L.scale(-3.5, 6.5, m.l, W - m.r), top = 0.42, y = L.scale(0, top, H - m.b, m.t);
+    for (let v = -2; v <= 6; v += 2) tx(svg, xs(v), H - m.b + 16, v, { "text-anchor": "middle" });
+    const pe = [], ph = [];
+    for (let s = -3.5; s <= 6.5; s += 0.1) { pe.push([xs(s), y(L.normPdf(s - C.d))]); ph.push([xs(s), y(L.normPdf(s))]); }
+    L.svg("path", { d: L.path(pe), class: "cv-curve" }, svg);
+    L.svg("path", { d: L.path(ph), stroke: "var(--warn)", "stroke-width": 2.6, fill: "none" }, svg);
+    L.svg("line", { x1: xs(C.t), x2: xs(C.t), y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1.4, "stroke-dasharray": "3 3" }, svg);
+    tx(svg, xs(C.t) + 5, m.t + 10, "bar", { class: "lbl-ink" });
+    tx(svg, xs(C.d) + 8, y(0.4) + 4, "easy", { class: "lbl-acc" });
+    tx(svg, xs(0) - 8, y(0.4) + 4, "hard", { class: "lbl-warn", "text-anchor": "end" });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Cheap model's confidence score (accepted to the right of the bar)", { "text-anchor": "middle" });
+
+    const tpr = Q(C.t - C.d), fpr = Q(C.t), e = C.e;
+    const accE = tpr * CE.ce + (1 - tpr) * CE.be, accH = fpr * CE.ch + (1 - fpr) * CE.bh;
+    const acc = e * accE + (1 - e) * accH, base = e * CE.be + (1 - e) * CE.bh;
+    const esc = e * (1 - tpr) + (1 - e) * (1 - fpr);
+    const cost = CP.cheap + CP.big * esc;
+    const lost = 1000 * (e * tpr * (CE.be - CE.ce) + (1 - e) * fpr * (CE.bh - CE.ch));
+    $("c-cost").textContent = "AED " + cost.toFixed(1); $("c-cost-s").textContent = "big model alone: AED " + CP.big;
+    $("c-acc").textContent = pct(acc, 1); $("c-acc-s").textContent = "big model alone: " + pct(base, 1);
+    cls($("c-acc-b"), base - acc > 0.03 ? "bad" : base - acc > 0.01 ? "warn" : "ok");
+    $("c-esc").textContent = pct(esc, 0);
+    $("c-lost").textContent = L.fmtInt(lost); cls($("c-lost-b"), lost > 40 ? "bad" : "");
+    $("c-verdict").innerHTML = "Saves <b>" + pct(1 - cost / CP.big, 0) + "</b> of the cost and gives up <b>" + ((base - acc) * 100).toFixed(1) + "</b> points of accuracy. " +
+      (C.d < 0.8 ? "With a confidence signal this weak, the cascade mostly pays twice or accepts mistakes." : base - acc < 0.01 ? "A good trade, if this holds on your real data." : "Whether that trade is acceptable depends on what the wrong answers cost.");
+  }
+  L.bind("s-d", v => v.toFixed(1), v => { C.d = v; renderCasc(); });
+  L.bind("s-t", v => v.toFixed(2), v => { C.t = v; renderCasc(); });
+  L.bind("s-e", v => pct(v, 0), v => { C.e = v; renderCasc(); });
+
+  // ---------- Sim 4: knowledge ----------
+  const K = { c: 5.3, h: 0, q: 4.7 };
+  const PIN = 10 / 1e6, WIN = 1e6;
+  const tokFmt = v => v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + "M tokens" : Math.round(v / 1000) + "k tokens";
+  const aed2 = v => v >= 100 ? "AED " + L.fmtInt(v) : "AED " + (v < 1 ? v.toFixed(3) : v.toFixed(2));
+  function renderKnow() {
+    const corp = Math.pow(10, K.c), qn = Math.pow(10, K.q), ok = corp <= WIN;
+    const stuff = ok ? corp * PIN * ((1 - K.h) + K.h * 0.1) : null;
+    const rag = 3500 * PIN, mem = 4300 * PIN;
+    hbars($("know-chart"), "Cost per question",
+      [{ name: "Stuff everything", v: stuff, cls: "bar-1", note: "does not fit the window" },
+       { name: "Retrieval", v: rag, cls: "bar-2" }, { name: "Memory + retrieval", v: mem, cls: "bar-0" }], aed2, true);
+    $("k-st").textContent = stuff == null ? "Does not fit" : aed2(stuff);
+    cls($("k-st-b"), stuff == null ? "bad" : stuff > 20 * rag ? "warn" : "ok");
+    $("k-st-s").textContent = stuff == null ? "over a 1M-token window" : "reading " + tokFmt(corp);
+    $("k-rag").textContent = aed2(rag); $("k-mem").textContent = aed2(mem);
+    if (stuff == null) { $("k-day").textContent = "n/a"; $("k-day-s").textContent = "stuffing impossible"; }
+    else { $("k-day").textContent = (stuff / rag).toFixed(stuff / rag < 10 ? 1 : 0) + "×"; $("k-day-s").textContent = aed2(stuff * qn) + " vs " + aed2(rag * qn) + " a day"; }
+    $("k-verdict").innerHTML = stuff == null
+      ? "The corpus (" + tokFmt(corp) + ") exceeds the window. Retrieval is the only option of these three."
+      : "Stuffing is <b>" + (stuff / rag).toFixed(stuff / rag < 10 ? 1 : 0) + "×</b> the cost of retrieval per question, <b>" + aed2(stuff * qn) + "</b> against <b>" + aed2(rag * qn) + "</b> a day at " + L.fmtInt(qn) + " questions. " +
+        (stuff < 1.5 * rag ? "At this size the simplicity of stuffing may be worth the small premium." : "Cost is only one axis: latency, accuracy and permissions also matter.");
+  }
+  L.bind("s-corp", v => tokFmt(Math.pow(10, v)), v => { K.c = v; renderKnow(); });
+  L.bind("s-hit", v => pct(v, 0), v => { K.h = v; renderKnow(); });
+  L.bind("s-q", v => L.fmtInt(Math.pow(10, v)), v => { K.q = v; renderKnow(); });
+
+  function renderAll() { renderMoE(); renderSpec(); renderCasc(); renderKnow(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
