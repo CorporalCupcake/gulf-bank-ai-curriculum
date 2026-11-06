@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scoring Forecasts and Rankings: MAE, RMSE, MAPE, Quantile Loss, NDCG</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 13px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-bad { fill: var(--bad) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+
+  .c-mae { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .c-rmse { stroke: var(--warn); stroke-width: 2.4; fill: none; }
+  .c-mape { stroke: var(--bad); stroke-width: 2.4; fill: none; }
+  .c-cost { stroke: var(--ink); stroke-width: 2.4; fill: none; }
+  .c-ndcg { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .c-prec { stroke: var(--warn); stroke-width: 2.4; fill: none; }
+  .mk-med { stroke: var(--accent); stroke-width: 1.3; stroke-dasharray: 4 3; }
+  .mk-mean { stroke: var(--warn); stroke-width: 1.3; stroke-dasharray: 4 3; }
+  .mk-mape { stroke: var(--bad); stroke-width: 1.3; stroke-dasharray: 4 3; }
+  .mk-now { stroke: var(--ink); stroke-width: 1.3; }
+  .dot-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .g0 { fill: var(--neutral); fill-opacity: .3; }
+  .g1 { fill: var(--neutral); fill-opacity: .8; }
+  .g2 { fill: var(--warn); }
+  .g3 { fill: var(--bad); }
+  .capline { stroke: var(--ink); stroke-width: 1.4; stroke-dasharray: 4 3; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F7 · Evaluation and reliability</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F7.5 · F7.6</span>
+        <span class="pill d">Day one</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Scoring Forecasts and Rankings: MAE, RMSE, MAPE, Quantile Loss, NDCG</h1>
+      <p class="dek">Every error measure quietly chooses what the model should aim at: the median, the mean, or a biased-low guess. How to pick the measure that matches what a miss costs, how to score a forecast that gives a range, and how to grade an ordered list such as an alert queue.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>An error metric is a statement about which mistakes hurt: MAE aims at the median, RMSE at the mean and punishes big misses, MAPE rewards under-forecasting, quantile loss lets you say that running short costs more than holding spare, and ranking metrics (precision@k, NDCG, MRR) grade only the order of a list, so choose the one whose answer you would be happy to be optimised for.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A treasury team forecasts how much cash customers will withdraw from a cluster of ATMs tomorrow, so that vans can load the right amount. Three analysts build models. One reports "average error AED 6,000". Another reports "RMSE AED 9,500". A third reports "MAPE 4.8%". All three are honest. None of them can be compared with the others, and the one that looks best on its own number may be the worst for the bank.</p>
+        <p>The reason is that each number is a different <strong>question about the errors</strong>. MAE asks how far off you are on a typical day. RMSE squares the misses first, so one terrible day counts as much as many small ones. MAPE divides each miss by the actual value, so a 10,000 miss on a quiet day counts far more than the same miss on a payday. And none of them knows that a machine running empty on the Thursday before Eid is far worse than one holding extra cash overnight.</p>
+        <p>The deeper point is what happens when you <em>train</em> against the number, or choose between models by it. A metric has a built-in target. Minimise squared error and the model learns to predict the <strong>mean</strong>. Minimise absolute error and it learns the <strong>median</strong>. Minimise percentage error and it learns something smaller than the median, on purpose, because that is how the arithmetic works. The first simulation shows this happening.</p>
+      </div>
+
+      <figure class="figure" id="fig-loss">
+        <div class="fig-head"><span class="fig-title">One forecast, three scoreboards, three different winners</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> drag your forecast across the range. Each coloured curve is one metric, drawn relative to its own best value (1.0 is the best that metric can score). Notice the three curves bottom out at different forecasts. Then press <b>Add a payday spike</b>: one big day drags the mean (and RMSE) up, barely moves the median, and leaves the percentage metric almost where it was.</p>
+        <div class="btns" role="group" aria-label="Spike">
+          <button class="btn" type="button" id="b-spike" aria-pressed="false">Add a payday spike</button>
+        </div>
+        <div class="chart-wrap" id="loss-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>MAE (best at the median)</span>
+          <span><i style="background:var(--warn)"></i>RMSE (best at the mean)</span>
+          <span><i style="background:var(--bad)"></i>MAPE (best below the median)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-c">Your single forecast for every day <output for="s-c"></output></label><input type="range" id="s-c" min="90" max="320" step="1" value="140"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">MAE at your forecast</div><div class="v" id="st1-mae"></div><div class="s" id="st1-mae-s"></div></div>
+          <div class="stat"><div class="k">RMSE at your forecast</div><div class="v" id="st1-rmse"></div><div class="s" id="st1-rmse-s"></div></div>
+          <div class="stat"><div class="k">MAPE at your forecast</div><div class="v" id="st1-mape"></div><div class="s" id="st1-mape-s"></div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: daily cash withdrawals from an ATM cluster, in AED thousand: 14 ordinary days between 112 and 150, plus one payday spike of 300 when switched on. You pick one constant forecast, so there is no model, only the metrics. Curves are exact; each is divided by its own minimum.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to take away.</p>
+        <ul>
+          <li><strong>The metric you pick is the target you train towards.</strong> Choosing it after the fact, to make a model look good, is the quiet form of cheating in forecasting.</li>
+          <li><strong>"Which error is best?" has no general answer.</strong> It depends on what a miss costs: is a big miss much worse than two small ones? Is under-forecasting worse than over-forecasting? Is a 5% miss on a small account as bad as 5% on a large one?</li>
+          <li><strong>Ranking is a different problem.</strong> When the output is an ordered list (alerts for investigators, documents for a search, offers for a customer), nobody cares about the score itself. They care about whether the right items sit near the top, because only the top gets looked at. That needs its own metrics, covered from <a href="#m-rank">Part 2</a>.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before choosing a metric, finish the sentence "a miss is expensive when ...". If the answer is "when it is big", use RMSE. If it is "when it is on the short side", use quantile loss. If it is "when it is large relative to the customer", use a percentage or scaled error, carefully. If the answer is "when the right item is not near the top", use a ranking metric.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-abs">MAE and RMSE: the median and the mean</h3>
+      <div class="prose">
+        <p>Let <i>y</i><sub>t</sub> be what actually happened and <i>ŷ</i><sub>t</sub> what you forecast, over <i>n</i> periods. The two workhorses are:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>MAE</mtext><mo>=</mo><mfrac><mn>1</mn><mi>n</mi></mfrac><munder><mo>∑</mo><mi>t</mi></munder><mo stretchy="false">|</mo><msub><mi>y</mi><mi>t</mi></msub><mo>−</mo><msub><mover><mi>y</mi><mo>^</mo></mover><mi>t</mi><mo stretchy="false">|</mo><mspace width="2em"></mspace><mtext>RMSE</mtext><mo>=</mo><msqrt><mfrac><mn>1</mn><mi>n</mi></mfrac><munder><mo>∑</mo><mi>t</mi></munder><msup><mrow><mo stretchy="false">(</mo><msub><mi>y</mi><mi>t</mi></msub><mo>−</mo><msub><mover><mi>y</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">)</mo></mrow><mn>2</mn></msup></msqrt></math>
+        <p class="where">Both are in the units of the thing forecast (AED, customers, days), which makes them easy to explain. MAE is the average size of a miss. RMSE squares first, averages, then takes the root. RMSE is always at least as large as MAE; the gap between them tells you how uneven the misses are. If every miss were the same size they would be equal. Misses of 10 and 50 give MAE 30 and RMSE 36.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>What each one rewards is the interesting part, and Simulation 1 shows it. For any set of outcomes, the single number that minimises squared error is the <strong>mean</strong>, and the one that minimises absolute error is the <strong>median</strong>. A model trained on squared error is therefore aiming at the conditional average; one trained on absolute error is aiming at the conditional middle. For symmetric, well-behaved data they coincide. For skewed data (cash demand with paydays, transaction amounts, claim sizes, time to repay) they do not, and the choice is a real modelling decision, not a detail. This is the same story as the loss functions in <a href="f6-loss-functions-and-what-they.html">F6</a>: squared error is Gaussian maximum likelihood, absolute error is Laplace.</p>
+        <p>Practical guidance:</p>
+        <ul>
+          <li><strong>RMSE when big misses are disproportionately costly</strong> (a large unexpected cash call, a large mis-forecast of deposits outflow) and the data has no wild outliers that are errors rather than events.</li>
+          <li><strong>MAE when the cost grows in proportion to the miss</strong>, or when a few extreme days would otherwise dominate model selection. It is also the easiest for a business reader.</li>
+          <li><strong>Report both, and the ratio.</strong> RMSE/MAE well above 1.25 or so signals heavy-tailed errors: a few days are causing most of the pain. Ask which days.</li>
+          <li>Neither says whether the model beats a sensible alternative. Always show the same metric for a <a href="f4-bias-variance-and-generalisation.html">naive baseline</a> (yesterday, or the same weekday last week). A model with MAE 6,000 sounds fine until the naive rule scores 5,500.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-pct">Percentage errors and scale-free alternatives</h3>
+      <div class="prose">
+        <p>To compare across series of different sizes (a Dubai flagship branch against a small Fujairah one) you need errors that are scale-free. The obvious fix is to divide by the actual, giving <strong>MAPE</strong> = the average of |<i>y</i> − <i>ŷ</i>| ÷ <i>y</i>. It is popular because "4.8%" needs no units. It also has three known defects:</p>
+        <ul>
+          <li><strong>It explodes near zero.</strong> A branch with AED 200 of a rare product sold, forecast 1,000, scores 400% on its own and swamps the average. At exactly zero it is undefined, which is common for sparse series (new products, small segments, weekends in a closed branch).</li>
+          <li><strong>It is lopsided.</strong> Over-forecasting has no ceiling (forecast 300 when truth is 100: 200% error), while under-forecasting is capped at 100% (forecast 0). So if you minimise MAPE, the safe move is to forecast low. In Simulation 1, the red curve bottoms out below the median. The minimiser is the median of the values weighted by 1/<i>y</i>, which pulls it towards the small values.</li>
+          <li><strong>It treats every observation alike.</strong> A 20% miss on a day with AED 10m of flow counts the same as 20% on a day with AED 100k.</li>
+        </ul>
+        <p>The alternatives that practitioners actually use:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Measure</th><th>Definition</th><th>Good for</th><th>Watch out</th></tr></thead>
+          <tbody>
+            <tr><td><b>WAPE</b> (also called weighted MAPE)</td><td>Total absolute error ÷ total actual: Σ|<i>e</i>| ÷ Σ<i>y</i>.</td><td>Retail and branch volumes: "we missed 7% of total cash". Big series count more, zeros are fine.</td><td>Dominated by the largest series. Small segments can be badly forecast without it showing.</td></tr>
+            <tr><td><b>sMAPE</b></td><td>Absolute error ÷ the average of |<i>y</i>| and |<i>ŷ</i>|.</td><td>Was popular in forecasting competitions to soften MAPE.</td><td>Not symmetric after all, still unstable near zero. Hyndman and others advise against it.</td></tr>
+            <tr><td><b>MASE</b></td><td>MAE ÷ the MAE of a naive forecast on the training data (yesterday's value, or the same weekday last week for seasonal data).</td><td>Comparing across series of any scale, including those with zeros. Below 1 means better than naive.</td><td>Needs a stated naive rule and enough history. Less intuitive to executives.</td></tr>
+            <tr><td><b>RMSSE</b></td><td>The same idea with squared errors, then a root.</td><td>When big misses matter. Used in the M5 competition's accuracy track.</td><td>As above.</td></tr>
+            <tr><td><b>Relative to a benchmark</b></td><td>Model MAE ÷ baseline MAE, or skill = 1 − that ratio.</td><td>The simplest honest statement: "17% lower error than the naive rule."</td><td>Only as meaningful as the baseline. Choose it before seeing results.</td></tr>
+            <tr><td><b>Bias (mean error)</b></td><td>Average of <i>y</i> − <i>ŷ</i>, signed.</td><td>Shows whether you systematically over- or under-forecast. Errors that cancel in a bias number can still be large in MAE.</td><td>Report next to MAE, never instead of it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>One more practical point: <strong>when you average across many series, you are choosing weights.</strong> A simple mean of MASE treats a tiny branch as equal to a flagship; a volume-weighted number does not. Neither is wrong. Both must be stated. In the M5 forecasting competition, which used 42,840 Walmart sales series, scores were weighted by the dollar sales of each series for exactly this reason.</p>
+        <p>Last, remember the forecast horizon and the calendar. Error on day 1 and error on day 14 are different quantities; report them per horizon. For anything Islamic-calendar driven (Ramadan, Eid, school holidays) the dates move about 11 days earlier each Gregorian year and the Gulf weekend differs by country and by year, so a plain "same day last year" baseline is quietly wrong. Check the baseline is aligned to the right occasion before judging a model against it. Time series evaluation done properly is covered in <a href="f9-time-series-and-forecasting.html">F9</a>, and the temporal splits it needs in <a href="f4-cross-validation-including-temporal-splits.html">F4</a>.</p>
+      </div>
+
+      <h3 class="sub" id="m-quantile">Quantile loss: when running short costs more than holding spare</h3>
+      <div class="prose">
+        <p>The three metrics above score a single "best guess". Many bank decisions are not about the best guess. How much cash to load? How large a liquidity buffer to hold? Capacity for a call centre on Monday? In each, <strong>one side of the error is more expensive</strong>. An ATM that runs dry loses customers and fees and triggers an emergency run; cash that sits idle for a night costs a little in funding. If the shortfall is nine times as costly as the excess, you do not want the mean or the median. You want a number that is exceeded only about 1 time in 10.</p>
+        <p>That number is a <strong>quantile</strong> of the demand distribution, and the right score for it is the <strong>pinball loss</strong> (or quantile loss). For a target quantile τ between 0 and 1, with miss <i>u</i> = <i>y</i> − <i>ŷ</i>:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>ρ</mi><mi>τ</mi></msub><mo stretchy="false">(</mo><mi>u</mi><mo stretchy="false">)</mo><mo>=</mo><mfenced open="{" close=""><mtable><mtr><mtd><mi>τ</mi><mo>·</mo><mi>u</mi></mtd><mtd><mtext>if </mtext><mi>u</mi><mo>≥</mo><mn>0</mn><mtext> (actual above forecast: you were short)</mtext></mtd></mtr><mtr><mtd><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>τ</mi><mo stretchy="false">)</mo><mo>·</mo><mo stretchy="false">|</mo><mi>u</mi><mo stretchy="false">|</mo></mtd><mtd><mtext>if </mtext><mi>u</mi><mo>&lt;</mo><mn>0</mn><mtext> (actual below forecast: you held spare)</mtext></mtd></mtr></mtable></mfenced></math>
+        <p class="where">At τ = 0.5 this is half the absolute error, so the median is just the 0.5 quantile. At τ = 0.9, being 20 short costs 0.9 × 20 = 18, while being 20 over costs 0.1 × 20 = 2. The forecast that minimises the average pinball loss is exactly the τ-quantile of the outcomes. That is why a model trained on it learns "the level I will exceed only 10% of the time".</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The connection to money is direct. If a shortfall costs <i>c</i><sub>u</sub> per unit and surplus costs <i>c</i><sub>o</sub> per unit, the cost-minimising plan is the quantile with</p>
+        <p style="text-align:center"><b>τ* = c<sub>u</sub> ÷ (c<sub>u</sub> + c<sub>o</sub>)</b></p>
+        <p>This is the classic "newsvendor" result from inventory theory, and it is the same logic as the cost-based alert threshold in <a href="f7-precision-recall-thresholds-calibration.html">F7.3</a>: turn business costs into a probability level, then read the decision off the distribution. Shortfall nine times worse than surplus gives τ* = 0.9. Equal costs give the median.</p>
+      </div>
+
+      <figure class="figure" id="fig-q">
+        <div class="fig-head"><span class="fig-title">Load more cash than the average day needs, by exactly the right amount</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> leave the cost ratio at about 9 to 1 and drag the cash load. The black curve is your average daily cost. Its lowest point sits at the 90% quantile of past demand, well above the median. Slide the ratio down to 1 and the best load drops to the median. Then notice how flat the curve is near the minimum: being a little off costs little, being far low costs a lot.</p>
+        <div class="chart-wrap" id="q-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Average daily cost at each load</span>
+          <span><i style="background:var(--accent)"></i>Best load (the τ* quantile)</span>
+          <span><i style="background:var(--muted)"></i>Median load</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-load">Cash loaded for the day (AED thousand) <output for="s-load"></output></label><input type="range" id="s-load" min="60" max="240" step="1" value="105"></div>
+          <div class="ctl"><label for="s-ratio">Shortfall cost versus surplus cost <output for="s-ratio"></output></label><input type="range" id="s-ratio" min="0" max="1.6" step="0.05" value="0.95"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Target quantile τ*</div><div class="v" id="st2-tau"></div><div class="s">c<sub>u</sub> ÷ (c<sub>u</sub> + c<sub>o</sub>)</div></div>
+          <div class="stat"><div class="k">Best load</div><div class="v" id="st2-best"></div><div class="s" id="st2-best-s"></div></div>
+          <div class="stat" id="st2-now-b"><div class="k">Cost per day at your load</div><div class="v" id="st2-now"></div><div class="s" id="st2-now-s"></div></div>
+          <div class="stat"><div class="k">Days you run short</div><div class="v" id="st2-short"></div><div class="s">of 60 past days, at your load</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: 60 days of ATM-cluster demand drawn once from a right-skewed distribution (centre about 100, AED thousand) and held fixed. The surplus cost is 1 unit per AED 1,000 idle for the day; the shortfall cost is the ratio on the slider. Cost units are illustrative, not a bank's real funding or service-failure cost. The best load is the exact empirical quantile of the 60 days, which minimises pinball loss.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Several extensions are worth knowing.</p>
+        <ul>
+          <li><strong>Forecast intervals are two quantiles.</strong> A 80% interval is the 10% and 90% quantile forecasts together. Score each with pinball loss at its own τ. Check <strong>coverage</strong> too: about 80% of actuals should fall inside. A model with great pinball loss but 60% coverage is overconfident in a way that matters.</li>
+          <li><strong>Averaging pinball loss over many τ values gives the CRPS</strong> (continuous ranked probability score), which grades an entire predictive distribution, not one point. It is the standard single number for probabilistic forecasts and sits in a family of "proper" scoring rules, in which your best strategy is to report your true beliefs (Gneiting and Raftery, 2007). Pinball loss itself is proper for the quantile it targets. MAPE is not proper for anything useful, and that is the formal version of "it rewards forecasting low".</li>
+          <li><strong>Quantile loss trains models directly.</strong> Gradient boosting, linear models and neural networks all accept it as an objective, so you can fit a 90% quantile without a distributional assumption. Quantiles fitted separately can cross (the 90% line dipping below the 50%); sort them or use a method that forbids it. For guaranteed coverage regardless of the model, see <a href="r8-conformal-prediction.html">conformal prediction</a>.</li>
+          <li><strong>Where it appears:</strong> liquidity buffers and funding needs (<a href="b5-liquidity-forecasting-and-asset-liability.html">B5</a>), cash logistics, staffing of call centres and branches, and loss forecasts where the tail drives capital. In each, the point forecast is the least useful output.</li>
+        </ul>
+        <p>For expected-loss work such as IFRS 9, the accounting value is the probability-weighted <em>mean</em>, so RMSE-like or likelihood-based scores and calibration (F7.4) are the right tools there, not a 90% quantile. The metric follows the decision.</p>
+      </div>
+
+      <h3 class="sub" id="m-rank">Ranking metrics: precision@k, NDCG and MRR</h3>
+      <div class="prose">
+        <p>Now change the problem. A transaction-monitoring model scores 4,000 alerts overnight. Twenty investigators can review 300 before lunch. A search tool returns 10 passages from a policy library. A recommender shows a customer 5 offers. In all of these the <strong>order</strong> is the product. The score value hardly matters; what matters is whether the items that deserve attention sit in the part that is actually read. (If you also need the score to be a true probability, that is a separate question: calibration, F7.4.)</p>
+        <p>The metrics all start from the same picture: a ranked list, each item marked relevant or not (or given a grade), and a cut-off <i>k</i> for how deep anyone looks.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Metric</th><th>Question it answers</th><th>How it is computed</th><th>Blind to</th></tr></thead>
+          <tbody>
+            <tr><td><b>Precision@k</b></td><td>Of the <i>k</i> items shown, how many were worth it?</td><td>Relevant items in the top <i>k</i> ÷ <i>k</i>.</td><td>Order within the top <i>k</i>, and anything beyond it. Never above 1; bounded by how many relevant items exist.</td></tr>
+            <tr><td><b>Recall@k</b></td><td>Of everything worth finding, how much was in the top <i>k</i>?</td><td>Relevant in the top <i>k</i> ÷ all relevant.</td><td>How much junk you made people wade through.</td></tr>
+            <tr><td><b>MRR</b> (mean reciprocal rank)</td><td>How far down is the first good item?</td><td>Average over queries of 1 ÷ rank of the first relevant item. First at rank 1 gives 1, rank 2 gives 0.5, rank 10 gives 0.1.</td><td>Everything after the first hit. Right when there is a single answer to find.</td></tr>
+            <tr><td><b>Average precision</b> (MAP over queries)</td><td>Are relevant items packed towards the top?</td><td>Average of precision@<i>r</i> taken at each rank <i>r</i> where a relevant item sits.</td><td>Gradations: relevant is yes or no.</td></tr>
+            <tr><td><b>NDCG@k</b></td><td>How good is the ordering, given that some items are more valuable than others, relative to the best possible order?</td><td>See below. Between 0 and 1; 1 is a perfect ordering.</td><td>Needs graded labels; the gain and discount are choices.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>NDCG</strong> (normalised discounted cumulative gain; Järvelin and Kekäläinen, 2002) is the one to understand properly, because it is what retrieval and recommendation benchmarks report. It has three moves. Give each item a <em>gain</em> from its grade, so a critical alert counts for more than a minor one. <em>Discount</em> that gain by position, so being at rank 1 counts for more than rank 8. Then <em>normalise</em> by the best score achievable for that list, so queues of different quality and size are comparable.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>DCG@k</mtext><mo>=</mo><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>k</mi></munderover><mfrac><mrow><msup><mn>2</mn><msub><mi>g</mi><mi>i</mi></msub></msup><mo>−</mo><mn>1</mn></mrow><mrow><msub><mi>log</mi><mn>2</mn></msub><mo stretchy="false">(</mo><mi>i</mi><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></mfrac><mspace width="2em"></mspace><mtext>NDCG@k</mtext><mo>=</mo><mfrac><mtext>DCG@k</mtext><mtext>ideal DCG@k</mtext></mfrac></math>
+        <p class="where"><i>g</i><sub>i</sub> is the grade of the item at rank <i>i</i> (say 0 = benign, 1 = minor, 2 = suspicious, 3 = confirmed). Gain 2<sup>g</sup> − 1 makes a grade-3 item worth 7 and a grade-1 item worth 1. The discount 1 ÷ log<sub>2</sub>(<i>i</i> + 1) is 1 at rank 1, 0.63 at rank 3 and 0.5 at rank 7. Worked example: a list with grades [0, 3, 1] scores 7/1.585 + 1/2 = 4.92; the ideal order [3, 1, 0] scores 7 + 1/1.585 = 7.63; NDCG = 0.64.</p>
+      </div>
+
+      <figure class="figure" id="fig-rank">
+        <div class="fig-head"><span class="fig-title">Grading an alert queue: how a noisier model changes what the top looks like</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> start with a fairly good model and review capacity of 10. Each bar is one alert in the model's order for the first queue (red = confirmed, orange = suspicious, grey = minor or benign). Raise the noise and the red bars slide down the queue. Watch precision@k, NDCG and MRR fall at different speeds. Then move the capacity up and down: precision@k falls as <i>k</i> grows, because there are only so many true cases to find. The right-hand chart shows both curves across all <i>k</i>.</p>
+        <div class="chart-wrap" id="r-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--bad)"></i>Confirmed (grade 3)</span>
+          <span><i class="sq" style="background:var(--warn)"></i>Suspicious (grade 2)</span>
+          <span><i class="sq" style="background:var(--neutral)"></i>Minor / benign (grades 1, 0)</span>
+          <span><i style="background:var(--ink)"></i>Review capacity</span>
+        </div>
+        <div class="chart-wrap" id="r-curves"></div>
+        <div class="legend">
+          <span><i style="background:var(--warn)"></i>Precision@k</span>
+          <span><i style="background:var(--accent)"></i>NDCG@k</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-noise">Model noise (0 = perfect ordering) <output for="s-noise"></output></label><input type="range" id="s-noise" min="0" max="3" step="0.05" value="0.9"></div>
+          <div class="ctl"><label for="s-k">Review capacity k <output for="s-k"></output></label><input type="range" id="s-k" min="3" max="25" step="1" value="10"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Precision@k</div><div class="v" id="st3-p"></div><div class="s" id="st3-p-s"></div></div>
+          <div class="stat"><div class="k">Recall@k</div><div class="v" id="st3-r"></div><div class="s">of suspicious or worse</div></div>
+          <div class="stat"><div class="k">NDCG@k</div><div class="v" id="st3-n"></div><div class="s">1 = perfect ordering</div></div>
+          <div class="stat"><div class="k">MRR</div><div class="v" id="st3-m"></div><div class="s" id="st3-m-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: 20 alert queues of 40 alerts each, grades drawn once and held fixed (about 8% confirmed, 14% suspicious, 28% minor, the rest benign). The model's score is the true grade plus Gaussian noise of the chosen size. "Relevant" means grade 2 or 3. The metrics are averages over the 20 queues; the bars show the first queue only. Gains use 2<sup>g</sup> − 1.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The simulation brings out the judgement calls.</p>
+        <ul>
+          <li><strong>Choose <i>k</i> from the operation, not from habit.</strong> If investigators can review 300 alerts, precision@300 is the number the business will experience. NDCG@10 is a convention from web search; borrowing it for an alert queue measures something nobody is doing.</li>
+          <li><strong>Precision@k has a ceiling.</strong> If a queue has only 4 true cases and k = 10, precision@10 can never exceed 0.4 even for a perfect model. Compare against the ideal for that queue, which is what NDCG's normalisation does.</li>
+          <li><strong>MRR suits "find the one right answer"</strong> (retrieving the single policy paragraph that answers a question, matching a name on a sanctions list), and punishes everything else too little. For alerts with many cases to find, use precision, recall and NDCG.</li>
+          <li><strong>Grades and gains are policy.</strong> Whether a confirmed case is worth 3 times or 7 times a suspicious one changes model rankings. Agree it with the business before looking at results.</li>
+          <li><strong>These metrics ignore the score.</strong> Two models with the same ordering score identically even if one outputs 0.99 for everything. They say nothing about calibration or about whether to review item 301 at all; that depends on the cost threshold from F7.3.</li>
+          <li><strong>Averages hide queries.</strong> A mean NDCG of 0.7 can be many good queries and a few disasters. Look at the spread, and cut by segment (Arabic and English queries, retail and corporate customers).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Error measures are the point where modelling, business cost and honest evaluation meet. They come back in these places.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F7.1 – F7.4 · Precision, recall, thresholds, calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">The classification half of F7</a></span><p>Cost-based thresholds there and the newsvendor quantile here are the same idea: costs become a probability level, and the decision follows.</p></div>
+        <div class="link-card"><span class="code">F6 · Loss functions</span><span class="t"><a href="f6-loss-functions-and-what-they.html">Metrics versus training losses</a></span><p>Squared error, absolute error and pinball loss are all training losses too. Training and evaluating on the same loss is the easy case; mismatch is where surprises live.</p></div>
+        <div class="link-card"><span class="code">F4 · Cross-validation and baselines</span><span class="t"><a href="f4-cross-validation-including-temporal-splits.html">Forward-in-time evaluation</a></span><p>Every forecast metric needs a split that respects time, and a baseline to divide by (MASE) or compare against.</p></div>
+        <div class="link-card"><span class="code">F9 · Time series and forecasting</span><span class="t"><a href="f9-time-series-and-forecasting.html">What the metrics are scoring</a></span><p>Seasonality, horizons and rolling-origin back-tests. This lesson says how to grade a forecast; F9 says how to make one.</p></div>
+        <div class="link-card"><span class="code">F9 · Recommenders and ranking</span><span class="t"><a href="f9-recommender-systems-and-ranking.html">Ranking in practice</a></span><p>Next-best-offer systems are judged by NDCG and precision@k offline, but the true test is an online experiment.</p></div>
+        <div class="link-card"><span class="code">M3 · Retrieval</span><span class="t"><a href="m3-hybrid-search-and-reciprocal-rank.html">Search quality is NDCG and MRR</a></span><p>Retrieval for document assistants is tuned and compared on NDCG@10, recall@k and MRR. Fusing rankings (reciprocal rank fusion) is judged by these same numbers.</p></div>
+        <div class="link-card"><span class="code">F2.1 – F2.2 · Intervals</span><span class="t"><a href="f2-uncertainty-intervals-bootstrap.html">Error metrics are estimates</a></span><p>A MAE or NDCG on 60 days or 80 queries has a margin of error. Bootstrap the days or queries before claiming one model wins.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift monitoring</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">Watching the metric over time</a></span><p>Forecast bias creeping away from zero, or precision@capacity decaying, are monitoring signals in themselves.</p></div>
+        <div class="link-card"><span class="code">R8 · Conformal prediction</span><span class="t"><a href="r8-conformal-prediction.html">Intervals with a guarantee</a></span><p>When a quantile forecast's coverage cannot be trusted, conformal methods wrap any model to restore it.</p></div>
+        <div class="link-card"><span class="code">A4 · Statistics for evals</span><span class="t"><a href="a4-statistics-for-evals.html">Comparing scores honestly</a></span><p>The same paired-difference and interval logic applies to NDCG across queries and to LLM-judge scores.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Cash and ATM logistics.</strong> Quantile forecasts with asymmetric costs; MASE or WAPE across hundreds of machines; careful alignment of Eid and payday effects.</li>
+          <li><strong>Liquidity and deposit forecasting.</strong> Outflow quantiles (the bad tail) matter more than the mean; the same forecast also gets a point metric for reporting. See <a href="b5-liquidity-forecasting-and-asset-liability.html">B5</a>.</li>
+          <li><strong>Loss and balance forecasting for finance.</strong> RMSE or bias on aggregated portfolios, with WAPE for the story told to executives. For provisioning, calibration and expected value rather than quantiles.</li>
+          <li><strong>Alert prioritisation for fraud and AML.</strong> Precision@capacity, recall of confirmed cases in the top slice, NDCG when cases have severity grades (see <a href="b2-transaction-monitoring-rules-versus-ml.html">B2</a>). The labels are delayed and selective (<a href="b1-delayed-labels-and-feedback-loops.html">B1</a>), so mature them before scoring.</li>
+          <li><strong>Search, copilots and recommendations.</strong> Staff or customer assistants backed by document retrieval, judged by recall@k and NDCG@k on questions in both Arabic and English; next-best-offer ranking judged by precision@k offline and by experiment online.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The basics are settled. The live developments are the move from point forecasts to probabilistic ones scored with proper rules, the standardisation of benchmarks around scale-free metrics, and a growing awareness that ranking evaluation shortcuts can mislead.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Written in November 2026 from established literature. I did not run a fresh web check for this lesson, so recent items below are from memory and worth a quick look at the source before you quote them.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2002</span><div><div class="t">NDCG</div><p>Järvelin and Kekäläinen introduced cumulative gain with a positional discount for graded relevance. It became the default retrieval metric.</p><div class="src">Järvelin &amp; Kekäläinen, ACM TOIS, 2002</div></div></li>
+        <li><span class="yr">2006</span><div><div class="t">MASE: a scale-free error that avoids MAPE's problems</div><p>Hyndman and Koehler proposed scaling errors by those of a naive forecast, which works across series and with zeros.</p><div class="src">Hyndman &amp; Koehler, International Journal of Forecasting, 2006</div></div></li>
+        <li><span class="yr">2007–11</span><div><div class="t">Proper scoring rules and "make the metric match the question"</div><p>Gneiting and Raftery set out strictly proper scoring rules for probabilistic forecasts. Gneiting then showed that a point forecast should be requested for a stated functional (mean, median, a quantile), and scored with a loss that is consistent for it. Squared error for the mean, absolute error for the median, pinball for quantiles.</p><div class="src">Gneiting &amp; Raftery, JASA, 2007; Gneiting, JASA, 2011</div></div></li>
+        <li><span class="yr">2013</span><div><div class="t">NDCG is consistent for ranking</div><p>Theory work showed that NDCG-based evaluation reliably distinguishes ranking functions, which helped justify its use as an optimisation target.</p><div class="src">Wang et al., COLT, 2013</div></div></li>
+        <li><span class="yr">2018–22</span><div><div class="t">The M4 and M5 competitions</div><p>M4 (100,000 series) scored by a mix of sMAPE and MASE, found that combinations of methods beat single ones and that a hybrid of statistical and machine learning won. M5 (retail sales for Walmart) used a weighted RMSSE for point forecasts and a weighted scaled pinball loss for its uncertainty track, with gradient boosting among the leaders.</p><div class="src">Makridakis et al., Int. J. Forecasting, 2020 and 2022</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">Sampled ranking metrics can mislead</div><p>Many recommender papers rank the true item against a small random sample of items rather than the full catalogue. Krichene and Rendle showed these sampled versions of recall, NDCG and others are not consistent with the full metrics and can reverse model rankings. Use full ranking where feasible, or corrected estimators.</p><div class="src">Krichene &amp; Rendle, KDD, 2020</div></div></li>
+        <li><span class="yr">2019+</span><div><div class="t">Reproducibility concerns in neural recommenders</div><p>A widely cited study found most reviewed neural recommendation methods could be beaten by simple, well-tuned baselines under careful evaluation. The lesson for banks: always include a tuned simple baseline.</p><div class="src">Dacrema et al., RecSys, 2019</div></div></li>
+        <li><span class="yr">2024+</span><div><div class="t">Forecasting foundation models are benchmarked on MASE and quantile scores</div><p>Pretrained time series models such as Chronos report results with scaled errors and weighted quantile loss against statistical and deep learning baselines, and benchmark suites such as GIFT-Eval compare models with MASE and CRPS. These models produce quantile forecasts, so understanding pinball loss is the way to read their results. See <a href="r9-time-series-foundation-models-chronos.html">R9</a>.</p><div class="src">Ansari et al., Chronos, 2024; Aksu et al., GIFT-Eval, 2024 (from memory; check the papers)</div></div></li>
+        <li><span class="yr">2021+</span><div><div class="t">Retrieval benchmarks for LLM systems</div><p>BEIR and later embedding leaderboards standardised nDCG@10 as the headline retrieval metric across many tasks, and retrieval for RAG pipelines is now routinely judged on it.</p><div class="src">Thakur et al., BEIR, NeurIPS Datasets and Benchmarks, 2021</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>MAE, RMSE, WAPE with a naive baseline</b></td><td>Standard reporting for treasury, finance and volume forecasts.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Precision@capacity for alert queues</b></td><td>Alerts judged by the share of the reviewed slice that was productive.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>NDCG and recall@k for retrieval</b></td><td>Document search and assistants evaluated on a labelled question set.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Quantile forecasts scored by pinball loss, with coverage checks</b></td><td>Liquidity buffers, cash loading, capacity planning.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>CRPS and full probabilistic scoring</b></td><td>Common in weather and energy; spreading in finance.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Forecast evaluation through decision cost</b></td><td>Scoring models by the AED outcome of the decision they drive, not the error.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>Foundation-model forecasts as a benchmark</b></td><td>Zero-shot pretrained forecasters as a baseline to beat before building bespoke models.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Say which functional of the future you want (mean, median, a quantile, an order), score it with a loss that is consistent for it, divide by a baseline, report an interval, and prefer decision cost to any tidy statistic when you can compute it.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in bank analyses and in AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Optimising MAPE and getting a low-biased model</div><p>The model "wins" on MAPE by under-forecasting, then branches run out of cash.</p><div class="spot"><b>Spot it</b>Report the bias (mean signed error). If forecasts sit systematically under actuals, check what the training loss was.</div></li>
+        <li><div class="t">Averaging MAPE over series with small or zero values</div><p>One sparse product at 400% makes the portfolio average meaningless.</p><div class="spot"><b>Spot it</b>Look at the largest individual percentage errors. If a handful dominate, switch to WAPE or MASE.</div></li>
+        <li><div class="t">Choosing the metric after seeing the results</div><p>RMSE favoured model A, MAE favoured B, so the report uses whichever flatters the favourite.</p><div class="spot"><b>Spot it</b>Ask when the metric was fixed and why. It should be tied to a cost, written down before comparison.</div></li>
+        <li><div class="t">No naive baseline</div><p>"MAE of 6,000" with nothing to compare against. A same-weekday-last-week rule may score 5,200.</p><div class="spot"><b>Spot it</b>Ask for the same metric on a naive forecast. Prefer a skill score or MASE.</div></li>
+        <li><div class="t">A quantile forecast that never gets coverage-checked</div><p>The "90% level" is exceeded 25% of the time, so buffers are far too thin.</p><div class="spot"><b>Spot it</b>Compute the share of actuals above the forecast, by month. It should sit near 10%.</div></li>
+        <li><div class="t">Mismatched metric and decision</div><p>The model is scored on RMSE but used to set a 95% liquidity buffer, or scored on mean error and used to rank customers.</p><div class="spot"><b>Spot it</b>Write down the decision the forecast feeds and ask which functional (mean, quantile, ordering) that decision needs.</div></li>
+        <li><div class="t">Wrong calendar baseline</div><p>"Same day last year" compared across Ramadan, Eid or a changed weekend, flattering or damning the model.</p><div class="spot"><b>Spot it</b>Plot errors by calendar event. Spikes at moving holidays mean the baseline is misaligned.</div></li>
+        <li><div class="t">Precision@k compared across queues of different richness</div><p>Queue A has 30 true cases, queue B has 3. Precision@10 is not comparable.</p><div class="spot"><b>Spot it</b>Show the ceiling (best possible precision@k) or use NDCG, which normalises by it.</div></li>
+        <li><div class="t">Sampled ranking evaluation</div><p>Ranking the true item against 100 random others, then reporting NDCG as if it were over the full catalogue.</p><div class="spot"><b>Spot it</b>Ask how many candidates each query was ranked against. Only full-catalogue or properly corrected numbers should be compared across papers or vendors.</div></li>
+        <li><div class="t">Judging alert rankings on selective, immature labels</div><p>Only reviewed alerts have outcomes, so unreviewed positives are scored as misses or ignored.</p><div class="spot"><b>Spot it</b>Ask how many alerts in the evaluated slice actually received a label, and whether a random sample was reviewed.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Our cash forecast is off by about AED 6,000 a day on average, against 8,000 for the rule we use today, so roughly a quarter better. But the average is not what hurts: running out costs us much more than holding spare. So I'd have the model give us a level we exceed on only one day in ten, and I'd measure it by how often we actually run short and what that costs, not by the average error.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd decide the metric from the decision. For a buffer set against shortfall, a quantile forecast at the cost-implied level, scored with pinball loss, plus a coverage check by month. For aggregated reporting, MAE and WAPE next to a seasonal-naive baseline, with MASE across series. I avoid plain MAPE because it rewards under-forecasting and breaks near zero. For alert queues, precision at review capacity and NDCG with agreed grades, computed on matured labels with bootstrap intervals over days or queries.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Which is better, MAE or RMSE?”</summary><div class="ans"><p>Neither; they answer different questions. MAE is the typical miss and targets the median; RMSE punishes large misses and targets the mean. I'd pick by cost: if a big miss is much worse than two small ones, RMSE. I'd report both, because a large RMSE/MAE ratio shows a few bad days are driving the result.</p></div></details>
+        <details class="reveal"><summary>“Why not just use MAPE? Everyone understands a percentage.”</summary><div class="ans"><p>It's easy to read, but it explodes near zero, treats a miss on a small day like one on a large day, and favours low forecasts: over-forecasts can be unboundedly bad, under-forecasts are capped at 100%. For a communicable percentage I'd use WAPE, total error over total volume, and MASE for comparing across series.</p></div></details>
+        <details class="reveal"><summary>“Why does the model need to predict a range? We need one number for planning.”</summary><div class="ans"><p>You still get one number, but it is chosen on purpose. If a shortfall costs nine times a surplus, the cost-minimising number is the 90th percentile, not the average. The model learns it directly with quantile loss, and we can verify it by checking it was exceeded on about 10% of days.</p></div></details>
+        <details class="reveal"><summary>“Our new search tool has NDCG@10 of 0.62. Is that good?”</summary><div class="ans"><p>Not on its own. I'd ask what the labelled question set is, whether it includes Arabic questions and the hard ones, what a keyword baseline scores on it, and how wide the interval is across questions. Then I'd look at recall@k for the cases where the answer wasn't retrieved at all, because a downstream model cannot use what was never found.</p></div></details>
+        <details class="reveal"><summary>“The alert model has precision@300 of 18%. The vendor claims 30%.”</summary><div class="ans"><p>I'd check they were measured on the same queues, the same k, the same label definition and maturity, and similar case density. Precision@k depends heavily on how many true cases a queue contains. I'd ask for NDCG or the ceiling, and rerun the vendor on our matured labels with a bootstrap interval before comparing.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the formulas in Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A forecast misses by 10 on one day and by 50 on another. What are the MAE and the RMSE, and what does the gap tell you?</summary><div class="ans"><p>MAE = (10 + 50) ÷ 2 = 30. RMSE = √((100 + 2500) ÷ 2) = √1300 ≈ 36.1. RMSE is above MAE because the misses are uneven; the larger one counts for more. If both days missed by 30, the two would be equal at 30.</p></div></details>
+        <details class="reveal"><summary>2. Actual sales are 10 and you forecast 20. Next day actual is 20 and you forecast 10. What are the two percentage errors, and what does that show about MAPE?</summary><div class="ans"><p>First day: 10 ÷ 10 = 100%. Second day: 10 ÷ 20 = 50%. The absolute miss is identical but the over-forecast scores twice as badly, so a model minimising MAPE is pushed to forecast low.</p></div></details>
+        <details class="reveal"><summary>3. You forecast the 90% quantile at 80 and the actual is 100. Then you forecast 120 and the actual is 100. What are the pinball losses at τ = 0.9?</summary><div class="ans"><p>First: u = 100 − 80 = 20, short, so loss = 0.9 × 20 = 18. Second: u = −20, spare, so loss = 0.1 × 20 = 2. Running short is nine times as expensive, which is what makes the optimal forecast sit high.</p></div></details>
+        <details class="reveal"><summary>4. An empty ATM costs AED 9 per AED 1,000 of unmet demand; spare cash costs AED 1 per AED 1,000 held overnight. Which quantile should you load to, and how would you check it works?</summary><div class="ans"><p>τ* = 9 ÷ (9 + 1) = 0.9. Load to the 90th percentile of the demand forecast. Check by counting: over a back-test, actual demand should exceed the load on about 10% of days. Much more than that means the forecast is overconfident.</p></div></details>
+        <details class="reveal"><summary>5. A ranked list of three alerts has grades [0, 3, 1] in the order the model returned them. Compute NDCG@3 with gain 2<sup>g</sup> − 1.</summary><div class="ans"><p>DCG = 0 + 7 ÷ log<sub>2</sub>3 + 1 ÷ log<sub>2</sub>4 = 4.417 + 0.5 = 4.917. Ideal order is [3, 1, 0]: 7 + 1 ÷ 1.585 + 0 = 7.631. NDCG = 4.917 ÷ 7.631 ≈ <strong>0.64</strong>.</p></div></details>
+        <details class="reveal"><summary>6. Across three queries, the first relevant document is at rank 1, 3 and 2. What is the MRR, and when is it the wrong metric?</summary><div class="ans"><p>(1 + 1/3 + 1/2) ÷ 3 = 1.833 ÷ 3 ≈ <strong>0.61</strong>. It is the wrong metric when there are many things to find and what matters is how many of them the user sees, as in alert review, because it ignores everything after the first hit.</p></div></details>
+        <details class="reveal"><summary>7. The model team report MAPE of 5% across 800 branches and the model beats last year's by 1 point. What do you ask before accepting that?</summary><div class="ans"><p>How are zeros and tiny branches handled? Is the average weighted by volume? What is the bias, and does a naive same-weekday or same-occasion baseline score similarly? Is the 1-point gain larger than its interval across days or branches? And does the metric reflect a cost the bank actually bears?</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>R. Hyndman, A. Koehler. <a href="https://doi.org/10.1016/j.ijforecast.2006.03.001">Another look at measures of forecast accuracy</a>. International Journal of Forecasting, 2006. Introduces MASE.</li>
+        <li>R. Hyndman, G. Athanasopoulos. <a href="https://otexts.com/fpp3/accuracy.html">Forecasting: Principles and Practice, 3rd ed., section on evaluating forecast accuracy</a>. Free online textbook; covers scaled errors, quantile scores and CRPS.</li>
+        <li>T. Gneiting, A. Raftery. <a href="https://doi.org/10.1198/016214506000001437">Strictly Proper Scoring Rules, Prediction, and Estimation</a>. JASA, 2007.</li>
+        <li>T. Gneiting. <a href="https://doi.org/10.1198/jasa.2011.r10138">Making and Evaluating Point Forecasts</a>. JASA, 2011. Which loss goes with which functional.</li>
+        <li>S. Makridakis, E. Spiliotis, V. Assimakopoulos. <a href="https://doi.org/10.1016/j.ijforecast.2019.04.014">The M4 Competition: 100,000 time series and 61 forecasting methods</a>. International Journal of Forecasting, 2020.</li>
+        <li>S. Makridakis et al. <a href="https://doi.org/10.1016/j.ijforecast.2021.11.013">M5 accuracy competition: Results, findings, and conclusions</a>. International Journal of Forecasting, 2022.</li>
+        <li>K. Järvelin, J. Kekäläinen. <a href="https://doi.org/10.1145/582415.582418">Cumulated gain-based evaluation of IR techniques</a>. ACM TOIS, 2002. The origin of NDCG.</li>
+        <li>Y. Wang, L. Wang, Y. Li, D. He, T.-Y. Liu. <a href="https://proceedings.mlr.press/v30/Wang13.html">A Theoretical Analysis of NDCG Type Ranking Measures</a>. COLT, 2013.</li>
+        <li>W. Krichene, S. Rendle. <a href="https://arxiv.org/abs/2007.05017">On Sampled Metrics for Item Recommendation</a>. KDD, 2020.</li>
+        <li>M. Ferrari Dacrema, P. Cremonesi, D. Jannach. <a href="https://arxiv.org/abs/1907.06902">Are We Really Making Much Progress? A Worrying Analysis of Recent Neural Recommendation Approaches</a>. RecSys, 2019.</li>
+        <li>N. Thakur et al. <a href="https://arxiv.org/abs/2104.08663">BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models</a>. NeurIPS Datasets and Benchmarks, 2021.</li>
+        <li>A. Ansari et al. <a href="https://arxiv.org/abs/2403.07815">Chronos: Learning the Language of Time Series</a>. 2024.</li>
+        <li>T. Aksu et al. <a href="https://arxiv.org/abs/2410.10393">GIFT-Eval: A Benchmark for General Time Series Forecasting Model Evaluation</a>. 2024.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F7: Drift monitoring: PSI, KS and friends (F7.7)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+  const median = a => { const s = a.slice().sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
+  function mulberry(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+
+  // =====================================================================
+  // Simulation 1: MAE, RMSE, MAPE against one forecast
+  // =====================================================================
+  const BASE = [112, 118, 121, 124, 126, 127, 129, 131, 133, 136, 138, 141, 145, 150];
+  const S1 = { c: 140, spike: false };
+  const lossBox = $("loss-chart");
+  const F_MAE = (d, c) => mean(d.map(y => Math.abs(y - c)));
+  const F_RMSE = (d, c) => Math.sqrt(mean(d.map(y => (y - c) * (y - c))));
+  const F_MAPE = (d, c) => 100 * mean(d.map(y => Math.abs(y - c) / y));
+  function renderLoss() {
+    const d = S1.spike ? BASE.concat([300]) : BASE;
+    const C0 = 90, C1 = 320;
+    let bm = Infinity, cm = 0;
+    for (let c = C0; c <= C1 + 1e-9; c += 0.25) { const v = F_MAPE(d, c); if (v < bm) { bm = v; cm = c; } }
+    const med = median(d), avg = mean(d);
+    const mins = { mae: F_MAE(d, med), rmse: F_RMSE(d, avg), mape: bm };
+    const W = Math.max(300, lossBox.clientWidth), H = 260, m = { l: 44, r: 12, t: 16, b: 44 };
+    const svg = mk(lossBox, W, H, "Three error metrics against a single forecast");
+    const x = L.scale(C0, C1, m.l, W - m.r), YM = 3;
+    const y = L.scale(1, YM, H - m.b, m.t);
+    [1, 1.5, 2, 2.5, 3].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v.toFixed(1) + "×", { "text-anchor": "end" }); });
+    [100, 150, 200, 250, 300].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Forecast (AED thousand per day)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Metric ÷ its best value", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const mkr = (v, c, lab, row) => { L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: c }, svg); };
+    mkr(med, "mk-med"); mkr(avg, "mk-mean"); mkr(cm, "mk-mape");
+    const curve = (f, mn, c) => {
+      const pts = [];
+      for (let v = C0; v <= C1; v += 2) pts.push([x(v), y(Math.min(YM, f(d, v) / mn))]);
+      L.svg("path", { d: L.path(pts), class: c }, svg);
+    };
+    curve(F_MAE, mins.mae, "c-mae"); curve(F_RMSE, mins.rmse, "c-rmse"); curve(F_MAPE, mins.mape, "c-mape");
+    const cc = L.clamp(S1.c, C0, C1);
+    L.svg("line", { x1: x(cc), x2: x(cc), y1: m.t, y2: H - m.b, class: "mk-now" }, svg);
+    [[F_MAE, mins.mae], [F_RMSE, mins.rmse], [F_MAPE, mins.mape]].forEach(([f, mn]) => L.svg("circle", { cx: x(cc), cy: y(Math.min(YM, f(d, cc) / mn)), r: 4.5, class: "dot-now" }, svg));
+    const lab = [[med, "median", "lbl-acc"], [avg, "mean", "lbl-warn"], [cm, "MAPE best", "lbl-bad"]].sort((a, b) => a[0] - b[0]);
+    lab.forEach((q, i) => tx(svg, x(q[0]) + (x(q[0]) > W * 0.7 ? -4 : 4), m.t + 10 + i * 13, q[1] + " " + q[0].toFixed(0), { class: q[2], "text-anchor": x(q[0]) > W * 0.7 ? "end" : "start" }));
+
+    $("st1-mae").textContent = F_MAE(d, S1.c).toFixed(1); $("st1-mae-s").textContent = "best " + mins.mae.toFixed(1) + " at " + med.toFixed(0);
+    $("st1-rmse").textContent = F_RMSE(d, S1.c).toFixed(1); $("st1-rmse-s").textContent = "best " + mins.rmse.toFixed(1) + " at " + avg.toFixed(0);
+    $("st1-mape").textContent = F_MAPE(d, S1.c).toFixed(1) + "%"; $("st1-mape-s").textContent = "best " + mins.mape.toFixed(1) + "% at " + cm.toFixed(0);
+    $("s1-verdict").innerHTML = "On these " + d.length + " days, MAE is lowest if you forecast <b>" + med.toFixed(0) + "</b> (the median), RMSE if you forecast <b>" + avg.toFixed(0) + "</b> (the mean), and MAPE if you forecast <b>" + cm.toFixed(0) + "</b>, " +
+      (cm < med - 0.5 ? "below the median, as the 1/actual weights favour smaller days. " : "close to the median here. ") +
+      (S1.spike ? "The single spike of 300 moved the mean by " + (avg - mean(BASE)).toFixed(0) + " and the median by only " + (med - median(BASE)).toFixed(1) + "." : "Switch the spike on to see the mean and median separate.");
+  }
+  L.bind("s-c", v => v + "k", v => { S1.c = v; renderLoss(); });
+  $("b-spike").addEventListener("click", e => { S1.spike = !S1.spike; e.currentTarget.setAttribute("aria-pressed", String(S1.spike)); renderLoss(); });
+
+  // =====================================================================
+  // Simulation 2: quantile loss and the cash load
+  // =====================================================================
+  const rg = mulberry(11);
+  const DEM = Array.from({ length: 60 }, () => Math.round(100 * Math.exp(0.25 * gauss(rg))));
+  const SORT = DEM.slice().sort((a, b) => a - b);
+  const S2 = { load: 105, k: 0.95 };
+  const qBox = $("q-chart");
+  const costAt = (c, cu) => mean(DEM.map(y => y > c ? cu * (y - c) : (c - y)));
+  function renderQ() {
+    const cu = Math.pow(10, S2.k), tau = cu / (cu + 1), n = SORT.length;
+    const best = SORT[Math.min(n - 1, Math.max(0, Math.ceil(tau * n - 1e-9) - 1))], med = median(DEM);
+    const C0 = 60, C1 = 240;
+    let ymax = 0; for (let c = C0; c <= C1; c += 2) ymax = Math.max(ymax, costAt(c, cu));
+    ymax = Math.ceil(ymax / 10) * 10;
+    const W = Math.max(300, qBox.clientWidth), H = 260, m = { l: 48, r: 12, t: 16, b: 44 };
+    const svg = mk(qBox, W, H, "Average daily cost against cash load");
+    const x = L.scale(C0, C1, m.l, W - m.r), y = L.scale(0, ymax, H - m.b, m.t);
+    for (let i = 0; i <= 4; i++) { const v = ymax * i / 4; L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v.toFixed(0), { "text-anchor": "end" }); }
+    [60, 100, 140, 180, 220].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Cash loaded (AED thousand)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Cost units per day", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: x(med), x2: x(med), y1: m.t, y2: H - m.b, class: "mk-med", style: "stroke:var(--muted)" }, svg);
+    L.svg("line", { x1: x(best), x2: x(best), y1: m.t, y2: H - m.b, class: "mk-med" }, svg);
+    tx(svg, x(best) + (x(best) > W * 0.7 ? -4 : 4), m.t + 10, "best " + best, { class: "lbl-acc", "text-anchor": x(best) > W * 0.7 ? "end" : "start" });
+    if (Math.abs(best - med) > 12) tx(svg, x(med) + (x(med) > W * 0.7 ? -4 : 4), m.t + 24, "median " + med.toFixed(0), { class: "lbl-ink", "text-anchor": x(med) > W * 0.7 ? "end" : "start" });
+    const pts = []; for (let c = C0; c <= C1; c += 1) pts.push([x(c), y(costAt(c, cu))]);
+    L.svg("path", { d: L.path(pts), class: "c-cost" }, svg);
+    L.svg("circle", { cx: x(S2.load), cy: y(costAt(S2.load, cu)), r: 6, class: "dot-now" }, svg);
+
+    const now = costAt(S2.load, cu), bc = costAt(best, cu), mc = costAt(med, cu);
+    const shortDays = DEM.filter(v => v > S2.load).length;
+    $("st2-tau").textContent = (100 * tau).toFixed(0) + "%";
+    $("st2-best").textContent = best + "k"; $("st2-best-s").textContent = "median is " + med.toFixed(0) + "k";
+    $("st2-now").textContent = now.toFixed(1); $("st2-now-s").textContent = "best " + bc.toFixed(1) + ", median load " + mc.toFixed(1);
+    cls($("st2-now-b"), now > 1.25 * bc ? "bad" : (now > 1.05 * bc ? "warn" : "ok"));
+    $("st2-short").textContent = shortDays;
+    $("s2-verdict").innerHTML = "At a cost ratio of <b>" + cu.toFixed(1) + " to 1</b> the best load is the " + (100 * tau).toFixed(0) + "th percentile of past demand, <b>" + best + "k</b>. " +
+      (cu < 1.3 ? "With equal costs this is the median." : "Loading to the median instead would cost " + (mc / bc).toFixed(1) + " times as much. ") +
+      "Your load of " + S2.load + "k runs short on " + shortDays + " of 60 days (" + (100 * shortDays / 60).toFixed(0) + "%); the best load runs short on about " + (100 * (1 - tau)).toFixed(0) + "%.";
+  }
+  L.bind("s-load", v => v + "k", v => { S2.load = v; renderQ(); });
+  L.bind("s-ratio", v => Math.pow(10, v).toFixed(1) + " : 1", v => { S2.k = v; renderQ(); });
+
+  // =====================================================================
+  // Simulation 3: ranking metrics
+  // =====================================================================
+  const NQ = 20, NA = 40, rr = mulberry(5);
+  const GR = [], ZZ = [];
+  for (let q = 0; q < NQ; q++) {
+    const g = Array.from({ length: NA }, () => { const u = rr(); return u < 0.08 ? 3 : u < 0.22 ? 2 : u < 0.5 ? 1 : 0; });
+    if (!g.some(v => v >= 2)) g[7] = 2;
+    GR.push(g); ZZ.push(Array.from({ length: NA }, () => gauss(rr)));
+  }
+  const S3 = { s: 0.9, k: 10 };
+  const rBox = $("r-chart"), cBox = $("r-curves");
+  const gain = g => Math.pow(2, g) - 1, disc = i => 1 / Math.log2(i + 1);
+  function order(q, s) { return GR[q].map((g, i) => [g + s * ZZ[q][i], g]).sort((a, b) => b[0] - a[0]).map(p => p[1]); }
+  function metrics(q, s, k) {
+    const o = order(q, s), rel = o.filter(g => g >= 2).length;
+    let hit = 0, dcg = 0, idcg = 0, rrk = 0;
+    const ideal = GR[q].slice().sort((a, b) => b - a);
+    for (let i = 0; i < k; i++) { if (o[i] >= 2) hit++; dcg += gain(o[i]) * disc(i + 1); idcg += gain(ideal[i]) * disc(i + 1); }
+    for (let i = 0; i < NA; i++) if (o[i] >= 2) { rrk = 1 / (i + 1); break; }
+    return { p: hit / k, r: hit / rel, n: dcg / idcg, m: rrk, rel };
+  }
+  const avgM = (s, k) => { const a = { p: 0, r: 0, n: 0, m: 0, rel: 0 }; for (let q = 0; q < NQ; q++) { const t = metrics(q, s, k); for (const key in a) a[key] += t[key] / NQ; } return a; };
+  function renderRank() {
+    const s = S3.s, k = S3.k, o = order(0, s);
+    let W = Math.max(300, rBox.clientWidth), H = 130, m = { l: 8, r: 8, t: 12, b: 34 };
+    let svg = mk(rBox, W, H, "First alert queue in the model's order");
+    const bw = (W - m.l - m.r) / NA;
+    o.forEach((g, i) => { const h = 8 + g * 24; L.svg("rect", { x: m.l + i * bw + 1, y: H - m.b - h, width: Math.max(2, bw - 2), height: h, rx: 1.5, class: "g" + g }, svg); });
+    L.svg("line", { x1: m.l + k * bw, x2: m.l + k * bw, y1: m.t - 4, y2: H - m.b + 4, class: "capline" }, svg);
+    tx(svg, Math.min(m.l + k * bw + 4, W - 70), m.t + 4, "capacity " + k, { class: "lbl-strong" });
+    tx(svg, m.l, H - 10, "rank 1 (top of the queue)", { class: "lbl-ink" });
+    tx(svg, W - m.r, H - 10, "rank 40", { class: "lbl-ink", "text-anchor": "end" });
+
+    H = 180; m = { l: 40, r: 12, t: 12, b: 38 };
+    svg = mk(cBox, W, H, "Precision and NDCG at each k");
+    const x = L.scale(1, 25, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100) + "%", { "text-anchor": "end" }); });
+    [1, 5, 10, 15, 20, 25].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "k (alerts reviewed)", { "text-anchor": "middle" });
+    const pp = [], nn = [];
+    for (let kk = 1; kk <= 25; kk++) { const a = avgM(s, kk); pp.push([x(kk), y(a.p)]); nn.push([x(kk), y(a.n)]); }
+    L.svg("path", { d: L.path(pp), class: "c-prec" }, svg); L.svg("path", { d: L.path(nn), class: "c-ndcg" }, svg);
+    L.svg("line", { x1: x(k), x2: x(k), y1: m.t, y2: H - m.b, class: "capline" }, svg);
+
+    const a = avgM(s, k), ceil = avgM(0, k).p;
+    $("st3-p").textContent = (100 * a.p).toFixed(0) + "%"; $("st3-p-s").textContent = "best possible " + (100 * ceil).toFixed(0) + "%";
+    $("st3-r").textContent = (100 * a.r).toFixed(0) + "%";
+    $("st3-n").textContent = a.n.toFixed(2);
+    $("st3-m").textContent = a.m.toFixed(2); $("st3-m-s").textContent = "first hit at about rank " + (a.m > 0 ? (1 / a.m).toFixed(1) : "-");
+    $("s3-verdict").innerHTML = "Across 20 queues, with " + a.rel.toFixed(1) + " relevant alerts per queue on average, the top " + k + " contains <b>" + (a.p * k).toFixed(1) + "</b> of them. " +
+      (s < 0.05 ? "A perfect ordering: precision is limited only by how many relevant alerts exist (" + (100 * ceil).toFixed(0) + "% at k = " + k + ")." : "Precision is " + (100 * a.p).toFixed(0) + "% against a ceiling of " + (100 * ceil).toFixed(0) + "%, so the model delivers " + (100 * a.p / ceil).toFixed(0) + "% of what any ordering could.");
+  }
+  L.bind("s-noise", v => v.toFixed(2), v => { S3.s = v; renderRank(); });
+  L.bind("s-k", v => String(v), v => { S3.k = v; renderRank(); });
+
+  function renderAll() { renderLoss(); renderQ(); renderRank(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

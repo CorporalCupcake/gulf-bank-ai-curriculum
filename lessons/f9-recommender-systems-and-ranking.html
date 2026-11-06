@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Recommenders and Document AI: Next-Best-Product, Ranking, and Reading Cheques and Scans</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .bar-pop { fill: var(--neutral); }
+  .bar-sim { fill: var(--accent); }
+  .bar-neg { fill: var(--bad); fill-opacity: .7; }
+  .bar-hit { fill: var(--accent); }
+  .bar-miss { fill: var(--neutral); fill-opacity: .5; }
+  .pt-prod { fill: var(--neutral); stroke: var(--surface); stroke-width: 2; }
+  .pt-prod.top { fill: var(--accent); }
+  .pt-cust { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .arrow { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .axis-line { stroke: var(--muted); stroke-width: 1; }
+  .cv-curve { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .cv-opt { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips .btn { font-size: 13px; padding: 6px 10px; }
+  .slots { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+  .slots .btn { font-size: 13px; padding: 8px 4px; min-width: 0; }
+  .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .pipe { list-style: none; padding: 0; display: grid; gap: 8px; max-width: var(--measure); counter-reset: st; }
+  .pipe li { counter-increment: st; padding: 10px 14px 10px 46px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; position: relative; font-size: 15px; }
+  .pipe li::before { content: counter(st); position: absolute; left: 14px; top: 10px; font-family: var(--font-mono); color: var(--accent); font-weight: 600; }
+  .pipe li b { font-weight: 600; }
+  .rtl { direction: rtl; unicode-bidi: isolate; font-family: var(--font-body); }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F9 · Specialist domains</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F9.5 · F9.6</span>
+        <span class="pill n">First 90 days</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Recommenders and Document AI: Next-Best-Product, Ranking, and Reading Cheques and Scans</h1>
+      <p class="dek">How a bank decides what to offer a customer when most customers have told it almost nothing, why ranking metrics differ from classification metrics, and how a scanned cheque or trade document becomes trustworthy data, with confidence scores that decide what a human must check.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Both topics are about turning an enormous, sparse, noisy input (a customer's thin history; a scan of a stamped, folded page) into a short ranked list or a few fields, and in both the value is decided less by the model than by the constraints, the evaluation and the routing of uncertain cases to people.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+
+      <div class="prose">
+        <h3 style="font-family:var(--font-display);font-size:20px">Recommending: guess the empty cells</h3>
+        <p>Picture a table with one row per customer and one column per product: salary account, savings, credit card, home finance, family takaful, an investment fund. A cell is 1 if the customer holds it and blank otherwise. For a bank with two million customers and thirty products, that is sixty million cells, and most are blank. A blank does not mean "does not want it". It mostly means "was never offered it, or has not got round to it".</p>
+        <p>A recommender fills in the blanks with a guess of how well each one would fit. The oldest idea in the field is also the best: <strong>people who look alike want similar things.</strong> If customers who hold a salary account, a credit card and travel insurance often go on to take a gold card, then the next customer with that trio is a good candidate for one. Nobody wrote that rule. It fell out of the table.</p>
+        <p>Two things make this harder than it sounds. First, the answer is a <em>ranking</em>, not a yes or no: you have room for three offers on an app screen, so what matters is which three, in which order. Second, a bank cannot offer just anything. Some customers are not eligible, some products are unsuitable for them, some have opted out of marketing. So a recommender at a bank is a model <em>inside</em> a set of hard rules.</p>
+      </div>
+
+      <figure class="figure" id="fig-cf">
+        <div class="fig-head"><span class="fig-title">Customers like you, against what everyone has</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> start with the "Young professional" preset. The grey bars rank products by how many customers hold them, so everyone is offered the same things. The blue bars use similar customers. Then switch to "Wealthy traveller" and watch the grey list barely change while the blue list moves.</p>
+        <div class="chips" id="cf-presets" role="group" aria-label="Preset customers"></div>
+        <div class="chips" id="cf-prods" role="group" aria-label="Products this customer holds"></div>
+        <div class="chart-wrap" id="cf-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral)"></i>Most-held products (popularity)</span>
+          <span><i class="sq" style="background:var(--accent)"></i>Similar-customer score</span>
+        </div>
+        <p class="verdict" id="cf-verdict"></p>
+        <p class="sim-note">Simulated: a made-up table of 16 customers and 10 products, built to contain four loose groups (young salaried, families, affluent, borrowers). The blue score for a product is the sum, over products the customer already holds, of the cosine similarity between the two products' columns in the table (item-based collaborative filtering). Held products are never recommended. Exact arithmetic on a toy table, not real bank data.</p>
+      </figure>
+
+      <div class="prose">
+        <h3 style="font-family:var(--font-display);font-size:20px;margin-top:1.4em">Document AI: from pixels to a field you can trust</h3>
+        <p>Now the second problem. A corporate customer presents a letter of credit, a bill of lading and a commercial invoice, as scans, some photographed on a phone, with stamps across the text, a few lines in Arabic and a few in English, dates in two calendars. A clerk reads them and keys 40 fields into a system. The ambition is to have a model do the reading.</p>
+        <p>The model's reading will be right most of the time and wrong some of the time, and it will not know which. So the useful question is never "how accurate is the OCR?" It is: <strong>can the system tell which fields it is sure of?</strong> If it can, it posts the sure ones automatically and sends the doubtful ones to a person. If it cannot, you have either an expensive human process with extra steps or a fast way to put wrong amounts into the ledger.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>A recommender is judged on the top of a ranked list and constrained by eligibility, suitability and consent. A document reader is judged on whether its confidence is honest. In both, the model is the smaller part of the job. The larger part is what you measure, what you forbid, and who looks at the doubtful cases.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-rec-shape">F9.5 · The shape of a recommender: retrieve, then rank</h3>
+      <div class="prose">
+        <p>Big recommenders have two stages because scoring every item for every user with a heavy model is too slow. A retail bank with thirty products could in principle score all of them. A video or e-commerce platform with millions of items cannot, and its design has become the vocabulary of the field.</p>
+        <ol class="pipe" style="margin-top:12px">
+          <li><b>Candidate generation (retrieval).</b> A cheap model narrows the full catalogue to a few hundred candidates: items similar to what the user held, items popular with similar users, items from a business rule such as "all products this segment is eligible for".</li>
+          <li><b>Filtering.</b> Remove anything not allowed: ineligible, already held, customer opted out, product withdrawn, not Sharia-compliant for this customer's declared preference. These are rules, not predictions, and they run on every request.</li>
+          <li><b>Ranking.</b> A richer model scores the survivors using many features (the customer's history, the product, the context such as time of day or channel) and orders them.</li>
+          <li><b>Re-ranking and policy.</b> Apply business constraints: do not show three credit products in a row, cap how often the same offer repeats, enforce contact limits, add a little exploration.</li>
+        </ol>
+        <p style="margin-top:12px">For next-best-product at a bank the catalogue is small, so stages 1 and 3 often merge into one propensity model per product: "probability this customer takes product <em>j</em> if offered in the next 30 days", ranked by expected value. That is a plain classification problem (F4, F7) with a ranking step bolted on. The recommender machinery earns its place when the catalogue is large (merchant offers, content, funds), when history is thin, or when you want one shared representation rather than thirty separate models.</p>
+      </div>
+
+      <h3 class="sub" id="m-cf">Collaborative filtering and matrix factorisation</h3>
+      <div class="prose">
+        <p><strong>Neighbourhood methods</strong> do what Simulation 1 does. Measure how similar two products are by who holds them (cosine similarity from F1.1: the angle between their columns), then score a candidate by its similarity to what the customer already has. Swap rows and columns and you get user-based filtering: find customers like you, recommend what they have. Simple, explainable ("customers with your products often take this") and a surprisingly hard baseline to beat.</p>
+        <p><strong>Matrix factorisation</strong> compresses the table. Give every customer a short vector <em>u</em> and every product a short vector <em>v</em>, each of say 32 numbers, and train them so the dot product predicts the cell:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mover><mi>r</mi><mo>^</mo></mover><mo stretchy="false">(</mo><mi>i</mi><mo>,</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>b</mi><mi>j</mi></msub><mo>+</mo><msub><mi mathvariant="bold">u</mi><mi>i</mi></msub><mo>·</mo><msub><mi mathvariant="bold">v</mi><mi>j</mi></msub></math>
+        <p class="where"><i>b<sub>j</sub></i> is a baseline popularity term for product <i>j</i>; <b>u</b><sub>i</sub> and <b>v</b><sub>j</sub> are the learned vectors for customer <i>i</i> and product <i>j</i>. A large dot product means the two vectors point the same way, which is the same geometry as the embeddings in F1.1. Training minimises the error on the known cells plus a penalty that keeps the vectors small (regularisation, F4.1). Two million customers and thirty products is 60 million cells, but with 32 factors it is only about 64 million numbers to learn and they are shared across all the cells you did not observe.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Where the "gaps" come from matters. If the cells are star ratings, a blank is truly unknown. In banking nearly all signals are <strong>implicit</strong>: holds the product, made a purchase, opened the offer. The standard treatment (Hu, Koren and Volinsky, 2008) treats every blank as a weak negative and every observed cell as a positive with a confidence that grows with how much evidence there is. It is the same quiet assumption as in F3.5: "no label" is not "no".</p>
+      </div>
+
+      <figure class="figure" id="fig-lat">
+        <div class="fig-head"><span class="fig-title">A customer is an arrow, a product is a point</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> click or drag in the map to point the customer's arrow. The products whose points lie furthest in that direction score highest. Then press <b>New customer, no history</b>: the arrow shrinks to nothing and every personal score is zero, so only the popularity term is left. That is the cold-start problem.</p>
+        <div class="btns" role="group" aria-label="Latent space options">
+          <button class="btn" type="button" id="lat-cold" aria-pressed="false">New customer, no history</button>
+          <button class="btn" type="button" id="lat-bias" aria-pressed="false">Add popularity term</button>
+        </div>
+        <div class="chart-wrap" id="lat-chart" style="touch-action:none"></div>
+        <div class="controls">
+          <div class="ctl"><label for="lat-x">Customer taste, factor 1 <output for="lat-x"></output></label><input type="range" id="lat-x" min="-1" max="1" step="0.05" value="0.7"></div>
+          <div class="ctl"><label for="lat-y">Customer taste, factor 2 <output for="lat-y"></output></label><input type="range" id="lat-y" min="-1" max="1" step="0.05" value="-0.5"></div>
+        </div>
+        <div id="lat-rank"></div>
+        <p class="verdict" id="lat-verdict"></p>
+        <p class="sim-note">Simulated: nine products placed by hand on two learned-style axes, and a customer vector you set. The score is the dot product, plus a small popularity term when switched on. Real systems use 16 to 256 factors and learn the positions from data; the two factors here have no names, and in a real model they would not either. I have placed the products so that families of similar products sit close together, as a trained model would roughly do. Exact arithmetic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three honest points about factorisation.</p>
+        <ul>
+          <li><strong>The factors are not interpretable by design.</strong> You can inspect which products sit near each other, but "factor 7" has no name. If a compliance reviewer wants to know why a customer was offered a product, you need either a neighbourhood explanation or a separate explainer (F8).</li>
+          <li><strong>A dot product is hard to beat.</strong> Rendle and colleagues (2020) re-ran a well-known neural approach against a properly tuned dot-product model and found the dot product won. The lesson is about tuning: untuned baselines make fancy models look good.</li>
+          <li><strong>Cold start is structural.</strong> A new customer has no vector; a new product has none either. The practical fixes are features (age band, segment, channel, product category) so that a new row gets a vector from what is known, and popularity or rules until behaviour accumulates.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-twotower">Two-tower models and sequences</h3>
+      <div class="prose">
+        <p>The modern workhorse for retrieval at scale is the <strong>two-tower model</strong>. One neural network turns everything known about the customer into a vector; another turns the product into a vector; training pushes the dot product up for pairs that really happened (a purchase, a click) and down for pairs that did not. It is matrix factorisation with the free vectors replaced by functions of features, so new items and new users can be embedded immediately, and the training uses the contrastive idea from F5.4: pull matching pairs together, push random pairs apart. At serving time all product vectors sit in a nearest-neighbour index and a customer's vector fetches the closest few hundred in milliseconds (Covington et al., 2016; Yi et al., 2019).</p>
+        <p>A newer thread treats a customer's history as a <strong>sequence</strong> and predicts the next event the way a language model predicts the next word, using attention (F5.3). Two examples: sequential models that read the last N interactions, and "generative" recommenders that give each item a short token code and generate the next code directly. Part 4 says where that stands. For a bank, the natural sequence is the stream of transactions and product events, which is also the idea behind foundation models for transaction data.</p>
+      </div>
+
+      <h3 class="sub" id="m-rank-metrics">Ranking metrics: judging a list, not a label</h3>
+      <div class="prose">
+        <p>A classifier is scored on every row. A recommender is scored on the <em>top of a list</em>, because nobody scrolls to position 40. The metrics all start from the same grid: for each customer, a ranked list and a set of items they actually went on to take.</p>
+        <ul>
+          <li><strong>Precision@k:</strong> of the top <i>k</i> shown, what share were taken.</li>
+          <li><strong>Recall@k:</strong> of everything they took, what share appeared in the top <i>k</i>.</li>
+          <li><strong>Average precision (AP):</strong> reward hits more the higher they sit, by averaging precision at each hit.</li>
+          <li><strong>NDCG@k:</strong> a hit at position <i>p</i> is worth 1/log<sub>2</sub>(p+1), so position 1 is worth 1, position 3 is worth 0.5, position 7 is worth 0.33. Normalise by the best possible ordering so the score lies between 0 and 1.</li>
+        </ul>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>DCG@k</mtext><mo>=</mo><munderover><mo>∑</mo><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><mi>k</mi></munderover><mfrac><mrow><mtext>rel</mtext><mo stretchy="false">(</mo><mi>p</mi><mo stretchy="false">)</mo></mrow><mrow><msub><mi>log</mi><mn>2</mn></msub><mo stretchy="false">(</mo><mi>p</mi><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></mfrac><mo>,</mo><mspace width="1em"></mspace><mtext>NDCG@k</mtext><mo>=</mo><mfrac><mtext>DCG@k</mtext><mtext>ideal DCG@k</mtext></mfrac></math>
+        <p class="where">rel(<i>p</i>) is 1 if the item at position <i>p</i> was taken, else 0. The log in the denominator is a discount: later positions count less. Ideal DCG puts all the taken items first. If a customer takes exactly one product and you ranked it third, NDCG@3 is 0.5 ÷ 1 = 0.5.</p>
+      </div>
+
+      <figure class="figure" id="fig-rank">
+        <div class="fig-head"><span class="fig-title">Same hits, different ranking, different score</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> tap slots to mark which of the ten shown offers the customer took (five exist in total across the catalogue). Press "Hits at the top" then "Hits at the bottom": the count of hits is identical, but NDCG and AP fall sharply while recall@10 does not move at all. Then lower k to 3 to see how a short screen changes the verdict.</p>
+        <div class="btns" role="group" aria-label="Presets">
+          <button class="btn" type="button" id="rk-top">Hits at the top</button>
+          <button class="btn" type="button" id="rk-spread">Hits spread out</button>
+          <button class="btn" type="button" id="rk-bot">Hits at the bottom</button>
+        </div>
+        <div class="slots" id="rk-slots" role="group" aria-label="Tap to mark which ranked offers were taken"></div>
+        <div class="chart-wrap" id="rk-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="rk-k">Screen shows the top k <output for="rk-k"></output></label><input type="range" id="rk-k" min="1" max="10" step="1" value="5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Precision@k</div><div class="v" id="rk-p"></div><div class="s" id="rk-p-s"></div></div>
+          <div class="stat"><div class="k">Recall@k</div><div class="v" id="rk-r"></div><div class="s">of the 5 that exist</div></div>
+          <div class="stat"><div class="k">Average precision@k</div><div class="v" id="rk-ap"></div><div class="s">rewards early hits</div></div>
+          <div class="stat"><div class="k">NDCG@k</div><div class="v" id="rk-n"></div><div class="s" id="rk-n-s"></div></div>
+        </div>
+        <p class="verdict" id="rk-verdict"></p>
+        <p class="sim-note">Simulated: ten ranked slots, a hit pattern you set, and 5 taken items in the whole catalogue. Average precision divides by min(k, 5). NDCG's ideal ordering puts min(k, 5) hits first. Exact arithmetic on one customer; real evaluation averages these over many customers.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two cautions on metrics. They must match the product: if the app shows three offers, report @3, not @20. And the offline numbers reward the model for predicting what customers would have done <em>anyway</em>. Someone who was going to take a credit card tomorrow counts as a hit whether or not your offer mattered. That gap, between predicting an action and causing it, is the subject of the next section.</p>
+      </div>
+
+      <h3 class="sub" id="m-bank-rec">Next-best-action in a bank: the extra layers</h3>
+      <div class="prose">
+        <p>A bank's recommender differs from a streaming service's in four ways that change the design.</p>
+        <ul>
+          <li><strong>Eligibility and suitability are hard constraints.</strong> A product the customer cannot be sold is never a candidate, however high the model scores it. Suitability (is this appropriate for this customer's circumstances and risk profile?) belongs to compliance. Rules about this exist in both UAE and Saudi frameworks, but I will not quote specifics: check with your compliance and conduct-of-business teams. Islamic products add another eligibility dimension, since a customer who asked for Sharia-compliant products must be offered only those.</li>
+          <li><strong>The objective is value, not clicks.</strong> The model ranks by expected profit net of risk and cost, or by customer need, not by likelihood of a click. A personal finance offer that is accepted by customers who then default is a loss. Rank by propensity × margin × (1 − risk), with the risk piece from the credit team's models.</li>
+          <li><strong>Contact is a scarce resource.</strong> SMS and push have limits, customers opt out, and fatigue is real. A <em>next-best-action</em> engine chooses among offers, service messages and doing nothing, subject to a contact budget.</li>
+          <li><strong>Prediction is not incrementality.</strong> The customer you rank highest is the one most likely to buy anyway. The right target is the customer whose behaviour changes because of the offer (uplift). Model that with a controlled holdout (F3.6) or uplift methods (<a href="f9-causal-inference.html">F9.4</a>), and learn what works online with <a href="f9-bandits-and-reinforcement-learning.html">bandits</a>.</li>
+        </ul>
+        <p>One more danger is the <strong>feedback loop</strong>. The model only learns about products it showed. If it never shows the investment fund to customers it thinks are uninterested, it never learns it was wrong. Popular items get shown, get clicked, and become more popular. A small amount of deliberate exploration (a random 5% of impressions, or a bandit) is how you keep seeing the whole picture, and it is the same selective-labels problem as <a href="f2-confounding-simpson-selection.html">F2.6</a>.</p>
+      </div>
+
+      <h3 class="sub" id="m-doc-pipeline">F9.6 · From pixels to fields: how document AI works</h3>
+      <div class="prose">
+        <p>An image is a grid of numbers (F1.1), but meaning in a document comes from <em>where</em> things are as much as what they say. "AED 250,000" next to "Amount" and the same figure in a footnote are different facts. A classic document pipeline therefore has several stages, and each can fail:</p>
+        <ol class="pipe" style="margin-top:12px">
+          <li><b>Capture and clean-up.</b> Deskew a rotated page, remove shadows, improve contrast, split multi-page scans, and drop blank sheets.</li>
+          <li><b>Classify the document.</b> Is this a cheque, an invoice, an ID card, a bank statement, a bill of lading? A convolutional or vision-transformer classifier (<a href="f5-convolutions.html">F5.2</a>) does this well because layout is a strong signal.</li>
+          <li><b>Layout analysis.</b> Find regions: header, table, signature, stamp, MICR line on a cheque, the machine-readable zone on a passport.</li>
+          <li><b>Text recognition (OCR).</b> Turn pixels into characters, with a position and confidence for each word or line.</li>
+          <li><b>Field extraction.</b> Decide which text is the payee, the amount in figures, the amount in words, the date, the beneficiary, the IBAN. Early systems used templates; modern ones learn from layout and text together.</li>
+          <li><b>Validation.</b> Check the fields against each other and against the world: figures match words, the IBAN checksum passes, the date is not in the future, the beneficiary matches a customer file, totals add up.</li>
+          <li><b>Routing.</b> Post automatically, or send to a human with the doubtful fields highlighted.</li>
+        </ol>
+        <p style="margin-top:12px">Stage 6 is where most of the real accuracy comes from. The cheque's amount in figures and in words is redundancy that exists precisely so that a reader can catch a misread. A system that reads both and compares them gets error detection almost for free.</p>
+      </div>
+
+      <h3 class="sub" id="m-doc-models">Reading models: OCR, layout-aware models and vision-language models</h3>
+      <div class="prose">
+        <p>There are three generations of reader, and a bank may run all three.</p>
+        <div class="table-wrap" style="margin-top:16px">
+          <table class="data">
+            <thead><tr><th>Approach</th><th>How it reads</th><th>Strength</th><th>Weakness</th></tr></thead>
+            <tbody>
+              <tr><td><b>Classic OCR</b> (Tesseract, commercial engines)</td><td>Detect text lines, recognise characters, output text and boxes.</td><td>Fast, cheap, predictable, well understood on clean printed text.</td><td>No notion of meaning. Struggles with handwriting, stamps over text, low-quality scans, and Arabic joined script unless trained for it.</td></tr>
+              <tr><td><b>Layout-aware transformers</b> (LayoutLM family)</td><td>Take OCR text <em>plus</em> each word's position (and often the image) and label each word: payee, amount, date.</td><td>Learn field extraction from a few hundred labelled documents. Strong on forms and invoices.</td><td>Inherit OCR mistakes. Need labelled examples per document family.</td></tr>
+              <tr><td><b>End-to-end vision-language models</b> (Donut-style models, general VLMs, newer open OCR models)</td><td>Look at the whole page image and generate the text or the structured fields directly.</td><td>Handle messy layouts and mixed content; need little or no template work; can answer "what is the beneficiary?".</td><td>Can <em>hallucinate</em> plausible text that is not on the page, give no per-character confidence, and cost more per page.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="margin-top:1.2em">The hallucination point deserves emphasis. A classic OCR engine that cannot read a digit tends to output the wrong digit or nothing. A generative reader that cannot read a digit can output a fluent, well-formed, wrong number with no sign of doubt. That is why serious deployments of generative readers add a second check: re-read the same field with a different method, compare with a redundant field (words against figures), or ground every extracted value back to a bounding box on the page so a human can see the evidence.</p>
+        <p>Some features worth knowing for this region. Arabic is written right to left with letters that change shape by position, but numbers inside Arabic text run left to right, so mixed lines confuse naive readers. Documents may use Western digits (0 1 2 3) or Arabic-Indic digits (٠ ١ ٢ ٣) on the same page, and Hijri as well as Gregorian dates. Names are transliterated several ways (Mohammed, Muhammad, Mohamed), which matters when the extracted name is matched against a customer file or a sanctions list (<a href="m4-guardrails-and-approval-gates.html">human approval gates</a> and <a href="b7-document-ai-for-trade-finance.html">document AI for trade finance</a> go deeper).</p>
+        <p style="margin-top:.6em" class="rtl" lang="ar">المبلغ: ٢٥٠٬٠٠٠ درهم إماراتي &nbsp;·&nbsp; AED 250,000 &nbsp;·&nbsp; التاريخ: ١٢‏/٠٣‏/١٤٤٨ هـ</p>
+        <p style="font-size:13px;color:var(--muted);margin-top:4px">One line, three traps: Arabic-Indic digits, a right-to-left run containing an embedded left-to-right amount, and a Hijri date. (The Hijri date shown is illustrative.)</p>
+      </div>
+
+      <h3 class="sub" id="m-conf">Confidence, thresholds and straight-through processing</h3>
+      <div class="prose">
+        <p>The business outcome of document AI is <strong>straight-through processing (STP)</strong>: the share of documents that go from scan to ledger with no human touch. The lever is a confidence threshold. Each extracted field has a score; fields above the threshold are accepted, and a document is automatic only if <em>every</em> field passes.</p>
+        <p>That "every" is what makes document AI harder than the accuracy numbers suggest. Fields multiply. If each field is independently right 98% of the time, a document with 12 fields is entirely right only 0.98<sup>12</sup> ≈ 78% of the time. A model with "98% field accuracy" produces a wrong document more than one time in five. Hence evaluation at the <em>field</em> level for diagnosis, and at the <em>document</em> level for the business decision.</p>
+        <p>A confidence score is only useful if it is <strong>calibrated</strong> (F7.4): among fields scored 0.95, about 95% should be right. Neural readers tend to be overconfident, so calibrate on held-out documents, field by field, because dates and amounts fail at different rates. The trade-off is then the same threshold logic as in fraud (F7.3): a higher threshold sends more to people (cost) and lets fewer errors through (loss).</p>
+      </div>
+
+      <figure class="figure" id="fig-stp">
+        <div class="fig-head"><span class="fig-title">Raise the threshold: fewer errors, more humans</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> keep 8 fields per document and slide the threshold. The curve shows what share goes straight through against the share of those that still contain an error. Press <b>Jump to cheapest</b>, then raise the fields per document to 30 (a trade document) and see how the cheapest point moves right: more fields means each document is far more likely to have one doubtful field.</p>
+        <div class="btns" role="group" aria-label="Shortcuts">
+          <button class="btn" type="button" id="stp-opt">Jump to cheapest</button>
+        </div>
+        <div class="chart-wrap" id="stp-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Every threshold: straight-through share against errors that get through</span>
+          <span><i class="sq" style="background:var(--ink)"></i>Your threshold</span>
+          <span><i class="sq" style="background:var(--accent)"></i>Cheapest</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="stp-t">Confidence threshold (score) <output for="stp-t"></output></label><input type="range" id="stp-t" min="-1" max="3.5" step="0.05" value="1.5"></div>
+          <div class="ctl"><label for="stp-n">Fields per document <output for="stp-n"></output></label><input type="range" id="stp-n" min="1" max="40" step="1" value="8"></div>
+          <div class="ctl"><label for="stp-e">Raw field error rate <output for="stp-e"></output></label><input type="range" id="stp-e" min="0.5" max="10" step="0.5" value="3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Straight-through share</div><div class="v" id="stp-auto"></div><div class="s" id="stp-auto-s"></div></div>
+          <div class="stat" id="stp-err-b"><div class="k">Automatic documents with an error</div><div class="v" id="stp-err"></div><div class="s" id="stp-err-s"></div></div>
+          <div class="stat"><div class="k">Documents sent to people</div><div class="v" id="stp-rev"></div><div class="s">of 20,000 a month</div></div>
+          <div class="stat" id="stp-cost-b"><div class="k">Monthly cost</div><div class="v" id="stp-cost"></div><div class="s" id="stp-cost-s"></div></div>
+        </div>
+        <p class="verdict" id="stp-verdict"></p>
+        <p class="sim-note">Simulated: 20,000 documents a month. Field confidence scores are normal: 3.5 standard deviations higher for correct fields than for wrong ones, and perfectly calibrated in the sense that the scores carry exactly that information. A field passes if its score is above the threshold, and a document goes through only if all its fields pass. Review costs AED 8 per document; an error that reaches the ledger costs AED 600 to find and fix. Both amounts are invented. Real errors are correlated (one bad scan spoils many fields), which makes real results worse than this independent model. Exact expected values.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three practical lessons from the simulation.</p>
+        <ul>
+          <li><strong>Field count drives everything.</strong> A cheque has a handful of fields and can reach high STP. A letter of credit with dozens of fields almost never goes through untouched, which is why trade finance projects aim for "assisted" processing: the system pre-fills and highlights, the person confirms.</li>
+          <li><strong>Review the field, not the document.</strong> The cheaper design routes only the doubtful fields to a person, with the crop of the image beside the value. Review time per field is seconds, not minutes.</li>
+          <li><strong>The cost of an error is not uniform.</strong> A wrong cheque amount is a loss event. A wrong postcode is a nuisance. Set thresholds per field type from what the error costs.</li>
+        </ul>
+        <p>Last, document AI is also a fraud surface. Cheques and IDs can be altered, forged or regenerated. A reader must be paired with <strong>tamper checks</strong> (inconsistent fonts or compression patterns, signs of editing, signature comparison to a specimen, MRZ and chip data against the printed face on an ID), and <a href="a3-deepfakes-against-ekyc-and-call.html">deepfakes</a> now affect face-matching in KYC. Reading a document correctly is not the same as the document being genuine.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Recommenders sit next to personalisation, experimentation and customer value. Document AI sits next to vision, language and control. Here are the links.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F1.1 · Vectors and similarity</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Dot products and cosines are the engine</a></span><p>Customer and product vectors, nearest-neighbour retrieval and item similarity are all F1.1 geometry. If it feels abstract, return to it.</p></div>
+        <div class="link-card"><span class="code">F5.4 · Contrastive learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">How two-tower models train</a></span><p>Pull matching customer-product pairs together and push random pairs apart. The same loss trains image-text models and text embeddings.</p></div>
+        <div class="link-card"><span class="code">F5.2 · Convolutions</span><span class="t"><a href="f5-convolutions.html">Where image models come from</a></span><p>The local-pattern idea behind OCR, signature checks and document classifiers. Vision transformers now compete, using <a href="f5-attention.html">attention</a> over image patches.</p></div>
+        <div class="link-card"><span class="code">F7.1 – F7.4 · Metrics and calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Thresholds and honest scores</a></span><p>A recommender's top-k precision and a document reader's confidence threshold are the same decision as a fraud alert threshold. Calibration decides whether the score can be trusted.</p></div>
+        <div class="link-card"><span class="code">F9.4 · F3.6 · Causal inference and experiments</span><span class="t"><a href="f9-causal-inference.html">Did the offer change anything?</a></span><p>Offline ranking metrics measure prediction. Whether a campaign created value needs a holdout group or an uplift design.</p></div>
+        <div class="link-card"><span class="code">F9.7 · Bandits</span><span class="t"><a href="f9-bandits-and-reinforcement-learning.html">Exploring while recommending</a></span><p>A bandit is the principled version of "show something other than the top pick sometimes" and fixes the feedback loop.</p></div>
+        <div class="link-card"><span class="code">F3.1 · Leakage</span><span class="t"><a href="f3-leakage-point-in-time.html">Features as of the offer date</a></span><p>A propensity model that uses a product held <em>after</em> the offer date to predict the offer's success looks perfect and is useless. Split by time, group by customer.</p></div>
+        <div class="link-card"><span class="code">B6 · Churn and segmentation</span><span class="t"><a href="b6-segmentation-and-lifetime-value.html">Value and segments feed the ranking</a></span><p>Lifetime value tells you what a product relationship is worth; segments define the cold-start fallbacks. See also <a href="b6-churn-and-retention-modelling.html">churn</a>, since the best next offer is sometimes a retention one.</p></div>
+        <div class="link-card"><span class="code">B7 · M3 · A14 · Document AI at scale</span><span class="t"><a href="b7-document-ai-for-trade-finance.html">Trade finance, parsing, Arabic OCR</a></span><p>Next stops: <a href="m3-parsing-messy-pdfs-and-scans.html">parsing messy PDFs for retrieval</a>, <a href="a14-arabic-ocr-and-document-ai.html">Arabic OCR</a>, and <a href="a6-search-over-document-images-colpali.html">searching document images directly</a>.</p></div>
+        <div class="link-card"><span class="code">M3 · Hybrid retrieval</span><span class="t"><a href="m3-hybrid-search-and-reciprocal-rank.html">Merging ranked lists</a></span><p>Rank fusion combines two ranked lists, such as a keyword list and a vector list. It is the recommender's "blend retrievers" step with a different name, and it is judged by the same NDCG.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Next-best-product in the app and at the branch.</strong> Which three offers to show, or what the relationship manager should raise, under eligibility and consent rules.</li>
+          <li><strong>Merchant and card offers.</strong> A large catalogue and a thin history per customer, which is the true recommender setting.</li>
+          <li><strong>Funds and wealth.</strong> Suitability rules matter most. The recommender ranks within the allowed set; it does not decide what is allowed.</li>
+          <li><strong>Cheque clearing and deposit.</strong> Read amount, payee, date and signature from images, with validation and routing.</li>
+          <li><strong>KYC and onboarding.</strong> Read an Emirates ID or national ID, check the machine-readable zone, match to a selfie, and send mismatches to a human.</li>
+          <li><strong>Trade finance and statements.</strong> Extract terms from letters of credit and invoices; read salary and cash-flow patterns from uploaded statements for credit assessment.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>In recommenders, the live argument is whether sequence and generative models will replace the retrieve-then-rank stack, and whether the headline gains survive honest baselines. In document AI, general vision-language models have largely absorbed what used to be separate OCR, layout and extraction products, and the argument has moved to reliability, cost and languages other than English.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two quick searches. The older papers I cite from memory; the 2026 items are only ones I found indexed, and I did not read the papers themselves. Treat the numbers as indications, not facts to quote.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2008–09</span><div><div class="t">Implicit feedback and matrix factorisation become standard</div><p>Hu, Koren and Volinsky formalised factorisation for implicit signals. Koren, Bell and Volinsky's 2009 paper, after the Netflix Prize, made latent factors the default mental model.</p><div class="src">Hu et al., ICDM 2008; Koren et al., IEEE Computer, 2009</div></div></li>
+        <li><span class="yr">2016–19</span><div><div class="t">Deep two-stage systems, and sampling-bias-corrected two-tower retrieval</div><p>YouTube described the retrieve-then-rank design with neural networks. Later work showed how to train two-tower retrievers properly when negatives are sampled from the batch, which would otherwise over-penalise popular items.</p><div class="src">Covington et al., RecSys 2016; Yi et al., RecSys 2019</div></div></li>
+        <li><span class="yr">2019–20</span><div><div class="t">A reproducibility warning</div><p>Dacrema et al. tried to reproduce 18 neural recommendation methods from top conferences: only 7 could be reproduced with reasonable effort, and 6 of those were beaten by simple, well-tuned nearest-neighbour or graph baselines. Rendle et al. found a tuned dot product beats a neural-network similarity. Always ask for the tuned simple baseline.</p><div class="src">Dacrema et al., RecSys 2019; Rendle et al., RecSys 2020</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Generative retrieval with semantic IDs</div><p>TIGER gives each item a short sequence of discrete codes learned from its content, then trains a sequence model to generate the codes of the next item. It handles new items better because content, not an arbitrary ID, defines the code.</p><div class="src">Rajput et al., NeurIPS 2023</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">Sequential transducers at industrial scale</div><p>Meta's HSTU reformulated ranking and retrieval as sequence transduction over very long user histories, reporting that quality scales with compute in a way earlier recommenders did not.</p><div class="src">Zhai et al., ICML 2024</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">End-to-end generative recommenders in production</div><p>Kuaishou's OneRec replaces the cascaded retrieve-and-rank pipeline with one generative model plus preference alignment. A 2026 survey I found reports gains of up to about 1.8% in session watch time and 3.4% in like-through rate over strong baselines on its own platform. 2026 preprints focus on how to design semantic IDs and on whether they beat plain item IDs. These are large consumer platforms with billions of interactions; I would not assume the same gains for a bank with thirty products.</p><div class="src">Deng et al., OneRec, 2025; Generative Recommendation survey (preprint, 2026); check the original papers</div></div></li>
+        <li><span class="yr">2021–22</span><div><div class="t">Pre-trained document models</div><p>TrOCR used transformers for text recognition. LayoutLMv3 trained jointly on text, layout and image patches. Donut read a page image and generated the structured output with no separate OCR stage.</p><div class="src">Li et al., TrOCR, 2021; Huang et al., LayoutLMv3, ACM MM 2022; Kim et al., Donut, ECCV 2022</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">A wave of open vision-language OCR models</div><p>Models such as olmOCR, DeepSeek-OCR, PaddleOCR-VL and dots.ocr convert page images to markdown or structured text, and compete on benchmarks such as olmOCR-Bench and OmniDocBench. A 2026 roundup I found put leading open models at about 82 to 86 on olmOCR-Bench, and sources disagreed on some scores, which tells you to treat leaderboards with care. I found no Arabic-specific benchmark in my searches; test on your own documents.</p><div class="src">Docsumo OCR roundup, 2026 (secondary source); Koncile open-source OCR list, 2026; check the primary papers</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Propensity models per product with eligibility rules and a contact budget</b></td><td>Gradient-boosted models ranked by expected value, constrained by rules. The workhorse of next-best-offer.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Collaborative filtering and two-tower retrieval for large catalogues</b></td><td>Merchant offers, content, card-linked rewards. Items are numerous and history thin.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Randomised holdouts to measure campaign lift</b></td><td>A control group that gets no offer, so incremental value can be separated from baseline behaviour.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Sequence and generative recommenders</b></td><td>Next-event models over customer or transaction histories. Mostly shown by large consumer platforms.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>OCR plus rules and validation for cheques and IDs</b></td><td>Established OCR and checksum validation with human review for low confidence.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Vision-language models for document extraction with human review</b></td><td>Pre-fill fields from messy documents; people confirm. Typically beside, not instead of, classic OCR.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Fully autonomous reading of complex trade documents</b></td><td>No human check on documents with dozens of fields.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>LLM-driven conversational recommendation</b></td><td>A chat agent suggesting products. Suitability, disclosure and mis-selling controls are open questions.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Win with tuned simple baselines, hard constraints and honest evaluation first; add sequence or generative models where history and catalogue are large; and in document AI, let the model read, let validation check, and let people see only what is doubtful.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in bank analyses and in AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Popularity wins, and nobody notices</div><p>The model's offline score is excellent because it recommends the most held products. It is correct and useless; the customer already knows about the salary account.</p><div class="spot"><b>Spot it</b>Compare against a "top-N most popular" baseline and report coverage (how many distinct products are ever recommended) and results on less common products.</div></li>
+        <li><div class="t">Random split for a time-ordered problem</div><p>Training on customers' later purchases to predict earlier ones. Hit rates are inflated.</p><div class="spot"><b>Spot it</b>Ask how the split was made. It should be by time: features up to date T, outcomes after T, and no overlap in customers where possible.</div></li>
+        <li><div class="t">Rewarding predictions that would have happened anyway</div><p>Targeting the people most likely to take a card, who would have taken it without an offer. The campaign "works" and adds nothing.</p><div class="spot"><b>Spot it</b>Ask for a randomised holdout and the lift against it, in AED, not an offline AUC or NDCG.</div></li>
+        <li><div class="t">Recommending what the customer cannot or should not have</div><p>An ineligible product, a non-Sharia-compliant product to a customer who asked for Islamic only, or a high-risk fund to an unsuited customer.</p><div class="spot"><b>Spot it</b>Check that eligibility, suitability and consent filters run after the model on every request, and log every recommendation shown with its reason.</div></li>
+        <li><div class="t">Feedback loop and popularity bias</div><p>The model only learns from what it showed, so the head of the catalogue gets richer.</p><div class="spot"><b>Spot it</b>Plot share of impressions by product over months. Keep an exploration slice and evaluate on it.</div></li>
+        <li><div class="t">Cold-start ignored</div><p>Good numbers on existing customers; new customers and new products get nothing sensible.</p><div class="spot"><b>Spot it</b>Report metrics separately for customers with fewer than N events, and for products launched in the test window.</div></li>
+        <li><div class="t">Field accuracy quoted as document accuracy</div><p>"The reader is 98% accurate" on documents with 20 fields means about one document in three has an error.</p><div class="spot"><b>Spot it</b>Ask for document-level exact match and for error rate among documents processed automatically, not field-level accuracy alone.</div></li>
+        <li><div class="t">Overconfident reader</div><p>Confidence of 0.99 on a misread digit. The threshold gives a false comfort.</p><div class="spot"><b>Spot it</b>Plot accuracy against confidence on held-out documents, per field type. If 0.99-confidence fields are wrong 3% of the time, the score is not calibrated.</div></li>
+        <li><div class="t">Generative reader invents text</div><p>A vision-language model fills in a plausible beneficiary name or amount that is not on the page.</p><div class="spot"><b>Spot it</b>Require each value to be tied to a region of the image, re-read it with a second method, and test on blurred or partly obscured samples where the right answer is "unreadable".</div></li>
+        <li><div class="t">Tested on clean, English, one-format samples</div><p>The vendor demo used crisp printed English invoices. Your files are phone photos of Arabic and English documents with stamps over text.</p><div class="spot"><b>Spot it</b>Build a test set from your own recent documents, stratified by scan quality, language, document type and branch, and report results per stratum.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“For offers, the model's job is to rank a short list within the products each customer is actually allowed and suited to. We'll prove value with a control group who get no offer, because the people most likely to buy are the ones who would have bought anyway. For documents, we'll let the system read cheques and trade papers, check them against each other, and send only the doubtful fields to staff. The number to watch is not how accurate the reader is, but what share goes straight through and how many of those still contain a mistake.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“For next-best-product I'd start with per-product propensity models and a tuned item-based or factorisation baseline, rank by expected margin net of risk, apply eligibility, suitability and consent filters after the model, evaluate NDCG and precision at the screen size on a time split, and measure incrementality with a randomised holdout. For documents I'd build a pipeline with classification, layout, recognition, extraction and cross-field validation, calibrate confidence per field type, and set thresholds from error costs, reporting document-level exact match and the error rate among auto-processed documents, on our own Arabic and English samples.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just recommend the most popular products?”</summary><div class="ans"><p>Popularity is a strong baseline and we should beat it before claiming anything. But it recommends the same things to everyone, mostly products they already know about or hold. Personalisation matters when the catalogue is wide or customers differ, and it is judged by lift against a control group, not by offline hit rate.</p></div></details>
+        <details class="reveal"><summary>“Should we use a transformer or generative recommender?”</summary><div class="ans"><p>Maybe later. The published gains come from platforms with billions of interactions and large catalogues. We have thirty products and thin histories, so I'd get a tuned propensity or factorisation baseline and a proper holdout first, then test a sequence model on transaction history if the baseline plateaus. Evidence from replication studies is that untuned baselines make new models look better than they are.</p></div></details>
+        <details class="reveal"><summary>“How do we handle a customer who has no history?”</summary><div class="ans"><p>With features instead of history: segment, age band, channel, salary band if known, and fallback rules for the segment. Popularity within the segment is the honest cold-start default. Then an exploration slice so we learn quickly, and a switch to personalised ranking as events accumulate.</p></div></details>
+        <details class="reveal"><summary>“The vendor says their reader is 99% accurate on our cheques.”</summary><div class="ans"><p>I'd ask: 99% of what, on what data? Characters, fields or documents? A cheque has several fields, so field accuracy of 99% is document accuracy of roughly 95%. I'd want results on a sample of our own cheques, including poor scans and handwritten amounts, plus the error rate among automatically cleared items and a calibration plot of their confidence.</p></div></details>
+        <details class="reveal"><summary>“Can a vision-language model replace the OCR and the checkers?”</summary><div class="ans"><p>It can replace a lot of the template and layout work, and it is strong on messy pages. But it can produce confident, plausible text that is not on the page, and gives no per-character confidence. I'd use it as one reader among several, tie each value to a region of the image, cross-check against redundant fields and the customer file, and keep a person on anything doubtful.</p></div></details>
+        <details class="reveal"><summary>“Is the recommendation explainable to a regulator or customer?”</summary><div class="ans"><p>Neighbourhood methods are easy to explain: customers with products like yours often take this. Factorisation and neural models are not, by themselves, so we log which rule or feature drove each recommendation and keep the eligibility and suitability decisions in transparent rules. What is explainable matters most where the recommendation is closest to advice. I'd confirm with compliance what the local rules require.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Why can a recommender that wins on offline hit rate still add no value to the bank?</summary><div class="ans"><p>Offline hit rate measures whether customers took a product, not whether the offer caused it. The model may target people who would have bought anyway, or recommend only popular products. You need a randomised holdout and lift in AED.</p></div></details>
+        <details class="reveal"><summary>2. A customer has taken exactly one product and your list ranked it third. What are precision@3, recall@3 and NDCG@3?</summary><div class="ans"><p>Precision@3 = 1/3. Recall@3 = 1/1 = 1. NDCG@3: DCG = 1/log<sub>2</sub>(4) = 0.5; ideal DCG = 1/log<sub>2</sub>(2) = 1; so NDCG = 0.5.</p></div></details>
+        <details class="reveal"><summary>3. What does it mean that the factors in matrix factorisation are not interpretable, and how do you still explain a recommendation?</summary><div class="ans"><p>The learned dimensions have no assigned meaning; only distances and directions matter. Explain with neighbours (similar customers or products), with the strongest contributing features if you use a feature-based model, and with logged rules for eligibility. Do not invent names for factors.</p></div></details>
+        <details class="reveal"><summary>4. A new product launches next month. How does a pure collaborative filter treat it, and what would you add?</summary><div class="ans"><p>It has no interaction history so no vector, and it will never be recommended. Add content features (product type, price band, target segment) so a two-tower or feature-based model can embed it immediately, plus an exploration slice to gather early data.</p></div></details>
+        <details class="reveal"><summary>5. A reader has 98.5% accuracy per field. A trade document has 25 fields. Roughly what share of documents are completely correct if errors are independent?</summary><div class="ans"><p>0.985<sup>25</sup> ≈ e<sup>25 × ln 0.985</sup> = e<sup>−0.378</sup> ≈ 0.685. About 68%. This is why document-level evaluation and field-level routing are needed. In reality errors are correlated, so the real figure is somewhat different, but the order of magnitude is the point.</p></div></details>
+        <details class="reveal"><summary>6. What does it mean for a confidence score to be calibrated, and how would you test it for a cheque amount field?</summary><div class="ans"><p>Among amounts scored 0.9, about 90% should be right. Take held-out cheques, bin the amount confidence, and plot the actual accuracy per bin. If the 0.99 bin is only 95% accurate, the score is overconfident and the threshold needs recalibration (F7.4).</p></div></details>
+        <details class="reveal"><summary>7. Name three cross-checks that catch misread fields without a human.</summary><div class="ans"><p>Amount in figures against amount in words; IBAN or account checksum; date plausibility (not in the future, within validity); totals on an invoice against the sum of line items; beneficiary against the customer or counterparty file; MRZ against the printed face of an ID.</p></div></details>
+        <details class="reveal"><summary>8. Why is a generative document reader riskier than classic OCR for amounts, and what mitigates it?</summary><div class="ans"><p>It can produce a fluent, plausible number that is not on the page, with no sign of doubt. Mitigate by grounding each value to a bounding box, re-reading with a second method, cross-checking redundant fields, testing with unreadable samples where the right answer is "cannot read", and routing disagreement to a person.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>Y. Koren, R. Bell, C. Volinsky. <a href="https://doi.org/10.1109/MC.2009.263">Matrix Factorization Techniques for Recommender Systems</a>. IEEE Computer, 2009.</li>
+        <li>Y. Hu, Y. Koren, C. Volinsky. <a href="https://doi.org/10.1109/ICDM.2008.22">Collaborative Filtering for Implicit Feedback Datasets</a>. ICDM, 2008.</li>
+        <li>P. Covington, J. Adams, E. Sargin. <a href="https://doi.org/10.1145/2959100.2959190">Deep Neural Networks for YouTube Recommendations</a>. RecSys, 2016.</li>
+        <li>X. Yi et al. <a href="https://doi.org/10.1145/3298689.3346996">Sampling-Bias-Corrected Neural Modeling for Large Corpus Item Recommendations</a>. RecSys, 2019.</li>
+        <li>M. Ferrari Dacrema, P. Cremonesi, D. Jannach. <a href="https://arxiv.org/abs/1907.06902">Are We Really Making Much Progress? A Worrying Analysis of Recent Neural Recommendation Approaches</a>. RecSys, 2019.</li>
+        <li>S. Rendle, W. Krichene, L. Zhang, J. Anderson. <a href="https://arxiv.org/abs/2005.09683">Neural Collaborative Filtering vs. Matrix Factorization Revisited</a>. RecSys, 2020.</li>
+        <li>S. Rajput et al. <a href="https://arxiv.org/abs/2305.05065">Recommender Systems with Generative Retrieval</a> (TIGER). NeurIPS, 2023.</li>
+        <li>J. Zhai et al. <a href="https://arxiv.org/abs/2402.17152">Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations</a> (HSTU). ICML, 2024.</li>
+        <li>J. Deng et al. <a href="https://arxiv.org/abs/2502.18965">OneRec: Unifying Retrieve and Rank with Generative Recommender and Iterative Preference Alignment</a>. arXiv, 2025.</li>
+        <li>D. Jannach, M. Zanker. Value and Impact of Recommender Systems, in F. Ricci et al. (eds.), <i>Recommender Systems Handbook</i>, 3rd ed., Springer. Why offline accuracy and business value diverge.</li>
+        <li>M. Li et al. <a href="https://arxiv.org/abs/2109.10282">TrOCR: Transformer-based Optical Character Recognition with Pre-trained Models</a>. 2021.</li>
+        <li>Y. Huang et al. <a href="https://arxiv.org/abs/2204.08387">LayoutLMv3: Pre-training for Document AI with Unified Text and Image Masking</a>. ACM Multimedia, 2022.</li>
+        <li>G. Kim et al. <a href="https://arxiv.org/abs/2111.15664">OCR-free Document Understanding Transformer</a> (Donut). ECCV, 2022.</li>
+        <li>Ai2. <a href="https://github.com/allenai/olmocr">olmOCR: open toolkit and benchmark for converting PDFs and scans to text</a>. GitHub repository.</li>
+        <li>Docsumo. <a href="https://www.docsumo.com/blog/best-ocr-models">The best OCR models in 2026</a>. Secondary roundup used only to gauge the state of play; scores there disagree with other sources.</li>
+        <li>OneRec and semantic-ID recommenders, 2026 survey and preprints, e.g. <a href="https://arxiv.org/pdf/2609.24430">What Makes a Good Semantic ID for Generative Recommendation? A Reproducibility Study</a>. Preprint; check for a published version.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F9: Bandits and reinforcement learning (F9.7)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  const aed = v => "AED " + L.fmtInt(v);
+  const Q = x => 1 - L.normCdf(x);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: collaborative filtering vs popularity
+  // =====================================================================
+  const PR = ["Salary account", "Savings account", "Credit card", "Gold card", "Personal finance", "Home finance", "Auto finance", "Travel insurance", "Family takaful", "Investment fund"];
+  const ROWS = ["1110000100", "1010100100", "1110000000", "1010101000", "1110010010", "1100010010", "1110011010", "1100010011",
+                "1111000101", "1111000111", "1111010111", "1101000101", "1010101000", "1000101000", "1010100000", "1110101000"]
+    .map(s => s.split("").map(Number));
+  const NP = PR.length;
+  const popCount = PR.map((_, j) => ROWS.reduce((a, r) => a + r[j], 0));
+  const sim = (() => {
+    const m = PR.map(() => PR.map(() => 0));
+    for (let a = 0; a < NP; a++) for (let b = 0; b < NP; b++) {
+      let dot = 0; for (const r of ROWS) dot += r[a] * r[b];
+      m[a][b] = dot / Math.sqrt(popCount[a] * popCount[b]);
+    }
+    return m;
+  })();
+  const PRESETS = { "Young professional": [0, 2, 7], "New parent": [0, 1, 5], "Wealthy traveller": [0, 1, 3, 7], "Borrower": [0, 4] };
+  const S1 = { held: new Set([0, 2, 7]) };
+  const cfBox = $("cf-chart");
+  const presetBox = $("cf-presets"), prodBox = $("cf-prods");
+  Object.keys(PRESETS).forEach(name => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = name;
+    b.addEventListener("click", () => { S1.held = new Set(PRESETS[name]); syncChips(); renderCF(); });
+    presetBox.appendChild(b);
+  });
+  PR.forEach((n, j) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = n; b.dataset.j = j;
+    b.addEventListener("click", () => { S1.held.has(j) ? S1.held.delete(j) : S1.held.add(j); syncChips(); renderCF(); });
+    prodBox.appendChild(b);
+  });
+  function syncChips() { [...prodBox.children].forEach(b => b.setAttribute("aria-pressed", String(S1.held.has(+b.dataset.j)))); }
+  function top3(scoreFn) {
+    return PR.map((n, j) => ({ n, j, s: S1.held.has(j) ? -1 : scoreFn(j) })).filter(o => o.s >= 0).sort((a, b) => b.s - a.s || a.j - b.j).slice(0, 3);
+  }
+  function renderCF() {
+    const pop = top3(j => popCount[j]);
+    const cf = top3(j => { let s = 0; S1.held.forEach(i => { s += sim[i][j]; }); return s; });
+    const W = Math.max(300, cfBox.clientWidth), rowH = 26, H = 2 * (3 * rowH + 34) + 6, m = { l: 128, r: 60 };
+    const svg = mk(cfBox, W, H, "Top three recommendations by popularity and by similar customers");
+    function block(list, y0, title, cname, maxv, fmt) {
+      tx(svg, 4, y0 + 14, title, { class: "lbl-strong" });
+      list.forEach((o, i) => {
+        const y = y0 + 24 + i * rowH, w = maxv > 0 ? (W - m.l - m.r) * o.s / maxv : 0;
+        tx(svg, m.l - 8, y + 16, o.n, { "text-anchor": "end", class: "lbl-ink" });
+        L.svg("rect", { x: m.l, y: y + 2, width: Math.max(w, 2), height: 18, rx: 3, class: cname }, svg);
+        tx(svg, m.l + Math.max(w, 2) + 6, y + 16, fmt(o.s), { class: "lbl-ink" });
+      });
+    }
+    block(pop, 0, "By popularity: customers holding it", "bar-pop", Math.max(1, ...pop.map(o => o.s)), v => v + " of 16");
+    const mx = Math.max(0.0001, ...cf.map(o => o.s));
+    block(cf, 3 * rowH + 34, "By similar customers: score", "bar-sim", mx, v => v.toFixed(2));
+    const overlap = pop.filter(p => cf.some(c => c.j === p.j)).length;
+    const heldN = S1.held.size;
+    let msg;
+    if (heldN === 0) msg = "With no holdings, similarity has nothing to go on and falls back to popularity. This is the cold-start case.";
+    else if (overlap === 3) msg = "The two lists agree on all three. For this customer personalisation adds nothing over popularity; try a different preset.";
+    else msg = "The popularity list and the similar-customer list share <b>" + overlap + "</b> of 3 products. Popularity offers <b>" + pop.map(o => o.n).join(", ") + "</b>; similar customers point to <b>" + cf.map(o => o.n).join(", ") + "</b>.";
+    $("cf-verdict").innerHTML = msg + " A real system would still apply eligibility, suitability and consent before showing any of them.";
+  }
+
+  // =====================================================================
+  // Simulation 2: latent space
+  // =====================================================================
+  const LP = [["Travel insurance", 0.9, -0.2, 0.05], ["Gold card", 0.7, -0.6, 0.0], ["Credit card", 0.8, 0.5, 0.30], ["Investment fund", 0.2, -0.9, -0.05],
+              ["Savings", -0.3, -0.7, 0.25], ["Family takaful", -0.7, -0.3, 0.05], ["Home finance", -0.8, 0.4, -0.10], ["Auto finance", -0.4, 0.8, -0.05], ["Personal finance", 0.1, 0.9, 0.10]];
+  const S2 = { x: 0.7, y: -0.5, cold: false, bias: false };
+  const latBox = $("lat-chart");
+  const sx = L.bind("lat-x", v => v.toFixed(2), v => { S2.x = v; S2.cold = false; syncLat(); renderLat(); });
+  const sy = L.bind("lat-y", v => v.toFixed(2), v => { S2.y = v; S2.cold = false; syncLat(); renderLat(); });
+  function syncLat() { $("lat-cold").setAttribute("aria-pressed", String(S2.cold)); }
+  $("lat-cold").addEventListener("click", () => { S2.cold = !S2.cold; syncLat(); renderLat(); });
+  $("lat-bias").addEventListener("click", e => { S2.bias = !S2.bias; e.currentTarget.setAttribute("aria-pressed", String(S2.bias)); renderLat(); });
+  let latGeom = null;
+  function setFromPointer(ev) {
+    if (!latGeom) return;
+    const r = latBox.querySelector("svg").getBoundingClientRect();
+    const px = (ev.clientX - r.left) / r.width * latGeom.W, py = (ev.clientY - r.top) / r.height * latGeom.H;
+    const x = L.clamp(Math.round(((px - latGeom.cx) / latGeom.R) * 20) / 20, -1, 1), y = L.clamp(Math.round((-(py - latGeom.cy) / latGeom.R) * 20) / 20, -1, 1);
+    S2.x = x; S2.y = y; S2.cold = false; sx.set(x); sy.set(y); syncLat(); renderLat();
+  }
+  let dragging = false;
+  latBox.addEventListener("pointerdown", ev => { dragging = true; setFromPointer(ev); });
+  window.addEventListener("pointermove", ev => { if (dragging) setFromPointer(ev); });
+  window.addEventListener("pointerup", () => { dragging = false; });
+  function renderLat() {
+    const W = Math.max(300, latBox.clientWidth), H = Math.min(W, 380), R = Math.min(W / 2 - 78, H / 2 - 16), cx = W / 2, cy = H / 2;
+    latGeom = { W, H, cx, cy, R };
+    const svg = mk(latBox, W, H, "Map of products and the customer's taste vector");
+    L.svg("line", { x1: cx - R - 10, x2: cx + R + 10, y1: cy, y2: cy, class: "axis-line" }, svg);
+    L.svg("line", { x1: cx, x2: cx, y1: cy - R - 10, y2: cy + R + 10, class: "axis-line" }, svg);
+    tx(svg, cx + R + 8, cy - 6, "factor 1", { "text-anchor": "end" });
+    tx(svg, cx + 6, cy - R - 2, "factor 2", {});
+    const u = S2.cold ? [0, 0] : [S2.x, S2.y];
+    const scores = LP.map(p => ({ n: p[0], s: u[0] * p[1] + u[1] * p[2] + (S2.bias ? p[3] : 0), x: p[1], y: p[2] }));
+    const ranked = scores.slice().sort((a, b) => b.s - a.s);
+    const top = new Set(ranked.slice(0, 3).filter(o => o.s > 0.0001 || (S2.cold && S2.bias && o.s > 0)).map(o => o.n));
+    scores.forEach(o => {
+      const px = cx + o.x * R, py = cy - o.y * R;
+      L.svg("circle", { cx: px, cy: py, r: 6, class: "pt-prod" + (top.has(o.n) ? " top" : "") }, svg);
+      const right = o.x >= 0;
+      tx(svg, px + (right ? 9 : -9), py + 4, o.n, { class: "lbl-ink", "text-anchor": right ? "start" : "end" });
+    });
+    if (!S2.cold) {
+      L.svg("line", { x1: cx, y1: cy, x2: cx + u[0] * R, y2: cy - u[1] * R, class: "arrow" }, svg);
+    }
+    L.svg("circle", { cx: cx + u[0] * R, cy: cy - u[1] * R, r: 7, class: "pt-cust" }, svg);
+    const max = Math.max(0.0001, ...ranked.map(o => Math.abs(o.s)));
+    let html = '<div class="table-wrap"><table class="data"><thead><tr><th>Rank</th><th>Product</th><th>Score</th></tr></thead><tbody>';
+    ranked.slice(0, 5).forEach((o, i) => { html += `<tr><td>${i + 1}</td><td><b>${o.n}</b></td><td>${o.s.toFixed(2)}</td></tr>`; });
+    $("lat-rank").innerHTML = html + "</tbody></table></div>";
+    let msg;
+    if (S2.cold) msg = S2.bias ? "No history, so the personal part is zero and the ranking is exactly the popularity term: <b>" + ranked[0].n + "</b> first. That is the standard cold-start fallback." : "No history: every personal score is zero, so the model has no basis to rank. Switch on the popularity term to see the fallback.";
+    else msg = "The customer arrow points towards <b>" + ranked[0].n + "</b>, which scores " + ranked[0].s.toFixed(2) + ". " + (S2.bias ? "The popularity term lifts widely held products such as the credit card and savings." : "Without a popularity term, only direction and length of the arrow matter.");
+    $("lat-verdict").innerHTML = msg;
+  }
+
+  // =====================================================================
+  // Simulation 3: ranking metrics
+  // =====================================================================
+  const TOTAL_REL = 5;
+  const S3 = { rel: [0, 1, 0, 0, 1, 0, 0, 0, 1, 0], k: 5 };
+  const slotBox = $("rk-slots"), rkBox = $("rk-chart");
+  for (let i = 0; i < 10; i++) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = "#" + (i + 1);
+    b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => {
+      S3.rel[i] = S3.rel[i] ? 0 : 1;
+      if (S3.rel.reduce((a, c) => a + c, 0) > TOTAL_REL) S3.rel[i] = 0;
+      renderRank();
+    });
+    slotBox.appendChild(b);
+  }
+  const setRel = idx => { S3.rel = Array(10).fill(0); idx.forEach(i => { S3.rel[i] = 1; }); renderRank(); };
+  $("rk-top").addEventListener("click", () => setRel([0, 1, 2]));
+  $("rk-spread").addEventListener("click", () => setRel([1, 4, 8]));
+  $("rk-bot").addEventListener("click", () => setRel([7, 8, 9]));
+  L.bind("rk-k", v => "k = " + v, v => { S3.k = v; renderRank(); });
+  function renderRank() {
+    const k = S3.k, rel = S3.rel;
+    [...slotBox.children].forEach((b, i) => b.setAttribute("aria-pressed", String(!!rel[i])));
+    const W = Math.max(300, rkBox.clientWidth), H = 90, m = { l: 8, r: 8, t: 8, b: 26 };
+    const svg = mk(rkBox, W, H, "Ten ranked slots; hits highlighted; the cut-off at k");
+    const bw = (W - m.l - m.r) / 10;
+    for (let i = 0; i < 10; i++) {
+      const x = m.l + i * bw, inK = i < k;
+      L.svg("rect", { x: x + 2, y: m.t, width: bw - 4, height: 40, rx: 4, class: rel[i] ? "bar-hit" : "bar-miss", "fill-opacity": inK ? 1 : 0.25 }, svg);
+      tx(svg, x + bw / 2, m.t + 25, rel[i] ? "hit" : "", { "text-anchor": "middle", class: "lbl-ink", style: "fill:var(--bg)!important" });
+      tx(svg, x + bw / 2, m.t + 58, String(i + 1), { "text-anchor": "middle" });
+    }
+    L.svg("line", { x1: m.l + k * bw, x2: m.l + k * bw, y1: 2, y2: m.t + 46, stroke: "var(--warn)", "stroke-width": 2, "stroke-dasharray": "4 3" }, svg);
+    let hits = 0, ap = 0, dcg = 0;
+    for (let i = 0; i < k; i++) if (rel[i]) { hits++; ap += hits / (i + 1); dcg += 1 / Math.log2(i + 2); }
+    const nrel = Math.min(k, TOTAL_REL);
+    let idcg = 0; for (let i = 0; i < nrel; i++) idcg += 1 / Math.log2(i + 2);
+    const P = hits / k, R = hits / TOTAL_REL, AP = ap / nrel, N = idcg > 0 ? dcg / idcg : 0;
+    $("rk-p").textContent = pct(P, 0); $("rk-p-s").textContent = hits + " hits in " + k;
+    $("rk-r").textContent = pct(R, 0);
+    $("rk-ap").textContent = AP.toFixed(2);
+    $("rk-n").textContent = N.toFixed(2); $("rk-n-s").textContent = "DCG " + dcg.toFixed(2) + " ÷ ideal " + idcg.toFixed(2);
+    const total = rel.reduce((a, c) => a + c, 0);
+    $("rk-verdict").innerHTML = total === 0 ? "Mark some slots as hits to compute the metrics." :
+      "With <b>" + hits + "</b> of the " + total + " marked hits inside the top " + k + ": precision and recall depend only on the count, but average precision (" + AP.toFixed(2) + ") and NDCG (" + N.toFixed(2) + ") also depend on <i>where</i> they sit. Move the same hits to the top and both rise.";
+  }
+
+  // =====================================================================
+  // Simulation 4: document confidence threshold and straight-through
+  // =====================================================================
+  const D = 3.5, DOCS = 20000, REVIEW = 8, FIX = 600;
+  const S4 = { t: 1.5, n: 8, e: 0.03 };
+  const stpBox = $("stp-chart");
+  function stp(t, n, e) {
+    const aCorrect = (1 - e) * Q(t - D), aWrong = e * Q(t), pAcc = aCorrect + aWrong;
+    const auto = Math.pow(pAcc, n);
+    const clean = pAcc > 0 ? Math.pow(aCorrect / pAcc, n) : 1;
+    const err = 1 - clean;
+    const nAuto = DOCS * auto, escaped = nAuto * err, reviewed = DOCS - nAuto;
+    return { auto, err, nAuto, escaped, reviewed, cost: REVIEW * reviewed + FIX * escaped };
+  }
+  function cheapest(n, e) {
+    let best = null;
+    for (let t = -1; t <= 3.501; t += 0.05) { const r = stp(t, n, e); if (!best || r.cost < best.cost) best = Object.assign({ t }, r); }
+    return best;
+  }
+  const tCtl = L.bind("stp-t", v => v.toFixed(2), v => { S4.t = v; renderStp(); });
+  L.bind("stp-n", v => v + (v === 1 ? " field" : " fields"), v => { S4.n = v; renderStp(); });
+  L.bind("stp-e", v => v.toFixed(1) + "%", v => { S4.e = v / 100; renderStp(); });
+  $("stp-opt").addEventListener("click", () => { const b = cheapest(S4.n, S4.e); S4.t = Math.round(b.t * 20) / 20; tCtl.set(S4.t); renderStp(); });
+  function renderStp() {
+    const W = Math.max(300, stpBox.clientWidth), H = 260, m = { l: 50, r: 14, t: 14, b: 42 };
+    const svg = mk(stpBox, W, H, "Straight-through share against errors among automatic documents");
+    const pts = []; let emax = 0.001;
+    for (let t = -1; t <= 3.501; t += 0.05) { const r = stp(t, S4.n, S4.e); pts.push({ t, r }); emax = Math.max(emax, r.err); }
+    emax = Math.min(1, Math.ceil(emax * 20) / 20);
+    const x = L.scale(0, 1, m.l, W - m.r), y = L.scale(0, emax, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, x(v), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" });
+      const ev = emax * v;
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(ev), y2: y(ev), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(ev) + 4, (ev * 100).toFixed(ev * 100 < 10 ? 1 : 0) + "%", { "text-anchor": "end" });
+    });
+    L.svg("path", { d: L.path(pts.map(p => [x(p.r.auto), y(p.r.err)])), class: "cv-curve" }, svg);
+    const best = cheapest(S4.n, S4.e), cur = stp(S4.t, S4.n, S4.e);
+    L.svg("circle", { cx: x(best.auto), cy: y(best.err), r: 6, class: "cv-opt" }, svg);
+    L.svg("circle", { cx: x(cur.auto), cy: y(cur.err), r: 6.5, class: "cv-now" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Share of documents that go straight through", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Automatic docs with an error", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+
+    $("stp-auto").textContent = pct(cur.auto, 1); $("stp-auto-s").textContent = L.fmtInt(cur.nAuto) + " documents";
+    $("stp-err").textContent = pct(cur.err, 2); cls($("stp-err-b"), cur.err > 0.02 ? "bad" : cur.err > 0.005 ? "warn" : "ok");
+    $("stp-err-s").textContent = L.fmtInt(cur.escaped) + " reach the ledger";
+    $("stp-rev").textContent = L.fmtInt(cur.reviewed);
+    $("stp-cost").textContent = aed(cur.cost); cls($("stp-cost-b"), cur.cost > 1.3 * best.cost ? "bad" : "ok");
+    $("stp-cost-s").textContent = "cheapest: " + aed(best.cost) + " at score " + best.t.toFixed(2);
+    const raw = Math.pow(1 - S4.e, S4.n);
+    $("stp-verdict").innerHTML = "With no checking at all, only <b>" + pct(raw, 0) + "</b> of " + S4.n + "-field documents would be fully right (" + pct(1 - S4.e, 1) + " per field, multiplied across fields). At this threshold <b>" + pct(cur.auto, 0) + "</b> go straight through, and <b>" + pct(cur.err, 2) + "</b> of those still hide an error; the cheapest setting sends " + pct(1 - best.auto, 0) + " to people.";
+  }
+
+  function renderAll() { renderCF(); renderLat(); renderRank(); renderStp(); }
+  syncChips(); syncLat();
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
