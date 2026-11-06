@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Loss Functions, Learning Rates and What Training Really Optimises</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-bad { fill: var(--bad) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+
+  .pt { fill: var(--neutral); stroke: var(--surface); stroke-width: 1.5; }
+  .pt.out { fill: var(--bad); }
+  .mk-mse { stroke: var(--warn); stroke-width: 3; }
+  .mk-mae { stroke: var(--accent); stroke-width: 3; }
+  .mk-hub { stroke: var(--ink); stroke-width: 3; }
+  .ln-ink { stroke: var(--ink); stroke-width: 2.4; fill: none; }
+  .ln-acc { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .ln-warn { stroke: var(--warn); stroke-width: 2.4; fill: none; }
+  .ln-neu { stroke: var(--muted); stroke-width: 1.6; fill: none; stroke-dasharray: 4 4; }
+  .ln-bad { stroke: var(--bad); stroke-width: 2.6; fill: none; }
+  .area-pdf { fill: var(--neutral); fill-opacity: .18; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .cv-opt { stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-rule { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  pre { overflow-x: auto; max-width: 100%; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F6 · Training and optimisation</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F6.1 · F6.2</span>
+        <span class="pill d">Day one</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Loss Functions, Learning Rates and What Training Really Optimises</h1>
+      <p class="dek">A model optimises exactly what you wrote down, including its blind spots. Why squared error chases outliers, why a cash forecast should not aim for the average, why cross-entropy punishes confident mistakes, and how learning rate, schedule and batch size decide whether training works at all.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Training is a search for the lowest point of the loss you chose, so the loss defines what "good" means (mean, median, a high quantile, a calibrated probability), and the learning rate, schedule and batch size are the dials that decide whether the search arrives, bounces, or blows up.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A treasury team asks for a forecast of tomorrow's cash demand across the ATM network. The data scientist trains a model to minimise squared error, the textbook default. The model is accurate on average. It is also under-forecast on about half of all days, and on those days the bank scrambles for emergency cash at a premium. Running short costs several times more than holding too much. Nobody told the model that, so it never learned to lean high.</p>
+        <p>This is the central fact about training. <strong>A model does not learn what you meant. It learns whatever lowers the number you gave it.</strong> The number is the loss. If the loss rewards the average, you get the average. If it treats a wild outlier as a catastrophe, the model bends towards the outlier. If it says nothing about the cost of one type of error, the model is indifferent to it.</p>
+        <p>Training then needs a way to reduce that number. Picture standing on a hillside in fog, the loss as height, wanting the valley. You feel the slope under your feet (the gradient, F1.3) and step downhill. How big a step? That is the <strong>learning rate</strong>. Too small and you crawl for days. Too big and you leap across the valley and land higher on the other side, again and again. And the slope you feel is not the true slope: it is measured from a small handful of examples (a <strong>batch</strong>), so it is noisy. Bigger batches give a truer slope at higher cost.</p>
+      </div>
+
+      <figure class="figure" id="fig-mean">
+        <div class="fig-head"><span class="fig-title">The loss decides the answer</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> nine ordinary days of ATM cash withdrawal sit near AED 100,000, plus one extra day (red). Drag it up to a payroll spike. Squared error follows the spike. Absolute error barely notices. Huber sits between, with a dial for where "ordinary" ends.</p>
+        <div class="chart-wrap" id="mean-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--warn)"></i>Squared error (mean)</span>
+          <span><i style="background:var(--accent)"></i>Absolute error (median)</span>
+          <span><i style="background:var(--ink)"></i>Huber</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-out">The tenth day's withdrawals <output for="s-out"></output></label><input type="range" id="s-out" min="95" max="600" step="5" value="400"></div>
+          <div class="ctl"><label for="s-del">Huber switch point δ <output for="s-del"></output></label><input type="range" id="s-del" min="2" max="100" step="1" value="10"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Squared error prefers</div><div class="v" id="st1-mse"></div><div class="s">the mean</div></div>
+          <div class="stat"><div class="k">Absolute error prefers</div><div class="v" id="st1-mae"></div><div class="s">the median</div></div>
+          <div class="stat"><div class="k">Huber prefers</div><div class="v" id="st1-hub"></div><div class="s" id="st1-hub-s"></div></div>
+          <div class="stat" id="st1-gap-b"><div class="k">Pull of one day on the mean</div><div class="v" id="st1-gap"></div><div class="s">mean minus median</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: nine fixed daily figures (AED thousand): 92, 95, 98, 100, 101, 103, 104, 107, 110, plus the day you set. Each marker shows the single prediction that minimises that loss over all ten days, solved exactly (the mean, the median, and Huber by bisection on its derivative).</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to take from it.</p>
+        <ul>
+          <li><strong>Every loss is a hidden answer to "what number do you want?"</strong> Squared error wants the mean. Absolute error wants the median. A tilted absolute error wants a chosen quantile. Cross-entropy wants an honest probability. Pick the loss by deciding which of these the business actually needs.</li>
+          <li><strong>The loss you train on and the metric you report can differ, and often should.</strong> Training needs smooth, differentiable losses. Reporting needs numbers a risk committee understands (F7). Trouble starts when the two disagree about what is good and nobody noticed.</li>
+          <li><strong>Optimisation is its own craft.</strong> The same loss, model and data can train beautifully or fail completely depending on learning rate, schedule and batch size. Most "the model doesn't work" in a first week is an optimisation problem, not an idea problem.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before training, finish the sentence: "being wrong by AED X in this direction costs the bank Y". The loss is that sentence in mathematics. If you cannot write the sentence, you are not ready to choose the loss.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-reg">Regression losses: mean, median, quantile</h3>
+      <div class="prose">
+        <p>Take the residual <i>e</i> = actual minus predicted. A loss assigns a penalty to <i>e</i>. The three workhorses:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Loss</th><th>Penalty for error <i>e</i></th><th>What it rewards</th><th>Use when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Squared error (MSE, L2)</b></td><td><i>e</i>²</td><td>Predicting the conditional <b>mean</b>. Big errors count quadratically: ten times the error, a hundred times the penalty.</td><td>Errors are roughly symmetric and outliers are real signal, not noise. Maths is smooth and easy.</td></tr>
+            <tr><td><b>Absolute error (MAE, L1)</b></td><td>|<i>e</i>|</td><td>Predicting the conditional <b>median</b>. Each unit of error costs the same however large.</td><td>Outliers are noise or should not dominate. Easier to explain: "off by AED 9,000 on average".</td></tr>
+            <tr><td><b>Huber</b></td><td><i>e</i>²/2 up to δ, then δ(|<i>e</i>| − δ/2)</td><td>Mean-like for ordinary errors, median-like for outliers.</td><td>You want a smooth loss that does not let a few bad rows steer everything.</td></tr>
+            <tr><td><b>Quantile (pinball)</b></td><td>τ·<i>e</i> if <i>e</i> ≥ 0, else (τ − 1)·<i>e</i></td><td>Predicting the <b>τ-quantile</b>: the level actual values stay under τ of the time.</td><td>Under- and over-prediction cost differently, or you need an interval, not a point.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Why does squared error give the mean? Because the constant that minimises Σ(<i>x</i> − <i>c</i>)² is the average of the <i>x</i>. Differentiate with respect to <i>c</i>, set to zero, and the answer is the mean. For absolute error, the slope of the loss is +1 for every point below the guess and −1 for every point above, so it is flat in balance only when half the points sit on each side: the median. Simulation 1 shows the consequence. One outlier moves the mean by (outlier − typical) ÷ 10, and moves the median almost nothing.</p>
+        <p>Neither is "right". If a large withdrawal day is a real day that treasury must fund, the mean carries real information. If it is a data glitch, the median protects you. <strong>The outlier question is a business question wearing a statistics costume.</strong> Ask where the outlier came from before choosing.</p>
+        <p>The pinball loss is the one most worth knowing for banking, because costs are rarely symmetric. Suppose a shortfall costs <i>a</i> per AED million and idle cash costs <i>b</i>. The loss-minimising forecast is the quantile</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>τ</mi><mo>=</mo><mfrac><mi>a</mi><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow></mfrac></math>
+        <p class="where">If a shortfall costs four times as much as idle cash, a = 4b and τ = 4 ÷ 5 = 0.8: forecast the level that demand stays under 80% of the time. This is the newsvendor result from operations research, and it is exactly what a quantile loss learns. A model trained with squared error aims at τ = 0.5 (roughly) and is wrong for this business by construction.</p>
+      </div>
+
+      <figure class="figure" id="fig-pin">
+        <div class="fig-head"><span class="fig-title">Forecast the quantile that the costs ask for</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> at ratio 1 the best forecast is the mean, AED 100m. Raise the ratio to 4 and the best forecast moves up to the 80th percentile. Notice how much extra cost the "accurate on average" forecast carries, and how flat the cost curve is on the cheap side.</p>
+        <div class="chart-wrap" id="pin-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Expected daily cost at each forecast</span>
+          <span><i style="background:var(--muted)"></i>Mean forecast (squared error's choice)</span>
+          <span><i style="background:var(--accent)"></i>Best forecast (the τ-quantile)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-r">Shortfall costs this many times idle cash <output for="s-r"></output></label><input type="range" id="s-r" min="0" max="1.4" step="0.02" value="0.6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Quantile asked for (τ)</div><div class="v" id="st2-tau"></div><div class="s">shortfall cost ÷ (shortfall + idle)</div></div>
+          <div class="stat"><div class="k">Best forecast</div><div class="v" id="st2-best"></div><div class="s">AED million</div></div>
+          <div class="stat" id="st2-mean-b"><div class="k">Daily cost, forecasting the mean</div><div class="v" id="st2-mean"></div><div class="s">AED thousand</div></div>
+          <div class="stat"><div class="k">Daily cost, forecasting the quantile</div><div class="v" id="st2-qc"></div><div class="s" id="st2-qc-s"></div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: next-day cash demand is normal with mean AED 100m and standard deviation AED 15m. Idle cash costs AED 5,000 per AED million per day; a shortfall costs that times the ratio you set. Expected costs are exact normal-distribution formulas. Real demand has fatter tails and weekday structure (F9.1).</p>
+      </figure>
+
+      <h3 class="sub" id="m-ce">Classification: cross-entropy and why it is the default</h3>
+      <div class="prose">
+        <p>For yes/no problems (fraud or not, default or not) the model outputs a probability <i>p</i> that the answer is yes. The standard loss is <strong>cross-entropy</strong>, also called log loss. For a case whose true answer is yes it charges −ln <i>p</i>; for a no it charges −ln(1 − <i>p</i>).</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>loss</mi><mo>=</mo><mo>−</mo><mo stretchy="false">[</mo><mi>y</mi><mi>ln</mi><mi>p</mi><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>y</mi><mo stretchy="false">)</mo><mi>ln</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>p</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo></math>
+        <p class="where">y is 1 for a real fraud and 0 otherwise. Say the model gave a real fraud 50%: loss 0.69. Gave it 10%: loss 2.30. Gave it 1%: loss 4.61. Gave it 0.001%: loss 11.5. The penalty grows without bound as the model becomes confidently wrong.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Where does it come from? It is the negative log of the probability the model assigned to what actually happened. Minimising it is the same as <strong>maximum likelihood</strong>, the principle of F1.6: choose the model under which the observed data were least surprising. That is why it connects to everything else: logistic regression (F2.5), neural network classifiers, and the next-token loss of every large language model (M1) are all cross-entropy.</p>
+        <p>Cross-entropy is also a <em>proper scoring rule</em>: its expected value is lowest when the model reports the true probability, so a model trained on it is pushed to be honest, not just directionally right. That is why probabilities from a well-trained network are usually usable, and why the calibration checks of F7.4 mean something. Squared error on probabilities (the Brier score) is proper too, but it trains badly, as the next simulation shows.</p>
+      </div>
+
+      <figure class="figure" id="fig-ce">
+        <div class="fig-head"><span class="fig-title">Confident and wrong: what each loss says</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> a transaction is genuinely fraud. Slide the model's fraud probability down to 1%. Cross-entropy shouts (loss 4.6, and a strong push to correct). Squared error shrugs (loss below 1, and a gradient close to nothing). Plain accuracy only changes at 50%.</p>
+        <div class="chart-wrap" id="ce-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Cross-entropy</span>
+          <span><i style="background:var(--warn)"></i>Squared error (Brier)</span>
+          <span><i style="background:var(--muted)"></i>Right/wrong (0–1)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-p">Model's fraud probability for a real fraud <output for="s-p"></output></label><input type="range" id="s-p" min="-7" max="4" step="0.05" value="-4.6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-ce-b"><div class="k">Cross-entropy loss</div><div class="v" id="st3-ce"></div><div class="s">−ln p</div></div>
+          <div class="stat"><div class="k">Squared-error loss</div><div class="v" id="st3-bs"></div><div class="s">(1 − p)²</div></div>
+          <div class="stat" id="st3-gce-b"><div class="k">Push to correct, cross-entropy</div><div class="v" id="st3-gce"></div><div class="s">gradient on the score, 1 − p</div></div>
+          <div class="stat" id="st3-gbs-b"><div class="k">Push to correct, squared error</div><div class="v" id="st3-gbs"></div><div class="s">gradient on the score, 2p(1 − p)²</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: one case whose true label is fraud, model output p, an ordinary sigmoid output. The gradients are the exact derivatives of each loss with respect to the pre-sigmoid score. The slider is in log-odds.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The gradient column is the real lesson. With a sigmoid output, cross-entropy's gradient on the score is simply (<i>p</i> − <i>y</i>): the model's error, nothing more. A wrong, confident prediction produces a large corrective signal. Squared error multiplies in the sigmoid's own slope, which is almost zero where the model is saturated, so a model that is confidently wrong barely learns it is wrong. This is why cross-entropy is the default, not because of taste.</p>
+        <p>Variants you will meet, and what each changes:</p>
+        <ul>
+          <li><strong>Class weights</strong> multiply the loss on rare positives. They inflate the model's probabilities by a known factor, which F3.5 shows how to undo. The loss was changed, so the meaning of the output changed.</li>
+          <li><strong>Focal loss</strong> shrinks the penalty on examples the model already gets right, so the flood of easy negatives stops dominating. Useful in extreme imbalance, but it distorts calibration.</li>
+          <li><strong>Label smoothing</strong> replaces the hard 0/1 target by, say, 0.95/0.05. Without it, cross-entropy can only be driven to zero by pushing scores to infinity, which breeds over-confidence. With it, the model stops short. It often helps generalisation and can hurt probability quality for downstream use; check calibration.</li>
+          <li><strong>Multi-class cross-entropy</strong> (softmax) is the same idea over many classes, such as the next word among 100,000 tokens.</li>
+          <li><strong>Custom or business losses</strong> add the cost matrix straight into training: weight a missed fraud by its AED exposure, not a flat factor. Powerful and risky: it ties the model to today's cost estimates, so document them.</li>
+        </ul>
+        <p>One more link. The classification losses above are what the whole "alignment" stack of M1 and R3 builds on. Reinforcement learning from human feedback and its successors replace "match the next token" with "score well on a learned reward", and the same warning applies one level up: the model optimises the reward, including its flaws (reward hacking).</p>
+      </div>
+
+      <h3 class="sub" id="m-lr">Learning rate, momentum and schedules</h3>
+      <div class="prose">
+        <p>Gradient descent updates every parameter <i>w</i> by <i>w</i> ← <i>w</i> − η · gradient. The step size η is the learning rate. The simplest instructive case is a bowl-shaped loss ½·<i>h</i>·<i>w</i>², where <i>h</i> is the curvature, how steeply the bowl curves. Then each step multiplies the distance to the minimum by (1 − η<i>h</i>):</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>w</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>=</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>η</mi><mi>h</mi><mo stretchy="false">)</mo><msub><mi>w</mi><mi>t</mi></msub></math>
+        <p class="where">If η·h is between 0 and 1, you approach the minimum smoothly. Between 1 and 2 you overshoot and zig-zag, but still converge. <strong>Above 2 each step overshoots by more than the last and the loss explodes.</strong> So the largest safe learning rate is 2 ÷ <i>h</i>, set by the steepest direction. Real losses are bowls of wildly different curvature in different directions: a steep, narrow canyon with a gently sloping floor. The steepest direction caps the learning rate, and the gentle direction then crawls. This mismatch is the core difficulty of optimisation.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The remedies are layered on the same step:</p>
+        <ul>
+          <li><strong>Momentum</strong> keeps a running average of past gradients, so steps along the consistent canyon floor add up and the sideways zig-zag cancels.</li>
+          <li><strong>Adaptive methods (Adam, AdamW)</strong> also divide each parameter's step by a running estimate of its recent gradient size, giving rarely-updated parameters bigger steps. This largely removes the need to tune per-parameter scales. <strong>AdamW</strong> applies weight decay separately from the gradient, which behaves better than folding it into the loss; it is the default for transformers.</li>
+          <li><strong>Gradient clipping</strong> caps the size of any one update, a seatbelt against the occasional enormous gradient.</li>
+          <li><strong>Schedules</strong> change η over time. Large steps early cover ground; small steps late settle into the valley rather than bouncing around the bottom (Simulation 4 shows why).</li>
+        </ul>
+        <p>The common schedule shapes:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Schedule</th><th>Shape</th><th>Why people use it</th></tr></thead>
+          <tbody>
+            <tr><td><b>Constant</b></td><td>One fixed η.</td><td>Simple. Settles at a noise floor, never lower.</td></tr>
+            <tr><td><b>Step decay</b></td><td>Cut η by 10× at set points.</td><td>Classic for image models. Easy to reason about.</td></tr>
+            <tr><td><b>Cosine decay</b></td><td>Smooth fall from peak to near zero along a half-cosine.</td><td>Smooth, few knobs. Needs the total number of steps in advance.</td></tr>
+            <tr><td><b>Warmup</b></td><td>Start near zero, ramp up over the first few hundred or thousand steps.</td><td>Early gradients are wild and, with Adam, the second-moment estimates are unreliable. Avoids early divergence in transformers.</td></tr>
+            <tr><td><b>Warmup–stable–decay (WSD)</b></td><td>Ramp up, hold flat for most of training, then decay quickly at the end.</td><td>You can stop or extend training without committing to a length at the start, and branch cheap final-decay runs from a shared checkpoint.</td></tr>
+            <tr><td><b>One-cycle / cyclic</b></td><td>Rise to a large peak, then fall.</td><td>Fast training of smaller models; periodic restarts can escape bad regions.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Warmup deserves a plain word. In a neat bowl it is unnecessary, and Simulation 4 will honestly show that: it only slows things. In a deep network at initialisation the loss surface is rough and the first gradients are large and unrepresentative, so a large first step can throw the weights somewhere from which training never recovers. Warmup buys safety at the price of a few slow steps. Practitioners who skip it on a transformer discover why.</p>
+        <p>Here is how little code it takes, and how much hides behind the numbers (illustrative PyTorch):</p>
+<pre><code>opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1)
+sched = torch.optim.lr_scheduler.OneCycleLR(
+    opt, max_lr=3e-4, total_steps=n_steps, pct_start=0.05)   # 5% warmup, then cosine-like decay
+
+for x, y in loader:
+    loss = loss_fn(model(x), y)       # e.g. cross-entropy, Huber, a pinball loss
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)   # seatbelt
+    opt.step(); sched.step(); opt.zero_grad()</code></pre>
+        <p>Every line is a decision: the loss on line 6, the peak rate and schedule on lines 1–3, the clip value on line 8. When a run misbehaves, the loss curve (not the final metric) is the first thing to read.</p>
+      </div>
+
+      <h3 class="sub" id="m-batch">Batch size and gradient noise</h3>
+      <div class="prose">
+        <p>The true gradient averages over all training rows, which is too expensive per step. So each step estimates it from a batch of <i>B</i> examples. The estimate is unbiased but noisy, and its variance falls as 1/<i>B</i>. Two consequences follow.</p>
+        <ul>
+          <li><strong>Noise sets a floor.</strong> Near the bottom, the true gradient shrinks to zero but the noisy one does not, so the weights jitter around the minimum. For a bowl, the expected loss at the floor is about η·σ² ÷ (4·<i>B</i>) for small η, where σ² is the per-example gradient variance: proportional to learning rate, inversely proportional to batch size. To go lower, shrink η (a schedule) or grow <i>B</i>.</li>
+          <li><strong>Bigger batches buy parallelism, not unlimited speed.</strong> Early in training, when the gradient signal is strong relative to noise, doubling the batch nearly halves the number of steps. Past the <em>critical batch size</em> (McCandlish et al., 2018), the gradient is already accurate and extra examples per step are mostly wasted. The critical size is not fixed: it grows as the loss falls, which is why large-scale runs ramp batch size up over training.</li>
+        </ul>
+        <p>When you change the batch size you must usually change the learning rate. The two rules of thumb: for plain SGD, scale η <em>linearly</em> with <i>B</i> (Goyal et al., 2017, with warmup), which keeps the noise ratio η/<i>B</i> fixed. For Adam-type optimisers, theory and practice favour scaling with the <em>square root</em> of <i>B</i>. Both are rules of thumb and break at large batches, so treat them as starting points to test. Smaller batches also add noise that can act as mild regularisation (F6.3), which is partly why small-batch models sometimes generalise a little better.</p>
+      </div>
+
+      <figure class="figure" id="fig-lr">
+        <div class="fig-head"><span class="fig-title">Learning rate, schedule and batch size on one loss curve</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> (1) Constant schedule, batch 16: raise the rate slowly and watch the loss floor rise with it, then push past 2.0 and watch it diverge. (2) At a fixed high rate, switch from constant to cosine or WSD: the floor collapses at the end. (3) Raise the batch size and see the floor drop, with no change in speed.</p>
+        <div class="btns" role="group" aria-label="Schedule">
+          <button class="btn" type="button" data-sch="const" aria-pressed="false">Constant</button>
+          <button class="btn" type="button" data-sch="cos" aria-pressed="true">Cosine</button>
+          <button class="btn" type="button" data-sch="warm" aria-pressed="false">Warmup + cosine</button>
+          <button class="btn" type="button" data-sch="wsd" aria-pressed="false">Warmup–stable–decay</button>
+        </div>
+        <div class="chart-wrap" id="lr-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--ink)"></i>Expected loss (log scale)</span>
+          <span><i style="background:var(--muted)"></i>Learning rate, relative to peak</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-lr">Peak learning rate η (stability limit is 2.0) <output for="s-lr"></output></label><input type="range" id="s-lr" min="-2" max="0.45" step="0.01" value="-0.5"></div>
+          <div class="ctl"><label for="s-b">Batch size <output for="s-b"></output></label><input type="range" id="s-b" min="0" max="3" step="0.05" value="1.2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st4-fin-b"><div class="k">Final loss after 400 steps</div><div class="v" id="st4-fin"></div><div class="s" id="st4-fin-s"></div></div>
+          <div class="stat"><div class="k">Steps to reach a loss of 0.05</div><div class="v" id="st4-hit"></div><div class="s">first time below it</div></div>
+          <div class="stat"><div class="k">Loss at the halfway step</div><div class="v" id="st4-mid"></div><div class="s">where a constant rate is still noisy</div></div>
+          <div class="stat" id="st4-fl-b"><div class="k">Noise floor at the peak rate</div><div class="v" id="st4-fl"></div><div class="s">η·σ² ÷ (B·(2 − η)) in the weight</div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: a one-dimensional bowl, loss = ½w², started at w = 3, with minibatch-gradient noise of variance 4 ÷ batch size. The curve is the exact expected loss from the recursion E[w²] ← (1 − ηh)²·E[w²] + η²σ²/B, not a sampled run. Warmup lasts 20 steps; WSD holds 70% flat and decays linearly to zero. A real deep network has many curvatures at once, a rough surface and non-quadratic behaviour, so only the qualitative lessons transfer.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What the picture says, in order of importance.</p>
+        <ul>
+          <li><strong>The learning rate is the most sensitive dial.</strong> Over a factor of ten you move from "too slow to finish", through "fine", to "diverges". A learning-rate sweep on a log scale is the first experiment of any new model. See hyperparameter search in F4.9.</li>
+          <li><strong>A decaying schedule is not cosmetic.</strong> A fixed rate leaves a noise floor above what the data allow. Decaying the rate lets the model settle. This is why the last part of a run, often the final 10–30%, delivers a disproportionate share of the gain.</li>
+          <li><strong>Learning rate and batch size trade against each other.</strong> The floor depends on their ratio. That is the reason for the scaling rules above, and why a recipe tuned at one batch size does not transfer unchanged.</li>
+          <li><strong>The loss curve is a diagnostic.</strong> Smooth and falling: healthy. Falling then flat at a high level: rate too low or stuck. Jagged with spikes: rate too high or bad data. Rising to NaN: diverged. Train loss and validation loss both low, then validation rising: that is overfitting, the subject of F6.3.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Loss and optimiser sit under almost every model. These are the places they come back.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F1.3 · F1.8 · Gradients and optimisation</span><span class="t"><a href="f1-gradients-optimisation.html">The machinery under every step</a></span><p>That lesson builds gradients and backpropagation. This one decides what to differentiate, and how big a step to take.</p></div>
+        <div class="link-card"><span class="code">F1.6 · F1.7 · Likelihood and entropy</span><span class="t"><a href="f1-likelihood-entropy.html">Cross-entropy is maximum likelihood</a></span><p>Squared error is the Gaussian likelihood in disguise; cross-entropy is the Bernoulli or categorical one. The loss is the model of the noise.</p></div>
+        <div class="link-card"><span class="code">F5.1 · Neural nets and backpropagation</span><span class="t"><a href="f5-neurons-layers-and-backpropagation.html">Where the gradient comes from</a></span><p>Backpropagation computes the slope; the loss supplies the thing to take the slope of; the learning rate scales the step.</p></div>
+        <div class="link-card"><span class="code">F3.5 · Imbalanced data</span><span class="t"><a href="f3-imbalanced-data.html">Class weights are a loss change</a></span><p>Weighting the loss shifts the probabilities by a known factor. The threshold, not the weight, is usually the lever that matters.</p></div>
+        <div class="link-card"><span class="code">F7.1 – F7.4 · Metrics and calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Training loss versus reporting metric</a></span><p>You train on a smooth loss and report precision, recall and calibration. Cross-entropy being proper is why calibration is achievable.</p></div>
+        <div class="link-card"><span class="code">F7.5 · Forecast and regression metrics</span><span class="t"><a href="f7-forecast-and-regression-metrics-mae.html">MAE, RMSE and what they hide</a></span><p>The metric side of the mean-versus-median choice: RMSE punishes large misses, MAE does not.</p></div>
+        <div class="link-card"><span class="code">F6.3 · Overfitting and regularisation</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">When lower training loss stops helping</a></span><p>Driving the training loss down is the goal of this lesson; overfitting is when that goal stops serving you. Weight decay, early stopping and batch noise are all regularisers.</p></div>
+        <div class="link-card"><span class="code">F4.1 · F4.9 · Generalisation and tuning</span><span class="t"><a href="f4-hyperparameter-tuning-grid-random-and.html">Learning rate is the first hyperparameter</a></span><p>Random search over log-spaced learning rates is the most valuable tuning you can do. Always judge on validation, never on training loss.</p></div>
+        <div class="link-card"><span class="code">F9.1 · Time series and forecasting</span><span class="t"><a href="f9-time-series-and-forecasting.html">Quantile forecasts for treasury</a></span><p>Cash and liquidity planning is an asymmetric-cost problem; pinball loss turns it into a quantile forecast with an interval.</p></div>
+        <div class="link-card"><span class="code">R8.1 · Conformal prediction</span><span class="t"><a href="r8-conformal-prediction.html">Guaranteed-coverage intervals</a></span><p>Quantile regression gives intervals with no guarantee. Conformal prediction wraps any model's output in an interval with a coverage guarantee.</p></div>
+        <div class="link-card"><span class="code">R3 · RLHF, DPO, verifiers</span><span class="t"><a href="r3-from-rlhf-to-dpo-to.html">Optimising a learned reward</a></span><p>Post-training swaps the loss for a learned preference signal. The same truth holds: the model optimises the number, flaws included.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Liquidity and cash forecasting.</strong> Asymmetric cost. Pinball loss at the quantile the funding cost implies, with its coverage checked on past days (<a href="b5-liquidity-forecasting-and-asset-liability.html">B5</a>).</li>
+          <li><strong>Credit and provisioning.</strong> Cross-entropy for probability of default, then calibration, because IFRS 9 feeds the probability straight into expected loss (<a href="b4-pd-lgd-ead-and-expected.html">B4</a>). Exposure and loss-given-default models are regressions where outliers (a handful of huge losses) force the mean-versus-median decision.</li>
+          <li><strong>Fraud and AML.</strong> Cross-entropy with class weights or a cost-weighted loss, a threshold from costs, and care about which probabilities downstream rules consume.</li>
+          <li><strong>Fine-tuning and Arabic or English language models.</strong> Next-token cross-entropy, small learning rates (fine-tuning rates are typically one to two orders of magnitude below pretraining), warmup and short schedules. Too high a rate in fine-tuning destroys what the model already knew.</li>
+          <li><strong>Experiment hygiene.</strong> When a team says a model "failed to train", the first checks are the loss curve, the learning rate and the data, in that order.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The basics of loss functions are settled. The live work is on the optimisation side, where large language models made training recipes expensive to get wrong: which optimiser, which schedule, how batch size should grow, and how to transfer settings found on small runs to big ones.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Items marked "preprint" have not been verified beyond their abstracts; older items are cited from memory of the papers listed in Sources.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1964–78</span><div><div class="t">Robust and quantile losses</div><p>Huber introduced the loss that bridges mean and median. Koenker and Bassett defined quantile regression, the basis of the pinball loss.</p><div class="src">Huber, Annals of Math. Statistics, 1964; Koenker &amp; Bassett, Econometrica, 1978</div></div></li>
+        <li><span class="yr">2007</span><div><div class="t">Proper scoring rules</div><p>Gneiting and Raftery set out which losses reward honest probabilities (log score, Brier) and which do not. The theory behind "train on cross-entropy, then check calibration".</p><div class="src">Gneiting &amp; Raftery, JASA, 2007</div></div></li>
+        <li><span class="yr">2014–19</span><div><div class="t">Adam, then AdamW and cosine schedules</div><p>Adam became the default optimiser. Loshchilov and Hutter showed that decoupling weight decay (AdamW) fixes a flaw in how Adam regularised, and introduced cosine annealing with restarts.</p><div class="src">Kingma &amp; Ba, 2014; Loshchilov &amp; Hutter, SGDR 2016 and AdamW (ICLR 2019)</div></div></li>
+        <li><span class="yr">2017–18</span><div><div class="t">Large batches, warmup and the critical batch size</div><p>Goyal et al. trained ImageNet in an hour with the linear scaling rule and warmup. McCandlish et al. proposed measuring the gradient noise scale to predict the critical batch size.</p><div class="src">Goyal et al., 2017; McCandlish et al., 2018</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Why the square-root rule for Adam</div><p>Work on the stochastic-differential-equation view of adaptive optimisers derived square-root learning-rate scaling for Adam-type methods, in contrast to the linear rule for SGD.</p><div class="src">Malladi et al., NeurIPS 2022</div></div></li>
+        <li><span class="yr">2024</span><div><div class="t">WSD schedules beat the "fix the length first" constraint</div><p>MiniCPM popularised warmup–stable–decay, and Hägele et al. showed that constant-rate training followed by a short cooldown matches cosine while letting you reuse checkpoints to explore different training lengths cheaply.</p><div class="src">Hu et al., MiniCPM, 2024; Hägele et al., 2024</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Muon and matrix-aware optimisers meet WSD</div><p>Muon, which orthogonalises the update for weight matrices, moved from a community optimiser to use in large-scale runs. In 2026, open model reports pair AdamW plus Muon with a WSD schedule, one reporting lower gradient volatility than plain AdamW over about 25 billion tokens. Other preprints study how Muon still benefits from a final decay, and argue warmup and decay can be derived rather than hand-tuned for such optimisers. Early, mostly preprints.</p><div class="src">Tucano 2 Cool, arXiv 2603.03543; AMUSE, arXiv 2605.22432; NeurIPS 2026 warm-up poster (see Sources)</div></div></li>
+        <li><span class="yr">2025–26</span><div><div class="t">Setting batch size and transferring hyperparameters</div><p>Recent preprints study how to choose the pretraining batch size and propose recipes that transfer learning rate, weight decay and schedule across model width, depth, batch size and run length, so that tuning is done at small scale. The square-root rule is reported to be important for transfer across batch sizes. Active research, not settled practice.</p><div class="src">arXiv 2601.05034; arXiv 2512.22382 (preprints)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking and general industry:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Cross-entropy, then calibration check</b></td><td>The standard route for default, fraud and propensity scores.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>AdamW with warmup and cosine decay</b></td><td>Default recipe for fine-tuning and training transformer models.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Quantile or asymmetric loss for forecasts</b></td><td>Treasury and demand forecasting, with coverage checks.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Business-cost-weighted training loss</b></td><td>Weighting rows by exposure or loss. Common as a trick, rarely documented formally.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>WSD and checkpoint-branching schedules</b></td><td>Pretraining where run length is decided late.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Muon-family optimisers</b></td><td>Used in some large open-model recipes, usually alongside AdamW for other parameters.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Hyperparameter transfer across scale</b></td><td>Tune small, scale up with rules for width, depth, batch and duration.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Write the loss from the cost of being wrong, use a proper loss for probabilities and check calibration, start with AdamW, a short warmup and a decaying schedule, and sweep the learning rate on a log scale before anything fancier.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in bank analyses and in AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Default squared error on an asymmetric problem</div><p>A cash or exposure forecast that is right on average but short on half the days, where shortfalls are expensive.</p><div class="spot"><b>Spot it</b>Ask what a miss costs in each direction. If the answers differ, ask what quantile the model is aiming at and how often actual values exceeded the forecast.</div></li>
+        <li><div class="t">Outlier handling by accident</div><p>One huge exposure drags a mean-based model, or a median-based model quietly ignores the rare events the business cares most about.</p><div class="spot"><b>Spot it</b>Refit without the top 1% of targets. If the answer moves a lot, the loss is deciding for you. Decide on purpose.</div></li>
+        <li><div class="t">Training loss and reported metric disagree</div><p>The loss goes down, the metric stays flat or worsens, because they reward different things.</p><div class="spot"><b>Spot it</b>Track both on validation data every epoch. If they diverge, change what you optimise or add early stopping on the metric.</div></li>
+        <li><div class="t">Treating a weighted or smoothed loss's output as a probability</div><p>Class weights, focal loss or label smoothing shift or squash scores, then the number goes into a 10% rule or an expected-loss formula.</p><div class="spot"><b>Spot it</b>Compare mean predicted probability with the actual rate on an untouched holdout. A large gap means recalibrate (F7.4).</div></li>
+        <li><div class="t">Learning rate copied from a different setup</div><p>A recipe tuned at batch 256 reused at batch 4,096, or a pretraining rate used to fine-tune.</p><div class="spot"><b>Spot it</b>Loss spikes early, or fine-tuning forgets prior abilities. Rerun a short log-spaced sweep (say 1e-5 to 1e-3) before trusting a result.</div></li>
+        <li><div class="t">Judging a run by its final number only</div><p>Two models differ by 0.4 points; nobody looked at the curves.</p><div class="spot"><b>Spot it</b>Ask for train and validation loss curves. A still-falling curve means under-trained; a validation curve that turned up means overfit; spikes mean instability.</div></li>
+        <li><div class="t">No schedule, then blaming the model</div><p>A constant rate leaves a noise floor; the model "plateaus" and the team concludes the data are exhausted.</p><div class="spot"><b>Spot it</b>Try a decay over the last 20–30% of steps. If the loss drops sharply, the plateau was the learning rate.</div></li>
+        <li><div class="t">NaNs and silent divergence</div><p>Loss becomes NaN, or the run looks fine but one layer blew up earlier.</p><div class="spot"><b>Spot it</b>Log gradient norm. Clip it, lower the peak rate, extend warmup, and check for bad rows (a missing value coded as -999 or an enormous amount).</div></li>
+        <li><div class="t">Comparing optimisers at their defaults</div><p>"Optimiser A beats B" when each was given a single untuned learning rate.</p><div class="spot"><b>Spot it</b>Ask whether each optimiser had its own tuned rate and schedule. Many published gaps shrink once both are tuned fairly.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“A model learns whatever the scoring rule rewards, so we choose the rule from our own costs. For cash planning, running short costs us several times more than holding extra, so we train the forecast to aim high on purpose, at the level that balances those costs, rather than at the average. Then we test it on past days: did actual demand stay under the forecast the share of the time we intended?”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I pick the loss from the decision: pinball at the cost-implied quantile for asymmetric forecasts, Huber or MAE if outliers are noise, cross-entropy for probabilities followed by a calibration check on held-out data. For optimisation I'd use AdamW with a short warmup and a decaying schedule, sweep the peak learning rate on a log scale at the batch size I'll actually use, clip gradients, and judge by validation curves rather than final numbers. If I change batch size I retune the rate, starting from the square-root rule for Adam.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just use MSE for everything?”</summary><div class="ans"><p>Because MSE answers one question: what is the conditional mean? That suits symmetric costs and outliers that carry real information. If costs are asymmetric it aims at the wrong target, and if outliers are noise it lets them steer the fit. It is a fine default, but I'd choose it knowingly, and for probabilities I'd use cross-entropy, which gives stronger learning signals and honest probabilities.</p></div></details>
+        <details class="reveal"><summary>“Our model's loss went to NaN overnight. What do you check?”</summary><div class="ans"><p>In order: the data (an extreme or missing value), the learning rate (too high for this batch size or no warmup), and numerical issues (log of zero, overflow in mixed precision). I'd look at the gradient norm in the steps before it broke, add clipping, lower the peak rate, and restart from the last good checkpoint.</p></div></details>
+        <details class="reveal"><summary>“Why does the loss drop suddenly near the end of training?”</summary><div class="ans"><p>That is the learning-rate decay. At a high rate the weights bounce around the bottom of the valley at a noise floor set by rate over batch size. Lowering the rate lets them settle. It is expected and is why schedules such as cosine or warmup–stable–decay end with a fast decay.</p></div></details>
+        <details class="reveal"><summary>“Can we double the batch size to train faster?”</summary><div class="ans"><p>Often yes, up to the critical batch size, beyond which extra examples per step add little. You must retune the learning rate: scale it linearly for plain SGD, closer to the square root for Adam as a starting point. And check the result on validation, because very large batches can generalise a little worse.</p></div></details>
+        <details class="reveal"><summary>“The model is accurate but the probabilities look off. Is the loss to blame?”</summary><div class="ans"><p>Possibly. Cross-entropy on its own is proper and tends to give usable probabilities, but class weights, focal loss, label smoothing, early stopping and resampling all distort them. I'd measure calibration on a representative holdout and apply the known correction or an isotonic or Platt recalibration before using any probability as a number.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Ten daily withdrawal figures: nine near AED 101,000 (sum 910 thousand) and one of 400 thousand. What do squared error and absolute error each predict, and why do they differ?</summary><div class="ans"><p>Squared error predicts the mean: (910 + 400) ÷ 10 = <strong>131</strong>. Absolute error predicts the median, between the 5th and 6th sorted values (101 and 103): <strong>102</strong>. The squared penalty makes the 400 pull hard on the answer; the absolute penalty counts it as just one point above the middle.</p></div></details>
+        <details class="reveal"><summary>2. A shortfall costs AED 12,000 per million and idle cash AED 3,000 per million. What quantile should the forecast target?</summary><div class="ans"><p>τ = a ÷ (a + b) = 12 ÷ 15 = <strong>0.8</strong>. Forecast the level that demand stays under 80% of the time. With normal demand (mean 100, sd 15) that is about 100 + 0.84 × 15 ≈ 112.6.</p></div></details>
+        <details class="reveal"><summary>3. Cross-entropy loss on a real fraud when the model said 50%, then 1%?</summary><div class="ans"><p>−ln 0.5 = <strong>0.69</strong>; −ln 0.01 = <strong>4.61</strong>. Squared error would give 0.25 and 0.98, a tame increase. That difference in how confident mistakes are priced, and in how strong the gradient is, is why cross-entropy trains classifiers better.</p></div></details>
+        <details class="reveal"><summary>4. A loss bowl has curvature h = 50. What is the largest stable learning rate, and what happens at 0.05?</summary><div class="ans"><p>The limit is 2 ÷ h = 2 ÷ 50 = <strong>0.04</strong>. At 0.05, each step multiplies the distance to the minimum by |1 − 0.05 × 50| = 1.5, so the error grows by half each step and training diverges. Real models have many curvatures; the steepest one sets the limit.</p></div></details>
+        <details class="reveal"><summary>5. You quadruple the batch size. What do you do with the learning rate?</summary><div class="ans"><p>Rules of thumb: for plain SGD scale it by 4 (linear rule, keeping rate ÷ batch fixed), with warmup; for Adam-type optimisers scale by about 2 (square root). Then confirm with a short sweep, because both rules break at large batches.</p></div></details>
+        <details class="reveal"><summary>6. Training loss plateaus high with a constant learning rate. Name two cheap things to try before changing the model.</summary><div class="ans"><p>Decay the learning rate (the plateau may be the noise floor, which falls with the rate or a bigger batch), and sweep the peak rate on a log scale since the current one may be too low or too high. Also check the data and whether validation loss is also flat.</p></div></details>
+        <details class="reveal"><summary>7. When can you safely ignore the effect of class weights on probabilities?</summary><div class="ans"><p>When only the ranking is used (for example reviewing the top scores each day), because weights preserve the ordering. As soon as the number meets a fixed threshold, an exposure, or another model's score, correct or recalibrate it.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>I. Goodfellow, Y. Bengio, A. Courville. <a href="https://www.deeplearningbook.org/">Deep Learning</a>. MIT Press, 2016. Chapters 6 (losses) and 8 (optimisation).</li>
+        <li>R. Koenker, G. Bassett. <a href="https://doi.org/10.2307/1913643">Regression Quantiles</a>. Econometrica, 1978.</li>
+        <li>T. Gneiting, A. Raftery. <a href="https://doi.org/10.1198/016214506000001437">Strictly Proper Scoring Rules, Prediction, and Estimation</a>. JASA, 2007.</li>
+        <li>D. Kingma, J. Ba. <a href="https://arxiv.org/abs/1412.6980">Adam: A Method for Stochastic Optimization</a>. 2014.</li>
+        <li>I. Loshchilov, F. Hutter. <a href="https://arxiv.org/abs/1711.05101">Decoupled Weight Decay Regularization</a> (AdamW). ICLR, 2019. And <a href="https://arxiv.org/abs/1608.03983">SGDR: Stochastic Gradient Descent with Warm Restarts</a>, 2016.</li>
+        <li>P. Goyal et al. <a href="https://arxiv.org/abs/1706.02677">Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour</a>. 2017.</li>
+        <li>S. McCandlish et al. <a href="https://arxiv.org/abs/1812.06162">An Empirical Model of Large-Batch Training</a>. 2018.</li>
+        <li>C. Guo et al. <a href="https://arxiv.org/abs/1706.04599">On Calibration of Modern Neural Networks</a>. ICML, 2017.</li>
+        <li>T.-Y. Lin et al. <a href="https://arxiv.org/abs/1708.02002">Focal Loss for Dense Object Detection</a>. ICCV, 2017.</li>
+        <li>R. Müller, S. Kornblith, G. Hinton. <a href="https://arxiv.org/abs/1906.02629">When Does Label Smoothing Help?</a> NeurIPS, 2019.</li>
+        <li>S. Malladi et al. <a href="https://arxiv.org/abs/2205.10287">On the SDEs and Scaling Rules for Adaptive Gradient Algorithms</a>. NeurIPS, 2022. (Cited from memory.)</li>
+        <li>S. Hu et al. <a href="https://arxiv.org/abs/2404.06395">MiniCPM: Unveiling the Potential of Small Language Models with Scalable Training Strategies</a>. 2024. And A. Hägele et al., <a href="https://arxiv.org/abs/2405.18392">Scaling Laws and Compute-Optimal Training Beyond Fixed Training Durations</a>, 2024. (Both cited from memory.)</li>
+        <li><a href="https://arxiv.org/abs/2603.03543">Tucano 2 Cool: Better Open Source LLMs for Portuguese</a>. arXiv 2603.03543, 2026 (preprint; AdamW plus Muon with a WSD schedule).</li>
+        <li><a href="https://arxiv.org/abs/2605.22432">AMUSE: Anytime Muon with Stable Gradient Evaluation</a>. arXiv 2605.22432, 2026 (preprint).</li>
+        <li><a href="https://neurips.cc/virtual/2026/poster/151558">Where Does Warm-Up Come From? Adaptive Scheduling for Norm-Constrained Optimizers</a>. NeurIPS 2026 poster.</li>
+        <li><a href="https://arxiv.org/abs/2601.05034">How to Set the Batch Size for Large-Scale Pre-training?</a> arXiv 2601.05034 (preprint). And <a href="https://arxiv.org/abs/2512.22382">Completed Hyperparameter Transfer across Modules, Width, Depth, Batch and Duration</a>, arXiv 2512.22382 (preprint).</li>
+        <li><a href="https://pytorch.org/docs/stable/optim.html">PyTorch documentation: torch.optim and learning-rate schedulers</a>. Practical reference.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F6: Overfitting, dropout and data augmentation (F6.3)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const SIG = L.sigmoid;
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+
+  // =====================================================================
+  // Simulation 1: what each loss prefers
+  // =====================================================================
+  const BASE = [92, 95, 98, 100, 101, 103, 104, 107, 110];
+  const S1 = { o: 400, d: 10 };
+  const meanBox = $("mean-chart");
+  function huberFit(xs, d) {
+    let lo = Math.min(...xs), hi = Math.max(...xs);
+    for (let i = 0; i < 60; i++) {
+      const c = (lo + hi) / 2;
+      let g = 0; xs.forEach(x => { g += L.clamp(c - x, -d, d); });
+      if (g > 0) hi = c; else lo = c;
+    }
+    return (lo + hi) / 2;
+  }
+  function renderMean() {
+    const xs = BASE.concat([S1.o]).sort((a, b) => a - b);
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const med = (xs[4] + xs[5]) / 2;
+    const hub = huberFit(xs, S1.d);
+    const W = Math.max(300, meanBox.clientWidth), H = 200, m = { l: 14, r: 14, t: 14, b: 34 };
+    const svg = mk(meanBox, W, H, "Ten daily withdrawal figures and the value each loss prefers");
+    const X = L.scale(80, 620, m.l, W - m.r);
+    [100, 200, 300, 400, 500, 600].forEach(v => {
+      L.svg("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(v), H - m.b + 16, String(v), { "text-anchor": "middle" });
+    });
+    tx(svg, W - m.r, H - 4, "AED thousand per day", { "text-anchor": "end" });
+    const yd = H - m.b - 14;
+    xs.forEach(v => {
+      const out = (v === S1.o) && (BASE.indexOf(v) < 0);
+      L.svg("circle", { cx: X(v), cy: yd, r: 6, class: "pt" + (out ? " out" : "") }, svg);
+    });
+    const rows = [["mk-mse", mean, "mean", "lbl-warn"], ["mk-mae", med, "median", "lbl-acc"], ["mk-hub", hub, "Huber", "lbl-ink"]];
+    rows.forEach((r, i) => {
+      const y0 = m.t + 8 + i * 38;
+      L.svg("line", { x1: X(r[1]), x2: X(r[1]), y1: y0, y2: y0 + 26, class: r[0] }, svg);
+      const right = X(r[1]) > W * 0.6;
+      tx(svg, X(r[1]) + (right ? -8 : 8), y0 + 18, r[2] + " " + r[1].toFixed(1), { class: r[3], "text-anchor": right ? "end" : "start" });
+    });
+    $("st1-mse").textContent = "AED " + mean.toFixed(1) + "k";
+    $("st1-mae").textContent = "AED " + med.toFixed(1) + "k";
+    $("st1-hub").textContent = "AED " + hub.toFixed(1) + "k";
+    $("st1-hub-s").textContent = "δ = " + S1.d + "k";
+    const gap = mean - med;
+    $("st1-gap").textContent = (gap >= 0 ? "+" : "") + gap.toFixed(1) + "k"; cls($("st1-gap-b"), Math.abs(gap) > 10 ? "bad" : "ok");
+    $("s1-verdict").innerHTML = Math.abs(gap) < 2
+      ? "With no real outlier all three agree within a couple of thousand. The choice only matters when the data are messy."
+      : "One day at <b>" + S1.o + "k</b> drags the squared-error answer to <b>" + mean.toFixed(1) + "k</b>, " + gap.toFixed(1) + "k above the median. Huber lands at <b>" + hub.toFixed(1) + "k</b>: " + (Math.abs(hub - med) < Math.abs(hub - mean) ? "closer to the median, since the outlier sits well past δ" : "closer to the mean, since δ is wide enough to treat the outlier as ordinary") + ". Whether that day is noise or a real funding event is the question that decides which is right.";
+  }
+  L.bind("s-out", v => v + "k", v => { S1.o = v; renderMean(); });
+  L.bind("s-del", v => v + "k", v => { S1.d = v; renderMean(); });
+
+  // =====================================================================
+  // Simulation 2: pinball / asymmetric cost
+  // =====================================================================
+  const MU = 100, SD = 15, IDLE = 5;
+  const S2 = { k: 0.6 };
+  const pinBox = $("pin-chart");
+  const phi = z => L.normPdf(z);
+  function invN(p) { let lo = -8, hi = 8; for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (L.normCdf(m) < p) lo = m; else hi = m; } return (lo + hi) / 2; }
+  function costAt(c, r) {
+    const z = (c - MU) / SD, a = IDLE * r, b = IDLE;
+    const short = SD * (phi(z) - z * (1 - L.normCdf(z))), idle = SD * (phi(z) + z * L.normCdf(z));
+    return a * short + b * idle;
+  }
+  function renderPin() {
+    const r = Math.pow(10, S2.k), tau = r / (r + 1), best = MU + SD * invN(tau);
+    const W = Math.max(300, pinBox.clientWidth), H = 280, m = { l: 52, r: 12, t: 20, b: 44 };
+    const svg = mk(pinBox, W, H, "Expected daily cost against the cash forecast");
+    const x0 = 55, x1 = 155;
+    const x = L.scale(x0, x1, m.l, W - m.r);
+    let cmax = 0; for (let c = x0; c <= x1; c += 1) cmax = Math.max(cmax, costAt(c, r));
+    const y = L.scale(0, cmax * 1.05, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+      const v = f * cmax;
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, L.fmtInt(v), { "text-anchor": "end" });
+    });
+    [60, 80, 100, 120, 140].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Cash forecast, AED million", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "AED thousand per day", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const area = [[x(x0), y(0)]];
+    for (let c = x0; c <= x1; c += 1) area.push([x(c), y(0) - 0.28 * (H - m.b - m.t) * phi((c - MU) / SD) / phi(0)]);
+    area.push([x(x1), y(0)]);
+    L.svg("path", { d: L.path(area) + " Z", class: "area-pdf" }, svg);
+    tx(svg, x(MU), y(0) - 6, "demand (shape only)", { "text-anchor": "middle", class: "lbl-ink" });
+    L.svg("line", { x1: x(MU), x2: x(MU), y1: m.t, y2: H - m.b, class: "ln-neu" }, svg);
+    L.svg("line", { x1: x(best), x2: x(best), y1: m.t, y2: H - m.b, class: "cv-opt" }, svg);
+    const pts = []; for (let c = x0; c <= x1; c += 1) pts.push([x(c), y(costAt(c, r))]);
+    L.svg("path", { d: L.path(pts), class: "ln-ink" }, svg);
+    L.svg("circle", { cx: x(best), cy: y(costAt(best, r)), r: 5.5, class: "cv-now" }, svg);
+    const right = x(best) > W * 0.62;
+    tx(svg, x(best) + (right ? -8 : 8), m.t + 10, "best " + best.toFixed(1), { class: "lbl-acc", "text-anchor": right ? "end" : "start" });
+    tx(svg, x(MU) + (x(best) - x(MU) < 30 && best >= MU ? -6 : 6), m.t + 24, "mean 100", { class: "lbl-ink", "text-anchor": (x(best) - x(MU) < 30 && best >= MU) ? "end" : "start" });
+
+    const cMean = costAt(MU, r), cBest = costAt(best, r);
+    $("st2-tau").textContent = pct(tau, 0);
+    $("st2-best").textContent = best.toFixed(1);
+    $("st2-mean").textContent = L.fmtInt(cMean); cls($("st2-mean-b"), cMean > 1.15 * cBest ? "bad" : "ok");
+    $("st2-qc").textContent = L.fmtInt(cBest);
+    $("st2-qc-s").textContent = cMean > cBest + 0.5 ? "saves " + pct(1 - cBest / cMean, 0) + " against the mean forecast" : "same as the mean forecast";
+    $("s2-verdict").innerHTML = r < 1.05
+      ? "Equal costs: over- and under-forecasting hurt the same, so the median (here also the mean) is the best forecast."
+      : "A shortfall costs <b>" + r.toFixed(1) + " times</b> idle cash, so the best forecast is the <b>" + pct(tau, 0) + " quantile</b>, AED <b>" + best.toFixed(1) + "m</b>: " + (best - MU).toFixed(1) + "m above the mean. An accurate-on-average forecast would run short on about half of all days and cost " + L.fmtInt(cMean) + "k a day against " + L.fmtInt(cBest) + "k.";
+  }
+  L.bind("s-r", v => { const r = Math.pow(10, v); return "×" + (r < 10 ? r.toFixed(1) : L.fmtInt(r)); }, v => { S2.k = v; renderPin(); });
+
+  // =====================================================================
+  // Simulation 3: cross-entropy vs squared error
+  // =====================================================================
+  const S3 = { z: -4.6 };
+  const ceBox = $("ce-chart");
+  function renderCe() {
+    const p = SIG(S3.z);
+    const W = Math.max(300, ceBox.clientWidth), H = 260, m = { l: 40, r: 12, t: 16, b: 44 };
+    const svg = mk(ceBox, W, H, "Loss against the probability given to a real fraud");
+    const YM = 6;
+    const x = L.scale(0, 1, m.l, W - m.r), y = v => L.scale(0, YM, H - m.b, m.t)(Math.min(v, YM));
+    [0, 2, 4, 6].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" }); });
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => tx(svg, x(v), H - m.b + 16, (v * 100) + "%", { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Probability the model gave to fraud (it is fraud)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Loss (clipped at 6)", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const ce = [], bs = [];
+    for (let q = 0.002; q <= 1.0001; q += 0.004) { ce.push([x(q), y(-Math.log(q))]); bs.push([x(q), y((1 - q) * (1 - q))]); }
+    L.svg("line", { x1: x(0), x2: x(0.5), y1: y(1), y2: y(1), class: "ln-neu" }, svg);
+    L.svg("line", { x1: x(0.5), x2: x(1), y1: y(0), y2: y(0), class: "ln-neu" }, svg);
+    L.svg("path", { d: L.path(bs), class: "ln-warn" }, svg);
+    L.svg("path", { d: L.path(ce), class: "ln-acc" }, svg);
+    const cey = -Math.log(p);
+    L.svg("line", { x1: x(p), x2: x(p), y1: m.t, y2: H - m.b, class: "cv-rule" }, svg);
+    L.svg("circle", { cx: x(p), cy: y(cey), r: 5.5, class: "cv-now" }, svg);
+    const right = x(p) > W * 0.6;
+    tx(svg, x(p) + (right ? -8 : 8), m.t + 12, "p = " + (p < 0.01 ? (100 * p).toFixed(2) : (100 * p).toFixed(1)) + "%", { class: "lbl-warn", "text-anchor": right ? "end" : "start" });
+
+    const bsl = (1 - p) * (1 - p), gce = 1 - p, gbs = 2 * p * (1 - p) * (1 - p);
+    $("st3-ce").textContent = cey.toFixed(2); cls($("st3-ce-b"), cey > 2.3 ? "bad" : "ok");
+    $("st3-bs").textContent = bsl.toFixed(3);
+    $("st3-gce").textContent = gce.toFixed(3); cls($("st3-gce-b"), gce > 0.5 ? "warn" : "ok");
+    $("st3-gbs").textContent = gbs.toFixed(3); cls($("st3-gbs-b"), gbs < 0.1 && p < 0.3 ? "bad" : "ok");
+    $("s3-verdict").innerHTML = p < 0.3
+      ? "The model is wrong with <b>" + (100 * (1 - p)).toFixed(1) + "%</b> confidence. Cross-entropy charges <b>" + cey.toFixed(2) + "</b> and pushes with strength <b>" + gce.toFixed(2) + "</b>. Squared error charges at most 1 and pushes with strength <b>" + gbs.toFixed(3) + "</b>: " + (gce / gbs).toFixed(0) + " times weaker. Training on it would be slow to fix exactly the mistakes that matter."
+      : "At this probability both losses are small and agree on the direction. The difference lives at the confident-and-wrong end.";
+  }
+  L.bind("s-p", v => { const q = SIG(v); return (100 * q < 1 ? (100 * q).toFixed(2) : (100 * q).toFixed(1)) + "%"; }, v => { S3.z = v; renderCe(); });
+
+  // =====================================================================
+  // Simulation 4: learning rate, schedule, batch size
+  // =====================================================================
+  const T = 400, SIG2 = 4, W0 = 3, WARM = 20;
+  const S4 = { k: -0.5, b: 1.2, sch: "cos" };
+  const lrBox = $("lr-chart");
+  function lrAt(t, peak, sch) {
+    const f = t / T;
+    if (sch === "const") return peak;
+    if (sch === "cos") return peak * 0.5 * (1 + Math.cos(Math.PI * f));
+    if (sch === "warm") return t < WARM ? peak * (t + 1) / WARM : peak * 0.5 * (1 + Math.cos(Math.PI * (t - WARM) / (T - WARM)));
+    const warm = t < WARM ? (t + 1) / WARM : 1;
+    return peak * warm * (f < 0.7 ? 1 : Math.max(0, (1 - f) / 0.3));
+  }
+  function simulate(peak, B, sch) {
+    const out = []; let m2 = W0 * W0;
+    for (let t = 0; t <= T; t++) {
+      out.push({ loss: 0.5 * m2, lr: t < T ? lrAt(t, peak, sch) : 0 });
+      if (t === T) break;
+      const e = out[t].lr;
+      m2 = (1 - e) * (1 - e) * m2 + e * e * SIG2 / B;
+      if (m2 > 1e12) m2 = 1e12;
+    }
+    return out;
+  }
+  function renderLr() {
+    const peak = Math.pow(10, S4.k), B = Math.pow(10, S4.b);
+    const Bn = Math.max(1, Math.round(B));
+    const run = simulate(peak, Bn, S4.sch);
+    const W = Math.max(300, lrBox.clientWidth), H = 290, m = { l: 48, r: 12, t: 16, b: 44 };
+    const svg = mk(lrBox, W, H, "Expected loss over 400 training steps");
+    const x = L.scale(0, T, m.l, W - m.r), lo = -3, hi = 1;
+    const y = v => L.scale(lo, hi, H - m.b, m.t)(L.clamp(Math.log10(Math.max(v, 1e-9)), lo, hi));
+    [[1e-3, "0.001"], [1e-2, "0.01"], [1e-1, "0.1"], [1, "1"], [10, "10"]].forEach(([v, s]) => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, s, { "text-anchor": "end" });
+    });
+    [0, 100, 200, 300, 400].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Training step", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Expected loss", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    const sy = L.scale(0, 1, H - m.b, m.t);
+    const lrl = []; for (let t = 0; t < T; t += 2) lrl.push([x(t), sy(run[t].lr / peak * 0.6)]);
+    L.svg("path", { d: L.path(lrl), class: "ln-neu" }, svg);
+    const ls = []; run.forEach((r, t) => { if (t % 2 === 0 || t === T) ls.push([x(t), y(r.loss)]); });
+    const diverged = peak >= 2 && S4.sch === "const";
+    L.svg("path", { d: L.path(ls), class: diverged ? "ln-bad" : "ln-ink" }, svg);
+
+    const fin = run[T].loss, mid = run[T / 2].loss;
+    let hit = -1; for (let t = 0; t <= T; t++) if (run[t].loss < 0.05) { hit = t; break; }
+    const blew = Math.max(...run.map(r => r.loss)) > 100;
+    const floor = peak < 2 ? 0.5 * peak * peak * SIG2 / Bn / (1 - (1 - peak) * (1 - peak)) : Infinity;
+    const fmtL = v => v >= 1e5 ? "diverged" : v >= 100 ? L.fmtInt(v) : v >= 1 ? v.toFixed(2) : v.toFixed(4);
+    $("st4-fin").textContent = fmtL(fin); cls($("st4-fin-b"), blew ? "bad" : fin < 0.01 ? "ok" : "warn");
+    $("st4-fin-s").textContent = "batch " + Bn + ", peak η " + peak.toFixed(3);
+    $("st4-hit").textContent = hit < 0 ? "never" : String(hit);
+    $("st4-mid").textContent = fmtL(mid);
+    $("st4-fl").textContent = isFinite(floor) ? fmtL(floor) : "none (unstable)"; cls($("st4-fl-b"), isFinite(floor) ? "" : "bad");
+    const nm = { const: "constant", cos: "cosine", warm: "warmup plus cosine", wsd: "warmup–stable–decay" }[S4.sch];
+    $("s4-verdict").innerHTML = blew
+      ? "Peak rate <b>" + peak.toFixed(2) + "</b> is above the stability limit of 2.0 for this bowl (h = 1). Each step overshoots by more than the last. " + (S4.sch === "const" ? "Lower the rate." : "A schedule that starts at zero or decays cannot rescue a peak this high: it runs unstable on the way.")
+      : S4.sch === "const"
+        ? "Constant rate: the loss falls quickly and then sits on a noise floor of about <b>" + fmtL(floor) + "</b>. It halves if you halve the rate or double the batch. A decaying schedule would remove most of it."
+        : "<b>" + nm[0].toUpperCase() + nm.slice(1) + "</b>: the loss reaches <b>" + fmtL(fin) + "</b> at step 400, against a constant-rate floor of <b>" + fmtL(floor) + "</b>. " + (S4.sch === "warm" || S4.sch === "wsd" ? "Warmup costs a few early steps here; in a deep network it is what keeps the first updates from wrecking the weights." : "Decay trades speed in the middle for precision at the end.");
+  }
+  L.bind("s-lr", v => "η " + Math.pow(10, v).toFixed(3), v => { S4.k = v; renderLr(); });
+  L.bind("s-b", v => String(Math.max(1, Math.round(Math.pow(10, v)))), v => { S4.b = v; renderLr(); });
+  document.querySelectorAll("[data-sch]").forEach(btn => btn.addEventListener("click", () => {
+    S4.sch = btn.getAttribute("data-sch");
+    document.querySelectorAll("[data-sch]").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+    renderLr();
+  }));
+
+  function renderAll() { renderMean(); renderPin(); renderCe(); renderLr(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

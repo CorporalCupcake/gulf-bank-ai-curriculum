@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bias, Variance and Generalisation, and the Regression Models That Keep Winning</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .truth { stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 5 4; fill: none; }
+  .fit { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .ghost { stroke: var(--accent); stroke-opacity: .17; stroke-width: 1.2; fill: none; }
+  .pt { fill: var(--ink); fill-opacity: .7; }
+  .tr-line { stroke: var(--neutral); stroke-width: 2.4; fill: none; }
+  .te-line { stroke: var(--warn); stroke-width: 2.4; fill: none; }
+  .floor { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; fill: none; }
+  .now-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .sel-bg { fill: var(--accent); fill-opacity: .1; }
+  .b-bias { fill: var(--warn); fill-opacity: .85; }
+  .b-var { fill: var(--bad); fill-opacity: .75; }
+  .b-noise { fill: var(--neutral); fill-opacity: .5; }
+  .cdot { fill: var(--neutral); fill-opacity: .55; }
+  .cmean { fill: var(--ink); }
+  .ctrue { stroke: var(--accent); stroke-width: 2.4; }
+  .czero { stroke: var(--muted); stroke-width: 1; }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F4 · Classical machine learning</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F4.1 · F4.2</span>
+        <span class="pill d">Day one</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Bias, Variance and Generalisation, and the Regression Models That Keep Winning</h1>
+      <p class="dek">Why a model that fits the past perfectly can be useless on tomorrow's customers, how error splits into three parts you can reason about, and why plain linear and logistic regression are still the baseline every fancier model has to beat.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model is only worth what it does on cases it has not seen, error on those cases comes from being too rigid (bias), too jumpy (variance) or from noise nobody can remove, and linear and logistic regression sit at the low-variance end where most bank data, with its few hundred or thousand real events, belongs.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Two junior credit analysts are each given the last 20 personal-loan files, with the outcome of each: repaid or defaulted. They are told to build a rule for the next 1,000 applicants.</p>
+        <p>The first analyst writes a rule so detailed that it reproduces all 20 outcomes: <em>"salary between AED 14,200 and 14,900, employer starts with 'A', applied on a Tuesday: default."</em> It is perfect on the 20 files. On the next 1,000 applicants it is close to random, because most of its detail was coincidence.</p>
+        <p>The second writes: <em>"the more of the limit someone already uses, and the more payments they have missed, the riskier they are."</em> It gets a few of the 20 wrong. On the next 1,000 it does about as well as it did on the 20.</p>
+        <p>The first analyst <strong>overfitted</strong>: learned the quirks of the sample as if they were the pattern. The second may have <strong>underfitted</strong> a little, ignoring real structure, but the rule travels. <strong>Generalisation</strong> is the word for travelling: performance on data the model was not built on. It is the only performance anyone pays for.</p>
+        <p>The simulation below makes it visible. A smooth curve generates the data, but every observation has noise added, like the random side of real customers' behaviour. You choose how flexible the fitted curve is.</p>
+      </div>
+
+      <figure class="figure" id="fig-fit">
+        <div class="fig-head"><span class="fig-title">Fit the sample, or fit the pattern</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> start with degree 3. Raise it to 12 and watch the training error fall towards zero while the test error climbs. Drop to degree 1: both errors are high and close together. Then press <b>Draw a new sample</b> and see which degrees give a similar curve each time. Finally cut the sample to 12 points and raise the degree.</p>
+        <div class="chart-wrap" id="fit-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Fitted curve</span>
+          <span><i style="background:var(--muted)"></i>True pattern (unknown in real life)</span>
+          <span><i class="sq" style="background:var(--ink)"></i>Training points</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s1-deg">Flexibility: polynomial degree <output for="s1-deg"></output></label><input type="range" id="s1-deg" min="1" max="12" step="1" value="3"></div>
+          <div class="ctl"><label for="s1-n">Training points <output for="s1-n"></output></label><input type="range" id="s1-n" min="12" max="80" step="1" value="20"></div>
+          <div class="ctl"><label for="s1-sig">Noise in the data <output for="s1-sig"></output></label><input type="range" id="s1-sig" min="0.1" max="0.6" step="0.05" value="0.3"></div>
+        </div>
+        <div class="btns" role="group" aria-label="Sample">
+          <button class="btn" type="button" id="b-new">Draw a new sample</button>
+        </div>
+        <div class="chart-wrap" id="deg-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--neutral)"></i>Error on the training points</span>
+          <span><i style="background:var(--warn)"></i>Expected error on new data</span>
+          <span><i style="background:var(--muted)"></i>Noise floor (cannot be beaten)</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Training error</div><div class="v" id="st1-tr"></div><div class="s">mean squared error on the sample</div></div>
+          <div class="stat" id="st1-te-b"><div class="k">Error on new data</div><div class="v" id="st1-te"></div><div class="s">expected, including noise</div></div>
+          <div class="stat"><div class="k">Noise floor</div><div class="v" id="st1-fl"></div><div class="s">the best any model could do</div></div>
+          <div class="stat"><div class="k">Best degree for this sample</div><div class="v" id="st1-best"></div><div class="s" id="st1-best-s"></div></div>
+        </div>
+        <div class="verdict" id="s1-verdict"></div>
+        <p class="sim-note">Simulated: the pattern is sin(2.5x) + 0.3x for x between −1 and 1, with Gaussian noise. Each model is an ordinary least-squares polynomial. "Error on new data" is the exact average over 201 evenly spaced new x values of (fit − pattern)², plus the noise variance. The curves are clipped at the top of the chart; the sample is fixed until you press the button.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to take from it.</p>
+        <ul>
+          <li><strong>Training error always improves with flexibility.</strong> A flexible enough model can pass through every point. So training error cannot tell you which model is good. It can only tell you a model is bad.</li>
+          <li><strong>Error on new data is U-shaped.</strong> Too rigid and the model misses structure. Too flexible and it chases noise. The best model is in the middle, and where the middle sits depends on how much data you have and how noisy it is.</li>
+          <li><strong>There is a floor.</strong> The noise line is the error of a model that knows the true pattern exactly. A bank model predicting default will never get near zero, because whether this customer loses their job next month is not in the data. Trying to beat the floor is how people end up overfitting.</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Never judge a model on the data it was fitted to. Ask what it does on data it never touched, and how that changes as you make the model more complex or give it more data. The rest of this lesson is the machinery behind that question, followed by the two simple models that win it more often than people expect.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-gap">Generalisation: what you want, and what you can measure</h3>
+      <div class="prose">
+        <p>Suppose the world produces pairs (x, y): customer features and an outcome. A model f̂ learned from a sample has a <em>true</em> error, its average loss over everything the world could produce. You will never see it. What you see is the average loss on your sample, the <strong>training error</strong>, and on any held-back sample, the <strong>test error</strong>.</p>
+        <p>Training error is optimistic, because the model was chosen to make it small. The gap between the two is the <strong>generalisation gap</strong>, and it grows with model flexibility and shrinks with sample size. That is the whole story of Simulation 1 in one sentence.</p>
+        <p>This is why every serious workflow has three data sets with three jobs:</p>
+        <ul>
+          <li><strong>Training set</strong>: the model learns its parameters here.</li>
+          <li><strong>Validation set</strong>: you compare models and settings here (degree, penalty, tree depth). Every choice you make using it leaks a little information from it into the model.</li>
+          <li><strong>Test set</strong>: touched once, at the end, to report the number. If you keep going back to it, it becomes a second validation set and the reported number is optimistic.</li>
+        </ul>
+        <p>F3.1 covers leakage in depth and the cross-validation lesson (<a href="f4-cross-validation-including-temporal-splits.html">F4.5</a>) covers how to do this when data is scarce or ordered in time. For a bank, the test set must come <em>later in time</em> than the training set, because the model will be used on the future. A random split of a drifting process lets the model peek at the period it is being tested on.</p>
+      </div>
+
+      <h3 class="sub" id="m-decomp">Bias, variance and noise</h3>
+      <div class="prose">
+        <p>Now take the question one level deeper. Imagine you could draw many independent training samples from the world, fit the same kind of model to each, and look at the predictions at one fixed point x. You would get a cloud of different predictions. Two things about the cloud matter:</p>
+        <ul>
+          <li><strong>Bias</strong>: how far the <em>centre</em> of the cloud is from the truth. A straight line fitted to a curved pattern is wrong in the same direction every time, whatever the sample. More data will not fix it. Only a more flexible model will.</li>
+          <li><strong>Variance</strong>: how widely the cloud <em>spreads</em>. A flexible model reshapes itself around each sample's noise, so each sample gives a different answer. More data narrows the cloud. A less flexible model, or a penalty, narrows it too.</li>
+        </ul>
+        <p>Add the noise in the outcome itself, and the expected squared error at a point splits cleanly into three:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>E</mi><mo stretchy="false">[</mo><mo stretchy="false">(</mo><mi>y</mi><mo>−</mo><mover><mi>f</mi><mo>^</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><msup><mo stretchy="false">)</mo><mn>2</mn></msup><mo stretchy="false">]</mo><mo>=</mo><msup><mrow><mo stretchy="false">(</mo><mtext>bias</mtext><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>+</mo><mtext>variance</mtext><mo>+</mo><msup><mi>σ</mi><mn>2</mn></msup></math>
+        <p class="where">Bias is the gap between the <em>average</em> fitted value (over many samples) and the true value. Variance is how much a single fitted value wanders around that average. σ² is the noise in y that no model can explain. The identity is exact for squared error. For other losses, such as log loss or classification error, the same intuition holds but the clean three-way split does not.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The trade-off is that the things which reduce bias (more features, more flexibility, deeper trees) generally raise variance, and the reverse. The best model minimises the <em>sum</em>. Geman, Bienenstock and Doursat set this out in 1992, and it is still the right first lens. The simulation below fits the same model type to 80 fresh samples and measures all three terms directly.</p>
+      </div>
+
+      <figure class="figure" id="fig-bv">
+        <div class="fig-head"><span class="fig-title">Measuring bias and variance across many samples</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> at degree 1 the faint curves lie almost on top of each other, but their centre (the solid line) is far from the dashed truth: that is bias. At degree 10 the centre sits right on the truth but the faint curves fly everywhere: that is variance. Then lower the training points to 15 and see where the best degree moves, and raise noise to 0.6.</p>
+        <div class="chart-wrap" id="bv-fits"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent);opacity:.3"></i>30 of the 80 fits, each from its own sample</span>
+          <span><i style="background:var(--accent)"></i>Average of all 80 fits</span>
+          <span><i style="background:var(--muted)"></i>True pattern</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s2-deg">Flexibility: polynomial degree <output for="s2-deg"></output></label><input type="range" id="s2-deg" min="1" max="10" step="1" value="2"></div>
+          <div class="ctl"><label for="s2-n">Training points per sample <output for="s2-n"></output></label><input type="range" id="s2-n" min="12" max="100" step="1" value="30"></div>
+          <div class="ctl"><label for="s2-sig">Noise in the data <output for="s2-sig"></output></label><input type="range" id="s2-sig" min="0.1" max="0.6" step="0.05" value="0.3"></div>
+        </div>
+        <div class="chart-wrap" id="bv-bars"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--warn)"></i>Bias squared</span>
+          <span><i class="sq" style="background:var(--bad)"></i>Variance</span>
+          <span><i class="sq" style="background:var(--neutral)"></i>Noise (fixed)</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Bias squared</div><div class="v" id="st2-b"></div><div class="s">centre of the fits vs the truth</div></div>
+          <div class="stat"><div class="k">Variance</div><div class="v" id="st2-v"></div><div class="s">spread of the fits around their centre</div></div>
+          <div class="stat"><div class="k">Noise</div><div class="v" id="st2-s"></div><div class="s">same for every model</div></div>
+          <div class="stat" id="st2-t-b"><div class="k">Expected error on new data</div><div class="v" id="st2-t"></div><div class="s" id="st2-t-s"></div></div>
+        </div>
+        <div class="verdict" id="s2-verdict"></div>
+        <p class="sim-note">Simulated: same pattern and polynomial fits as Simulation 1. For each degree, 80 independent training samples of the chosen size. Bias² and variance are averaged over 41 evenly spaced x values between −1 and 1; bias² uses the average of the 80 fits, so with 80 samples it carries a small estimation error. Bars above the top of the chart are clipped (marked with a triangle). Very flexible models on very few points blow up, which is real behaviour, not a bug.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What moves each term, in practice:</p>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>You do this</th><th>Bias</th><th>Variance</th><th>Typical bank example</th></tr></thead>
+            <tbody>
+              <tr><td>Add features or interactions</td><td>Down</td><td>Up</td><td>Adding 400 transaction-behaviour features to a 30-variable scorecard</td></tr>
+              <tr><td>Allow deeper trees or bigger networks</td><td>Down</td><td>Up</td><td>Boosting rounds past the point where validation loss turns up</td></tr>
+              <tr><td>Add a penalty (ridge, lasso) or early stopping</td><td>Up a little</td><td>Down a lot</td><td>Shrinking coefficients when predictors are correlated (Simulation 3)</td></tr>
+              <tr><td>Get more rows</td><td>Same</td><td>Down</td><td>Another two years of loan history</td></tr>
+              <tr><td>Get more <em>events</em> (more defaults, more confirmed fraud)</td><td>Same</td><td>Down, and this is the one that counts</td><td>Rare outcomes: see <a href="f3-imbalanced-data.html">F3.5</a></td></tr>
+              <tr><td>Average many models (bagging, forests)</td><td>Same</td><td>Down</td><td><a href="f4-decision-trees-random-forests-and.html">F4.3</a></td></tr>
+              <tr><td>Remove noisy or leaky inputs</td><td>Same</td><td>Down</td><td>Dropping a free-text field that varies by branch clerk</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Two caveats to hold alongside the picture. First, "bias" here means <em>modelling</em> bias, a model too simple for the pattern. It is a different thing from social or unfairness bias (G2), and mixing them up in a meeting is a common slip. Second, the classical U-curve is not the final word for very large models: with enough parameters, test error can come down a second time. Part 4 covers that ("double descent"). For the tabular models in a bank's day-to-day work, the classical picture is the working one.</p>
+      </div>
+
+      <h3 class="sub" id="m-linear">Linear regression: the model that fits in one line</h3>
+      <div class="prose">
+        <p>Linear regression predicts a number as a weighted sum of inputs: income, balance, tenure, each with a coefficient. "Fitting" picks the coefficients that make squared prediction errors on the training set as small as possible. For this one model, the answer is a formula, not a search:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mover><mi>β</mi><mo>^</mo></mover><mo>=</mo><msup><mrow><mo stretchy="false">(</mo><msup><mi>X</mi><mi>T</mi></msup><mi>X</mi><mo stretchy="false">)</mo></mrow><mrow><mo>−</mo><mn>1</mn></mrow></msup><msup><mi>X</mi><mi>T</mi></msup><mi>y</mi></math>
+        <p class="where">X is the table of inputs (one row per customer, plus a column of ones for the intercept), y the column of outcomes. This is the "normal equation": it is what the polynomial fits in Simulations 1 and 2 solve. It requires XᵀX to be invertible, which fails if one input is an exact copy of another, and wobbles if two are nearly copies.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Why this model earns its place:</p>
+        <ul>
+          <li><strong>Each coefficient has a plain reading.</strong> "Holding the other inputs fixed, AED 1,000 more monthly income goes with AED 380 more average card spend." The words <em>holding the other inputs fixed</em> are doing real work: the coefficient is not the raw relationship, it is the relationship after the other inputs have taken their share. F2.5 and F2.4 cover this and confounding.</li>
+          <li><strong>It comes with uncertainty built in.</strong> Each coefficient has a standard error, so you can say "0.5, give or take 0.2". That is seldom available from a boosted tree without extra work.</li>
+          <li><strong>Low variance by design.</strong> With p inputs and n rows, the typical gap between training and test error is about p/n of the noise. Ten inputs, 1,000 rows: a 1% effect. A flexible model has no such guarantee.</li>
+          <li><strong>It extrapolates predictably.</strong> A forest cannot predict above the highest value it has seen. A linear model continues the line, which is sometimes exactly what you want and sometimes a disaster. Either way you know what it will do.</li>
+        </ul>
+        <p>Its bias is the price: it assumes the effect of each input is a straight line and does not depend on the others. Real patterns often bend (risk rises faster once utilisation passes 80%) and interact (a missed payment matters more for a new customer). Two cheap repairs keep the model linear <em>in its coefficients</em> while letting it bend: add transformed inputs (log of income, a squared term, bands of age) and add a small number of chosen interactions. This is exactly what the polynomial in Simulation 1 is doing: still linear regression, with columns 1, x, x², x³.</p>
+        <p>Where it breaks. Strongly correlated inputs make coefficients unstable though predictions remain fine (the next sub shows it). Outliers pull the line, because squared error punishes big misses heavily. Predicting something bounded, like a probability, with a straight line gives answers below 0 or above 1. That last point is the reason for the next model.</p>
+      </div>
+
+      <h3 class="sub" id="m-logistic">Logistic regression: the same idea for yes or no</h3>
+      <div class="prose">
+        <p>For an outcome that is repaid/defaulted or fraud/not-fraud, we want a probability between 0 and 1. Logistic regression keeps the weighted sum but pushes it through an S-shaped curve. The weighted sum is read as <strong>log-odds</strong>:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>ln</mi><mfrac><mi>p</mi><mrow><mn>1</mn><mo>−</mo><mi>p</mi></mrow></mfrac><mo>=</mo><msub><mi>β</mi><mn>0</mn></msub><mo>+</mo><msub><mi>β</mi><mn>1</mn></msub><msub><mi>x</mi><mn>1</mn></msub><mo>+</mo><msub><mi>β</mi><mn>2</mn></msub><msub><mi>x</mi><mn>2</mn></msub><mo>+</mo><mo>…</mo><mspace width="1em"/><mo>⇔</mo><mspace width="1em"/><mi>p</mi><mo>=</mo><mfrac><mn>1</mn><mrow><mn>1</mn><mo>+</mo><msup><mi>e</mi><mrow><mo>−</mo><mi>z</mi></mrow></msup></mfrac></math>
+        <p class="where">Odds are p ÷ (1 − p): a 20% chance is odds of 1 to 4, or 0.25. Taking the log makes odds symmetric around zero (50% is 0; 20% is about −1.39; 80% is +1.39). z is the weighted sum. Coefficients add on the log-odds scale, so they multiply on the odds scale.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>That last point is how you read it. A coefficient of 0.9 on "missed payments, in standard deviations" means each extra standard deviation multiplies the default <em>odds</em> by e^0.9 ≈ 2.46. If someone starts at 5% (odds 0.0526), they move to odds 0.129, which is 11.5%. The same coefficient on someone starting at 40% moves them to 62%. Equal odds ratio, unequal change in probability, because the S-curve is steeper in the middle. Never quote a logistic coefficient as "adds X points of probability" without saying where on the curve.</p>
+        <p>How it is fitted. There is no closed-form answer, so the software searches for the coefficients that make the observed outcomes most probable (<em>maximum likelihood</em>, F1.7), which is the same as minimising <strong>log loss</strong>: a penalty of −ln(p) when the event happened and p was what you predicted. Confident wrong answers are punished heavily: predicting 1% for something that happens costs 4.6, predicting 40% costs 0.9. The search is a few rounds of weighted linear regression (Newton's method), and it is convex, so there is one best answer and no unlucky starting point. F2.5 and <a href="f1-likelihood-entropy.html">F1.7</a> have the underlying ideas.</p>
+        <p>What makes it bank-friendly:</p>
+        <ul>
+          <li><strong>Well calibrated by default.</strong> Fitted by likelihood, its probabilities usually mean what they say on data like the training data, which matters for provisioning and pricing (<a href="f7-precision-recall-thresholds-calibration.html">F7.4</a>). Boosted trees and neural nets often need recalibrating.</li>
+          <li><strong>The scorecard.</strong> Credit scorecards are logistic regression on binned inputs, with each bin's points taken from its coefficient. A score of 620 and a point table are an audit trail the validator and the regulator can follow line by line.</li>
+          <li><strong>Constraints are easy.</strong> If policy says higher income should never raise risk, you check the sign. With a flexible model you need monotonic constraints to guarantee it.</li>
+          <li><strong>Stable.</strong> Retrain next quarter and the coefficients move a little, not everywhere.</li>
+        </ul>
+        <p>Two failure modes to know cold. <strong>Separation</strong>: if some input perfectly splits defaulters from non-defaulters in the training data (it happens with a handful of events and a sparse category), the likelihood keeps improving as the coefficient grows, so software returns a huge coefficient or does not converge. Penalising the coefficients fixes it. <strong>Too many inputs for the events</strong>: only the minority outcome carries information about the boundary, so 60 defaults cannot support 40 inputs. The old rule of thumb is 10 events per candidate variable. Riley and colleagues (BMJ, 2020) give better, calculable minimum sample sizes. Their message is that it depends on the number of inputs, the event rate and the expected fit, and that 10 is sometimes too few.</p>
+      </div>
+
+      <h3 class="sub" id="m-reg">Taming variance: the ridge penalty in action</h3>
+      <div class="prose">
+        <p>Regularisation is the deliberate trade of a little bias for a lot less variance. <strong>Ridge</strong> (L2) adds to the loss a penalty proportional to the sum of squared coefficients, so the optimiser prefers small coefficients unless the data insists. <a href="f4-decision-trees-random-forests-and.html">F4.4</a> covers L1, L2 and early stopping properly; here is the effect in the setting where it helps most.</p>
+        <p>A loan model has five standardised inputs: utilisation, debt-to-income (which moves almost in lockstep with utilisation, correlation 0.9), missed payments, and two inputs that are pure noise. The true effects are known because we generated the data. We fit logistic regression to 30 independent samples and plot where each coefficient lands.</p>
+      </div>
+
+      <figure class="figure" id="fig-lr">
+        <div class="fig-head"><span class="fig-title">Thirty refits of the same logistic regression</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> set the sample to about 150 applicants with no penalty. Utilisation and debt-to-income wander over a wide range, sometimes even with opposite signs, while their <em>sum</em> stays much tighter, because the data cannot tell the two apart but can tell their joint effect. Move the penalty up: the dots tighten and the test log loss typically improves a little, until you shrink too far and the dark dots drift toward zero (bias). Then raise the sample to 2,000 and see how little the penalty matters.</p>
+        <div class="chart-wrap" id="lr-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral);opacity:.6"></i>One refit's coefficient</span>
+          <span><i class="sq" style="background:var(--ink)"></i>Average of the 30</span>
+          <span><i style="background:var(--accent)"></i>True value used to generate the data</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s3-n">Applicants in each training sample <output for="s3-n"></output></label><input type="range" id="s3-n" min="1.8" max="3.3" step="0.05" value="2.2"></div>
+          <div class="ctl"><label for="s3-lam">Ridge penalty <output for="s3-lam"></output></label><input type="range" id="s3-lam" min="0" max="4" step="0.1" value="0"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-te-b"><div class="k">Log loss on new applicants</div><div class="v" id="st3-te"></div><div class="s" id="st3-te-s"></div></div>
+          <div class="stat"><div class="k">Log loss on the training sample</div><div class="v" id="st3-tr"></div><div class="s">always lower: the model has seen it</div></div>
+          <div class="stat"><div class="k">Spread of utilisation coefficient</div><div class="v" id="st3-su"></div><div class="s">standard deviation over 30 refits</div></div>
+          <div class="stat"><div class="k">Spread of utilisation + debt-to-income</div><div class="v" id="st3-ss"></div><div class="s">the combined effect the data can pin down</div></div>
+        </div>
+        <div class="verdict" id="s3-verdict"></div>
+        <p class="sim-note">Simulated: five standardised inputs, true log-odds −2.5 + 0.7·utilisation + 0.5·debt-to-income + 0.9·missed payments + 0·noise A + 0·noise B (default rate roughly 14%). Debt-to-income is 0.9 times utilisation plus independent noise. Each fit is ordinary penalised logistic regression by Newton's method (penalty λ/2 times the sum of squared coefficients, none on the intercept), shown as the median over 30 samples; log loss is measured on 3,000 fresh applicants. Coefficients outside the plotted range are drawn at the edge. The penalty scale is logarithmic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The lesson inside the picture: <strong>when inputs are correlated, individual coefficients are fragile but predictions are not</strong>. A model with two correlated inputs and wildly different coefficients can predict equally well. This is why you should not tell a business owner "debt-to-income matters more than utilisation" from raw coefficients, and why explanation tools (<a href="f8-global-versus-local-explanations.html">F8.1</a>) are not a free fix: they inherit the same ambiguity.</p>
+      </div>
+
+      <h3 class="sub" id="m-baseline">Why the simple model is the baseline you must beat</h3>
+      <div class="prose">
+        <p>On tabular data with a few thousand to a few hundred thousand rows and a modest number of events, a regularised linear or logistic model is often within a hair of the most complex alternative. The reasons follow directly from the machinery above: few events means variance is the binding constraint; noisy outcomes mean a high noise floor, which leaves little room for extra flexibility to help; and interpretable inputs have been engineered by decades of credit practice to be roughly linear on the log-odds scale.</p>
+        <p>The honest summary of the evidence is mixed, and you should be able to say so. A large benchmark of credit-scoring algorithms (Lessmann and colleagues, 2015) found that ensembles of trees did beat logistic regression on average, with a margin that was real but not huge. A systematic review of clinical risk models (Christodoulou and colleagues, 2019) found no consistent benefit of machine learning over logistic regression once study quality was accounted for. Both agree on the practical rule: <strong>always build the regularised regression first</strong>. It sets the bar, shows how much signal is in the data, and gives a validator something to compare against. If a boosted model beats it by one point of AUC but is a hundred times harder to explain, you have a business question, not just a modelling one. That question is the subject of <a href="c1-baselines-what-happens-without-the.html">C1.2</a>.</p>
+        <p>The flip side: when the gap is large, take it seriously. Interactions and non-linearities in transaction data (velocity, merchant, device, time of day) are why fraud models are mostly tree ensembles, and why linear models are not where you stop for them.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>The bias-variance idea is the thread that runs through almost every modelling decision. These are the places it comes back.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F3.1 · Leakage and point-in-time</span><span class="t"><a href="f3-leakage-point-in-time.html">Honest test sets</a></span><p>Generalisation means nothing if information from the future or from the target leaks into training. A leaked model has low bias, low variance and zero value.</p></div>
+        <div class="link-card"><span class="code">F4.3 · F4.4 · Trees, boosting, regularisation</span><span class="t"><a href="f4-decision-trees-random-forests-and.html">Controlling flexibility</a></span><p>Tree depth, number of boosting rounds, L1 and L2 penalties are all dials on this trade-off. Forests reduce variance by averaging; boosting reduces bias step by step.</p></div>
+        <div class="link-card"><span class="code">F4.5 · Cross-validation</span><span class="t"><a href="f4-cross-validation-including-temporal-splits.html">Estimating generalisation with little data</a></span><p>Repeats the train/validate split to get a stable estimate. For ordered data it must respect time.</p></div>
+        <div class="link-card"><span class="code">F4.9 · Hyperparameter tuning</span><span class="t"><a href="f4-hyperparameter-tuning-grid-random-and.html">Choosing the dial setting</a></span><p>Tuning is a search over flexibility settings. Search long enough on one validation set and you overfit to it.</p></div>
+        <div class="link-card"><span class="code">F6.3 · Overfitting in deep nets</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">Same trade-off, bigger models</a></span><p>Dropout, augmentation and early stopping are regularisation for networks. Reading the training and validation loss curves is reading Simulation 1.</p></div>
+        <div class="link-card"><span class="code">F2.5 · Regression and GLMs</span><span class="t"><a href="f2-regression-glms.html">The statistics view of the same models</a></span><p>Standard errors, hypothesis tests on coefficients and the link-function family. This lesson is the prediction view; F2.5 is the inference view.</p></div>
+        <div class="link-card"><span class="code">F1.7 · Likelihood and entropy</span><span class="t"><a href="f1-likelihood-entropy.html">Why log loss</a></span><p>Fitting by maximum likelihood is minimising log loss. Cross-entropy in neural networks is the same quantity.</p></div>
+        <div class="link-card"><span class="code">F7.1 – F7.4 · Metrics and calibration</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Measuring the test error well</a></span><p>Picking the right test-set number (AUC, log loss, precision at capacity) and checking that probabilities mean what they say.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">When the test set changes under you</a></span><p>Generalisation is to data from the same process. Drift is the process changing. The low-variance model is not safer against drift, only against noise.</p></div>
+        <div class="link-card"><span class="code">F8 · Explanation</span><span class="t"><a href="f8-global-versus-local-explanations.html">Reading a model's reasons</a></span><p>A regression's coefficients are its explanation. Whatever you replace it with, the explanation must be rebuilt, and Simulation 3 shows why correlated inputs make it fragile.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Credit scorecards and PD models.</strong> Logistic regression on binned, monotone inputs is still the workhorse for retail probability of default. It feeds into capital and provisioning (<a href="b4-pd-lgd-ead-and-expected.html">B4.1</a>, <a href="b4-ifrs-9-staging-and-expected.html">B4.2</a>) where stable, explainable, well-calibrated probabilities matter more than the last point of AUC.</li>
+          <li><strong>Fraud and AML.</strong> Rare events and an arms race: variance from too few positives is the main risk (<a href="f3-imbalanced-data.html">F3.5</a>), but the non-linear structure means boosted trees win, with a logistic baseline as the sanity check.</li>
+          <li><strong>Churn, propensity and next-best-offer.</strong> Moderate event rates, many features. Regularised logistic regression with a few engineered interactions is a strong first model and a fine production model.</li>
+          <li><strong>Forecasting balances and income.</strong> Linear regression with seasonality and holiday terms (Ramadan, Eid, salary days) is a strong baseline for deposit and cash forecasts.</li>
+          <li><strong>Model validation.</strong> Independent validators will ask for the benchmark model, the out-of-time test and the stability of coefficients. All three are in this lesson (<a href="g3-independent-validation.html">G3.2</a>).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The classical picture is textbook, but three live arguments sit on top of it: whether huge models break the U-curve, whether simple models are as good as people claim for high-stakes decisions, and whether a new kind of pre-trained model for tables makes the whole classical toolkit obsolete on small data.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with one light search (tabular foundation models). Earlier items are from memory of the published papers; check them before you quote precise claims.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1992</span><div><div class="t">The bias/variance dilemma</div><p>Geman, Bienenstock and Doursat set out the decomposition for neural networks and framed learning as a trade-off between flexibility and stability.</p><div class="src">Geman et al., Neural Computation, 1992</div></div></li>
+        <li><span class="yr">2019</span><div><div class="t">Double descent</div><p>Belkin and colleagues showed that as models grow past the point where they can fit the training data exactly, test error can fall a second time. Nakkiran and colleagues found the same in modern deep networks, as a function of model size, training time and data size. The classical U-curve describes the first part; it is not wrong, it is incomplete for very large models.</p><div class="src">Belkin et al., PNAS, 2019; Nakkiran et al., arXiv 1912.02292 (ICLR 2020)</div></div></li>
+        <li><span class="yr">2019</span><div><div class="t">Interpretable models for high-stakes decisions</div><p>Cynthia Rudin argued that for decisions like credit and criminal justice you should build inherently interpretable models rather than explain black boxes after the fact, and that the accuracy cost is often small on structured data.</p><div class="src">Rudin, Nature Machine Intelligence, 2019</div></div></li>
+        <li><span class="yr">2020</span><div><div class="t">Benign overfitting in linear regression</div><p>Bartlett and colleagues characterised when a linear model that fits noisy training data exactly can still predict well: with many weak directions in the data, the noise gets spread so thinly it barely harms. A theoretical explanation of why big models can interpolate and still generalise.</p><div class="src">Bartlett et al., PNAS, 2020</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Trees still beat deep nets on typical tabular data</div><p>Grinsztajn, Oyallon and Varoquaux benchmarked tree ensembles against neural networks on medium-sized tabular data sets and found trees ahead, even before accounting for tuning cost. Reasons offered: tabular features are often irregular, uninformative features hurt networks, and the useful structure is not rotation-invariant.</p><div class="src">Grinsztajn et al., NeurIPS Datasets and Benchmarks, 2022 (arXiv 2207.08815)</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">A pre-trained model for small tables</div><p>TabPFN, trained on millions of synthetic data sets, predicts in a single forward pass with no per-data-set training. The Nature paper reported that it beat gradient-boosted trees tuned for four hours on data sets up to about 10,000 rows. It is, in effect, a learned replacement for choosing the right bias.</p><div class="src">Hollmann et al., Nature, 2025</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Larger tabular foundation models, mixed independent evidence</div><p>A vendor technical report for TabPFN-3 claims leadership up to one million training rows over tuned boosted trees. An independent-looking comparison across 19 data sets found tabular foundation models first on small data, a near tie on large data, and plain logistic regression beating all of them on one high-cardinality categorical task. Treat the first as a claim, the second as indicative; neither is a banking study.</p><div class="src">TabPFN-3 technical report, arXiv 2605.13986 (vendor); AIMultiple tabular benchmark, 2026</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Logistic regression scorecards</b></td><td>Binned inputs, point tables, monotone checks, calibrated PDs for retail credit.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Regularised regression as the benchmark model</b></td><td>Built first and kept for validators, even when a boosted model is deployed.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Boosted trees with monotone constraints</b></td><td>Flexible fit with policy-consistent directions. Common in fraud and increasingly in credit where regulators allow it.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Interpretable-by-design flexible models</b></td><td>Generalised additive models with pairwise terms, sparse scoring systems.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Tabular foundation models (TabPFN family)</b></td><td>Strong on small data in published benchmarks. Explainability, validation and licensing treatment in regulated settings is unsettled.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Double-descent thinking for tabular models</b></td><td>Relevant to huge networks. Rarely changes how a bank sizes a logistic regression or a boosted tree.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Start with a regularised linear or logistic baseline, measure honestly out of time, move to flexible models only where they beat it by a margin that survives intervals and justifies the loss of transparency, and keep the baseline in the model file.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in bank analyses and in AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Reporting training performance</div><p>"AUC 0.97." On what data? A deep tree or an unregularised wide model scores near perfect on its own training set.</p><div class="spot"><b>Spot it</b>Ask for the same number on a held-out, later-in-time sample. A big gap is overfitting.</div></li>
+        <li><div class="t">Tuning on the test set</div><p>Trying twenty settings, keeping the one with the best test score, and reporting that score. The test set has become part of training.</p><div class="spot"><b>Spot it</b>Ask how many models were compared and which data chose between them. There should be a validation set, or cross-validation, separate from the final test.</div></li>
+        <li><div class="t">Random split on time-ordered data</div><p>Neat results, poor first quarter live. Customers and conditions from the "future" were in training.</p><div class="spot"><b>Spot it</b>Ask for an out-of-time test. If performance drops sharply, the random split was lenient.</div></li>
+        <li><div class="t">Too many inputs for the events</div><p>200 candidate features, 90 defaults. The model fits noise that happens to correlate with the outcome.</p><div class="spot"><b>Spot it</b>Compare the number of candidate inputs to the number of <em>events</em>, not rows. Check that selection happened inside the training fold.</div></li>
+        <li><div class="t">Selecting features on the full data, then cross-validating</div><p>The selection step has seen the outcome of every row. Cross-validation then looks excellent and means nothing.</p><div class="spot"><b>Spot it</b>Ask where feature selection sits in the pipeline. It must be repeated inside each training fold.</div></li>
+        <li><div class="t">Reading correlated coefficients as importance</div><p>"Debt-to-income is twice as important as utilisation" when the two are 90% correlated.</p><div class="spot"><b>Spot it</b>Check input correlations and variance inflation factors. Refit on a resample: if the coefficient flips or halves, it is not telling you what you think.</div></li>
+        <li><div class="t">Quoting a logistic coefficient as a change in probability</div><p>"Each missed payment adds 9 points of default risk." It multiplies odds; the probability change depends where you start.</p><div class="spot"><b>Spot it</b>Ask "from what baseline?" If there is no answer, ask for the odds ratio instead.</div></li>
+        <li><div class="t">Mistaking a flexible model's win for a real one</div><p>Boosted model beats the logistic baseline by 0.4 points of AUC on 120 defaults.</p><div class="spot"><b>Spot it</b>Ask for a bootstrap interval on the difference (F2.2). With few events it often contains zero.</div></li>
+        <li><div class="t">Believing more data always helps</div><p>Adding another 10 million legitimate rows to a model whose problem is that it has 300 fraud cases.</p><div class="spot"><b>Spot it</b>Ask how the learning curve looks: validation error against training-set size. If it is flat, more of the same data will not help. Plot it by <em>events</em>.</div></li>
+        <li><div class="t">Confusing modelling bias with unfairness</div><p>"The model has high bias" heard in a risk meeting as "the model discriminates".</p><div class="spot"><b>Spot it</b>Say which one you mean. Use "underfits" for the statistical meaning, and "disparate impact" for the fairness one.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“A model that is perfect on last year's data is not necessarily good. It may have memorised last year. We test every model on a later period it never saw, and we only trust that number. For this problem the simple, transparent model gets us most of the way, and we'll only adopt a more complex one if it beats the simple one by enough to justify losing the explanation. I'll bring both numbers, with a margin of error.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd begin with a penalised logistic regression on well-engineered, monotone inputs as the benchmark, evaluated out of time, with log loss, AUC and calibration. Candidate flexible models are compared by repeated time-aware validation and bootstrap intervals on the difference. I watch variance first, because the binding constraint is the number of events, not rows. I check coefficient stability across resamples before reading any of them as drivers.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“What is overfitting, in one sentence?”</summary><div class="ans"><p>The model has learned the noise and quirks of the training sample as if they were the pattern, so it does better on data it has seen than on data it has not. The symptom is a gap between training and held-out performance that widens as the model gets more flexible.</p></div></details>
+        <details class="reveal"><summary>“Is the bias-variance trade-off still true for modern deep learning?”</summary><div class="ans"><p>It is a good description of classical models and of most tabular work. For very large networks, test error can fall again beyond the point of fitting the training data exactly, the so-called double descent, so the simple U-curve is incomplete there. The practical lessons survive: regularise, validate on unseen data, and do not trust training error.</p></div></details>
+        <details class="reveal"><summary>“Why not just use XGBoost for everything?”</summary><div class="ans"><p>For many tabular problems I would end up there, especially fraud. But I'd build the regularised regression first, because it is the benchmark, it shows how much signal there is, and it is what a validator and a regulator can follow. If boosting beats it by a margin that survives intervals, I'd use it with monotone constraints and a calibration step, and keep the regression as the challenger.</p></div></details>
+        <details class="reveal"><summary>“The model has 99% accuracy on training and 85% on test. What do you do?”</summary><div class="ans"><p>That is high variance. I'd first check for leakage or a bad split, then see how training and validation error behave as data grows. Options: simplify (fewer features, shallower trees), regularise, get more events, or average models. I'd not add complexity. I'd also check whether 85% is already close to what's achievable, given label noise.</p></div></details>
+        <details class="reveal"><summary>“Why is a logistic coefficient not 'the effect on probability'?”</summary><div class="ans"><p>It is the effect on log-odds, so the odds are multiplied by e to the coefficient. The change in probability depends on the starting point: the same coefficient moves a 5% customer by about 6 points and a 40% customer by more than 20. I'd quote the odds ratio, and the probability change at named example customers if needed.</p></div></details>
+        <details class="reveal"><summary>“Can we trust the coefficients to say which factor drives default?”</summary><div class="ans"><p>Only with care. Correlated inputs share credit arbitrarily, so individual coefficients can swing between refits while predictions stay stable. I'd check correlations, refit on bootstrap samples, and for important claims use a method suited to the question, such as grouped effects, or a causal design where the question is causal (F9.2). Association in a credit model is not a recommendation to change a customer's behaviour.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the formulas in Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. For one model, squared bias is 0.04, variance is 0.09 and the noise is 0.25. What is the expected error on new data, which part dominates the <em>fixable</em> error, and what would you try?</summary><div class="ans"><p>0.04 + 0.09 + 0.25 = <strong>0.38</strong>. The noise (0.25) cannot be removed. Of the fixable part (0.13), variance is the larger share, so reduce it: add a penalty, simplify, get more events, or average several models. Adding flexibility would shrink the 0.04 but probably raise the 0.09.</p></div></details>
+        <details class="reveal"><summary>2. Training error is 2% and validation error 15%. A second model has 14% and 15%. Describe each.</summary><div class="ans"><p>The first has high variance: it fits training data too closely (overfits). The second is probably high bias, or close to the noise floor: both errors are high and similar. If you believe the achievable error is about 5%, the second is underfitting and needs more flexibility or better features. If the floor is near 14%, it is fine.</p></div></details>
+        <details class="reveal"><summary>3. A logistic coefficient for "missed payments" (per standard deviation) is 0.9. What happens to the odds? What happens to a customer who starts at 5% default probability?</summary><div class="ans"><p>Odds multiply by e<sup>0.9</sup> ≈ 2.46. A 5% customer has odds 0.0526; times 2.46 is 0.129; probability = 0.129 ÷ 1.129 ≈ <strong>11.5%</strong>. A 40% customer (odds 0.667) goes to 1.64, which is 62%. Same odds ratio, different probability change.</p></div></details>
+        <details class="reveal"><summary>4. A regression coefficient is 0.5 with a standard error of 0.2. Give an approximate 95% interval and say what it tells you.</summary><div class="ans"><p>About 0.5 ± 1.96 × 0.2 = ±0.39, so <strong>0.11 to 0.89</strong>. It excludes zero, so the data supports a positive effect, but the size is uncertain by a factor of eight. Remember that this standard error assumes the model form is right and the rows are independent.</p></div></details>
+        <details class="reveal"><summary>5. You have 90 defaults in 30,000 loans and 60 candidate inputs. Is a logistic regression with all of them sensible?</summary><div class="ans"><p>No. 90 events for 60 inputs is 1.5 events per input, far below the old rule of 10, and the properly calculated minimums (Riley et al., 2020) would be demanding too. Select a handful of inputs on domain grounds inside the training folds, or use a strong penalty, and expect a wide interval on any performance number. The 30,000 rows are not your sample size, the 90 events are.</p></div></details>
+        <details class="reveal"><summary>6. Two inputs, utilisation and debt-to-income, are 90% correlated. One refit gives coefficients (1.4, −0.2), another gives (−0.1, 1.2). Is the model unstable?</summary><div class="ans"><p>The predictions probably are not: both fits give a combined effect of about 1.2 to 1.3. The data cannot separate the two inputs, so it splits the credit between them differently each time. Do not interpret them separately. Fixes: combine them into one feature, drop one, or use a ridge penalty, which shrinks the pair toward sharing the effect (Simulation 3).</p></div></details>
+        <details class="reveal"><summary>7. You tuned hyperparameters using five-fold cross-validation, then reported the best cross-validation score as your performance. What is wrong, and what is the fix?</summary><div class="ans"><p>The best of many scores is biased upward, because you picked it for being high. The reported number should come from data that played no role in choosing the settings: a separate later-in-time test set, or nested cross-validation. The size of the optimism grows with the number of settings tried and shrinks with data.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>T. Hastie, R. Tibshirani, J. Friedman. <a href="https://hastie.su.domains/ElemStatLearn/">The Elements of Statistical Learning</a>, 2nd ed., chapters 2, 3, 4 and 7. The reference for the bias-variance decomposition, linear and logistic models and model assessment.</li>
+        <li>G. James, D. Witten, T. Hastie, R. Tibshirani. <a href="https://www.statlearning.com/">An Introduction to Statistical Learning</a>. The gentler version, with code.</li>
+        <li>S. Geman, E. Bienenstock, R. Doursat. <a href="https://doi.org/10.1162/neco.1992.4.1.1">Neural Networks and the Bias/Variance Dilemma</a>. Neural Computation, 1992.</li>
+        <li>M. Belkin, D. Hsu, S. Ma, S. Mandal. <a href="https://doi.org/10.1073/pnas.1903070116">Reconciling modern machine-learning practice and the classical bias-variance trade-off</a>. PNAS, 2019.</li>
+        <li>P. Nakkiran et al. <a href="https://arxiv.org/abs/1912.02292">Deep Double Descent: Where Bigger Models and More Data Hurt</a>. arXiv, 2019 (ICLR 2020).</li>
+        <li>P. Bartlett, P. Long, G. Lugosi, A. Tsigler. <a href="https://doi.org/10.1073/pnas.1907378117">Benign overfitting in linear regression</a>. PNAS, 2020.</li>
+        <li>C. Rudin. <a href="https://doi.org/10.1038/s42256-019-0048-x">Stop explaining black box machine learning models for high stakes decisions and use interpretable models instead</a>. Nature Machine Intelligence, 2019.</li>
+        <li>S. Lessmann, B. Baesens, H.-V. Seow, L. Thomas. <a href="https://doi.org/10.1016/j.ejor.2015.05.030">Benchmarking state-of-the-art classification algorithms for credit scoring</a>. European Journal of Operational Research, 2015.</li>
+        <li>E. Christodoulou et al. <a href="https://doi.org/10.1016/j.jclinepi.2019.02.004">A systematic review shows no performance benefit of machine learning over logistic regression for clinical prediction models</a>. Journal of Clinical Epidemiology, 2019.</li>
+        <li>R. Riley et al. <a href="https://doi.org/10.1136/bmj.m441">Calculating the sample size required for developing a clinical prediction model</a>. BMJ, 2020.</li>
+        <li>L. Grinsztajn, E. Oyallon, G. Varoquaux. <a href="https://arxiv.org/abs/2207.08815">Why do tree-based models still outperform deep learning on tabular data?</a> NeurIPS Datasets and Benchmarks, 2022.</li>
+        <li>N. Hollmann et al. <a href="https://www.nature.com/articles/s41586-024-08328-6">Accurate predictions on small data with a tabular foundation model</a>. Nature, 2025.</li>
+        <li><a href="https://arxiv.org/abs/2605.13986">TabPFN-3: Technical Report</a>. arXiv 2605.13986, 2026 (vendor report).</li>
+        <li><a href="https://research.aimultiple.com/tabular-models/">Tabular Models Benchmark: Performance Across 19 Datasets</a>. AIMultiple, 2026 (secondary source).</li>
+        <li><a href="https://scikit-learn.org/stable/modules/linear_model.html">scikit-learn user guide: linear models</a>. Practical reference for ridge, lasso and logistic regression.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F4: <a href="f4-decision-trees-random-forests-and.html">Decision trees, random forests, gradient boosting and regularisation (F4.3 – F4.4)</a></span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const sig = L.sigmoid;
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  const f2 = v => v < 10 ? v.toFixed(3) : v.toFixed(1);
+
+  // ---------- random numbers ----------
+  function rng(seed) { let a = seed >>> 0; return function () { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+
+  // ---------- polynomial least squares (Legendre basis) ----------
+  const F = x => Math.sin(2.5 * x) + 0.3 * x;
+  function basis(x, d) { const b = [1]; if (d >= 1) b.push(x); for (let k = 1; k < d; k++) b.push(((2 * k + 1) * x * b[k] - k * b[k - 1]) / (k + 1)); return b; }
+  function solve(A, b) {
+    const n = b.length;
+    for (let i = 0; i < n; i++) {
+      let p = i;
+      for (let r = i + 1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r;
+      [A[i], A[p]] = [A[p], A[i]]; [b[i], b[p]] = [b[p], b[i]];
+      for (let r = i + 1; r < n; r++) { const f = A[r][i] / A[i][i]; for (let c = i; c < n; c++) A[r][c] -= f * A[i][c]; b[r] -= f * b[i]; }
+    }
+    const x = new Array(n);
+    for (let i = n - 1; i >= 0; i--) { let s = b[i]; for (let c = i + 1; c < n; c++) s -= A[i][c] * x[c]; x[i] = s / A[i][i]; }
+    return x;
+  }
+  function fitPoly(xs, ys, d) {
+    const m = d + 1, A = Array.from({ length: m }, () => new Array(m).fill(0)), b = new Array(m).fill(0);
+    for (let i = 0; i < xs.length; i++) { const f = basis(xs[i], d); for (let r = 0; r < m; r++) { b[r] += f[r] * ys[i]; for (let c = 0; c < m; c++) A[r][c] += f[r] * f[c]; } }
+    for (let r = 0; r < m; r++) A[r][r] += 1e-8;
+    return solve(A, b);
+  }
+  function evalP(c, x) { const f = basis(x, c.length - 1); let s = 0; for (let i = 0; i < c.length; i++) s += c[i] * f[i]; return s; }
+
+  // =====================================================================
+  // Simulation 1: fit the sample or the pattern
+  // =====================================================================
+  const S1 = { deg: 3, n: 20, sig: 0.3, seed: 7 };
+  const TG = Array.from({ length: 201 }, (_, i) => -1 + 2 * i / 200);
+  const fitBox = $("fit-chart"), degBox = $("deg-chart");
+  function data1() {
+    const r = rng(S1.seed * 977 + S1.n), xs = [], z = [];
+    for (let i = 0; i < S1.n; i++) { xs.push(-1 + 2 * (i + r()) / S1.n); z.push(gauss(r)); }
+    return { xs, ys: xs.map((x, i) => F(x) + S1.sig * z[i]) };
+  }
+  function errs(c, xs, ys) {
+    let tr = 0; for (let i = 0; i < xs.length; i++) tr += Math.pow(evalP(c, xs[i]) - ys[i], 2);
+    let te = 0; for (const t of TG) te += Math.pow(evalP(c, t) - F(t), 2);
+    return { tr: tr / xs.length, te: te / TG.length + S1.sig * S1.sig };
+  }
+  function renderFit() {
+    const { xs, ys } = data1();
+    const s2 = S1.sig * S1.sig;
+    // chart A: fit
+    let W = Math.max(300, fitBox.clientWidth), H = 250, m = { l: 34, r: 10, t: 10, b: 26 };
+    let svg = mk(fitBox, W, H, "Polynomial fit to noisy points");
+    let x = L.scale(-1, 1, m.l, W - m.r), y = L.scale(-2, 2, H - m.b, m.t);
+    [-2, -1, 0, 1, 2].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" }); });
+    [-1, -0.5, 0, 0.5, 1].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    const c = fitPoly(xs, ys, S1.deg);
+    L.svg("path", { d: L.path(TG.map(t => [x(t), y(F(t))])), class: "truth" }, svg);
+    L.svg("path", { d: L.path(TG.map(t => [x(t), y(L.clamp(evalP(c, t), -2, 2))])), class: "fit" }, svg);
+    xs.forEach((v, i) => L.svg("circle", { cx: x(v), cy: y(L.clamp(ys[i], -2, 2)), r: 3.4, class: "pt" }, svg));
+    // chart B: error against degree
+    const D = [], tr = [], te = [];
+    for (let d = 1; d <= 12; d++) { const cd = fitPoly(xs, ys, d), e = errs(cd, xs, ys); D.push(d); tr.push(e.tr); te.push(e.te); }
+    const ymax = Math.max(0.35, 4 * s2);
+    H = 230; m = { l: 40, r: 10, t: 12, b: 40 };
+    svg = mk(degBox, W, H, "Training and expected new-data error against polynomial degree");
+    x = L.scale(1, 12, m.l + 8, W - m.r - 8); y = L.scale(0, ymax, H - m.b, m.t);
+    const ticks = [0, ymax / 2, ymax];
+    ticks.forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v.toFixed(2), { "text-anchor": "end" }); });
+    D.forEach(d => tx(svg, x(d), H - m.b + 16, String(d), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Polynomial degree (flexibility)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Squared error", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(s2), y2: y(s2), class: "floor" }, svg);
+    tx(svg, W - m.r - 2, y(s2) - 5, "noise floor", { class: "lbl-ink", "text-anchor": "end" });
+    L.svg("path", { d: L.path(D.map((d, i) => [x(d), y(Math.min(tr[i], ymax))])), class: "tr-line" }, svg);
+    L.svg("path", { d: L.path(D.map((d, i) => [x(d), y(Math.min(te[i], ymax))])), class: "te-line" }, svg);
+    L.svg("circle", { cx: x(S1.deg), cy: y(Math.min(te[S1.deg - 1], ymax)), r: 6, class: "now-dot" }, svg);
+    L.svg("circle", { cx: x(S1.deg), cy: y(Math.min(tr[S1.deg - 1], ymax)), r: 6, class: "now-dot" }, svg);
+    let best = 0; te.forEach((v, i) => { if (v < te[best]) best = i; });
+    const trN = tr[S1.deg - 1], teN = te[S1.deg - 1];
+    $("st1-tr").textContent = trN.toFixed(3);
+    $("st1-te").textContent = teN > 99 ? ">99" : teN.toFixed(3);
+    $("st1-fl").textContent = s2.toFixed(3);
+    $("st1-best").textContent = "degree " + (best + 1); $("st1-best-s").textContent = "expected error " + te[best].toFixed(3);
+    cls($("st1-te-b"), teN > 1.5 * te[best] ? "bad" : "ok");
+    const d = S1.deg, b = best + 1;
+    let v;
+    if (d === b) v = "Degree <b>" + d + "</b> is the best of the twelve for this sample: the gap between training error (" + trN.toFixed(3) + ") and new-data error (" + teN.toFixed(3) + ") is modest and the new-data error sits close to the noise floor of " + s2.toFixed(3) + ".";
+    else if (d < b) v = "<b>Too rigid.</b> Training error (" + trN.toFixed(3) + ") and new-data error (" + (teN > 99 ? ">99" : teN.toFixed(3)) + ") are both well above the floor, and close to each other. The model cannot bend to the pattern. Degree " + b + " does best here.";
+    else v = "<b>Too flexible.</b> Training error is only " + trN.toFixed(3) + ", below the noise floor, which no honest model can reach. Error on new data is " + (teN > 99 ? "over 99" : teN.toFixed(3)) + ". The curve is chasing noise. Degree " + b + " does best here.";
+    $("s1-verdict").innerHTML = v;
+  }
+  L.bind("s1-deg", v => String(v), v => { S1.deg = v; renderFit(); });
+  L.bind("s1-n", v => String(v), v => { S1.n = v; renderFit(); });
+  L.bind("s1-sig", v => v.toFixed(2), v => { S1.sig = v; renderFit(); });
+  $("b-new").addEventListener("click", () => { S1.seed++; renderFit(); });
+
+  // =====================================================================
+  // Simulation 2: bias and variance
+  // =====================================================================
+  const S2 = { deg: 2, n: 30, sig: 0.3 };
+  const K = 80, GN = 41, G2 = Array.from({ length: GN }, (_, i) => -1 + 2 * i / (GN - 1)), GF = G2.map(F);
+  const bvCache = {};
+  function bvCompute(n, sg) {
+    const key = n + "|" + sg;
+    if (bvCache[key]) return bvCache[key];
+    const sets = [];
+    for (let k = 0; k < K; k++) {
+      const r = rng(k * 131 + n * 7 + 11), xs = [], ys = [];
+      for (let i = 0; i < n; i++) { const xv = -1 + 2 * r(); xs.push(xv); ys.push(F(xv) + sg * gauss(r)); }
+      sets.push({ xs, ys });
+    }
+    const out = [];
+    for (let d = 1; d <= 10; d++) {
+      const fits = sets.map(s => { const c = fitPoly(s.xs, s.ys, d); return G2.map(t => evalP(c, t)); });
+      const mean = G2.map((_, j) => fits.reduce((a, f) => a + f[j], 0) / K);
+      let b2 = 0, v = 0;
+      for (let j = 0; j < GN; j++) {
+        b2 += Math.pow(mean[j] - GF[j], 2);
+        for (let k = 0; k < K; k++) v += Math.pow(fits[k][j] - mean[j], 2);
+      }
+      out.push({ b2: b2 / GN, v: v / (GN * K), fits: fits.slice(0, 30), mean });
+    }
+    return (bvCache[key] = out);
+  }
+  const bvFitBox = $("bv-fits"), bvBarBox = $("bv-bars");
+  function renderBV() {
+    const R = bvCompute(S2.n, S2.sig), s2 = S2.sig * S2.sig, cur = R[S2.deg - 1];
+    let W = Math.max(300, bvFitBox.clientWidth), H = 240, m = { l: 34, r: 10, t: 10, b: 26 };
+    let svg = mk(bvFitBox, W, H, "Many fits from different samples at the chosen degree");
+    let x = L.scale(-1, 1, m.l, W - m.r), y = L.scale(-2, 2, H - m.b, m.t);
+    [-2, -1, 0, 1, 2].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" }); });
+    [-1, -0.5, 0, 0.5, 1].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    cur.fits.forEach(f => L.svg("path", { d: L.path(G2.map((t, j) => [x(t), y(L.clamp(f[j], -2, 2))])), class: "ghost" }, svg));
+    L.svg("path", { d: L.path(G2.map(t => [x(t), y(F(t))])), class: "truth" }, svg);
+    L.svg("path", { d: L.path(G2.map((t, j) => [x(t), y(L.clamp(cur.mean[j], -2, 2))])), class: "fit" }, svg);
+
+    const tot = R.map(r => r.b2 + r.v + s2);
+    const minTot = Math.min.apply(null, tot);
+    const ymax = Math.max(0.4, 2.5 * minTot);
+    H = 250; m = { l: 40, r: 10, t: 14, b: 40 };
+    svg = mk(bvBarBox, W, H, "Bias squared, variance and noise at each degree");
+    const X = L.scale(0, 10, m.l, W - m.r), Y = L.scale(0, ymax, H - m.b, m.t);
+    [0, ymax / 2, ymax].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), class: "grid" }, svg); tx(svg, m.l - 6, Y(v) + 4, v.toFixed(2), { "text-anchor": "end" }); });
+    const bw = (X(1) - X(0)) * 0.62;
+    R.forEach((r, i) => {
+      const cx = X(i + 0.5);
+      if (i + 1 === S2.deg) L.svg("rect", { x: cx - (X(1) - X(0)) / 2, y: m.t, width: X(1) - X(0), height: H - m.b - m.t, class: "sel-bg" }, svg);
+      const segs = [[r.b2, "b-bias"], [r.v, "b-var"], [s2, "b-noise"]];
+      let acc = 0, clipped = false;
+      segs.forEach(([val, c]) => {
+        const lo = Math.min(acc, ymax), hi = Math.min(acc + val, ymax);
+        if (hi > lo) L.svg("rect", { x: cx - bw / 2, y: Y(hi), width: bw, height: Y(lo) - Y(hi), class: c }, svg);
+        if (acc + val > ymax) clipped = true;
+        acc += val;
+      });
+      if (clipped) tx(svg, cx, m.t + 10, "▲", { class: "lbl-warn", "text-anchor": "middle" });
+      tx(svg, cx, H - m.b + 16, String(i + 1), { "text-anchor": "middle" });
+    });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Polynomial degree (flexibility)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Expected squared error", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+
+    let best = 0; tot.forEach((v, i) => { if (v < tot[best]) best = i; });
+    const total = cur.b2 + cur.v + s2;
+    $("st2-b").textContent = f2(cur.b2); $("st2-v").textContent = f2(cur.v); $("st2-s").textContent = s2.toFixed(3);
+    $("st2-t").textContent = f2(total); $("st2-t-s").textContent = "best degree here: " + (best + 1) + " (" + f2(tot[best]) + ")";
+    cls($("st2-t-b"), total > 1.5 * tot[best] ? "bad" : "ok");
+    const d = S2.deg;
+    let v;
+    if (d === best + 1) v = "Degree <b>" + d + "</b> balances the two best for this sample size and noise level: bias² " + f2(cur.b2) + " and variance " + f2(cur.v) + ".";
+    else if (cur.b2 > cur.v) v = "<b>Bias-dominated.</b> Bias² (" + f2(cur.b2) + ") is larger than variance (" + f2(cur.v) + "). Every fit is wrong in the same way, so more data would not help. More flexibility would.";
+    else v = "<b>Variance-dominated.</b> Variance (" + f2(cur.v) + ") is larger than bias² (" + f2(cur.b2) + "). The average fit is nearly right, but any single fit is not. More data, a penalty or a simpler model would help.";
+    $("s2-verdict").innerHTML = v + " Best degree overall: " + (best + 1) + ".";
+  }
+  L.bind("s2-deg", v => String(v), v => { S2.deg = v; renderBV(); });
+  L.bind("s2-n", v => String(v), v => { S2.n = v; renderBV(); });
+  L.bind("s2-sig", v => v.toFixed(2), v => { S2.sig = v; renderBV(); });
+
+  // =====================================================================
+  // Simulation 3: logistic regression, correlated inputs, ridge
+  // =====================================================================
+  const NS = 30, NMAX = 2000, NT = 3000, KF = 6;
+  const TRUE = [-2.5, 0.7, 0.5, 0.9, 0, 0], NAMES = ["Utilisation", "Debt-to-income", "Missed payments", "Noise A", "Noise B"];
+  function genRows(n, seed) {
+    const r = rng(seed), X = [], y = [], p = [];
+    for (let i = 0; i < n; i++) {
+      const u = gauss(r), d = 0.9 * u + Math.sqrt(0.19) * gauss(r), mp = gauss(r), a = gauss(r), b = gauss(r);
+      const row = [1, u, d, mp, a, b];
+      let z = 0; for (let j = 0; j < KF; j++) z += TRUE[j] * row[j];
+      const pr = sig(z); X.push(row); p.push(pr); y.push(r() < pr ? 1 : 0);
+    }
+    return { X, y, p };
+  }
+  const samples = Array.from({ length: NS }, (_, i) => genRows(NMAX, 5000 + i));
+  const test = genRows(NT, 99991);
+  const ll = (y, p) => { const q = L.clamp(p, 1e-9, 1 - 1e-9); return y ? -Math.log(q) : -Math.log(1 - q); };
+  const bayesLL = test.y.reduce((a, y, i) => a + ll(y, test.p[i]), 0) / NT;
+  function fitLogit(X, y, lam) {
+    const n = y.length; let th = new Array(KF).fill(0);
+    const base = y.reduce((a, b) => a + b, 0) / n; th[0] = Math.log((base + 0.005) / (1 - base + 0.005));
+    for (let it = 0; it < 22; it++) {
+      const g = new Array(KF).fill(0), H = Array.from({ length: KF }, () => new Array(KF).fill(0));
+      for (let i = 0; i < n; i++) {
+        const x = X[i]; let z = 0; for (let a = 0; a < KF; a++) z += th[a] * x[a];
+        const p = sig(z), w = p * (1 - p), e = y[i] - p;
+        for (let a = 0; a < KF; a++) { g[a] += e * x[a]; for (let b = a; b < KF; b++) H[a][b] += w * x[a] * x[b]; }
+      }
+      for (let a = 0; a < KF; a++) for (let b = 0; b < a; b++) H[a][b] = H[b][a];
+      for (let a = 1; a < KF; a++) { g[a] -= lam * th[a]; H[a][a] += lam; }
+      for (let a = 0; a < KF; a++) H[a][a] += 1e-6;
+      const dl = solve(H, g.slice());
+      let nr = Math.sqrt(dl.reduce((s, v) => s + v * v, 0)); const sc = nr > 3 ? 3 / nr : 1;
+      for (let a = 0; a < KF; a++) th[a] += sc * dl[a];
+      if (nr < 1e-6) break;
+    }
+    return th;
+  }
+  const med = a => { const s = a.slice().sort((p, q) => p - q), h = s.length >> 1; return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2; };
+  const sd = a => { const m = a.reduce((s, v) => s + v, 0) / a.length; return Math.sqrt(a.reduce((s, v) => s + (v - m) * (v - m), 0) / a.length); };
+  const S3 = { v: 2.2, s: 0 };
+  const lamOf = s => s === 0 ? 0 : Math.pow(10, s - 2);
+  const lrBox = $("lr-chart");
+  function renderLR() {
+    const n = Math.round(Math.pow(10, S3.v)), lam = lamOf(S3.s);
+    const fits = [], trL = [], teL = [];
+    for (let k = 0; k < NS; k++) {
+      const X = samples[k].X.slice(0, n), y = samples[k].y.slice(0, n), th = fitLogit(X, y, lam);
+      fits.push(th);
+      let a = 0; for (let i = 0; i < n; i++) { let z = 0; for (let j = 0; j < KF; j++) z += th[j] * X[i][j]; a += ll(y[i], sig(z)); }
+      trL.push(a / n);
+      let b = 0; for (let i = 0; i < NT; i++) { const xr = test.X[i]; let z = 0; for (let j = 0; j < KF; j++) z += th[j] * xr[j]; b += ll(test.y[i], sig(z)); }
+      teL.push(b / NT);
+    }
+    const W = Math.max(300, lrBox.clientWidth), H = 270, m = { l: 112, r: 12, t: 12, b: 34 };
+    const svg = mk(lrBox, W, H, "Coefficients from thirty refits");
+    const LO = -2, HI = 3, x = L.scale(LO, HI, m.l, W - m.r);
+    for (let v = LO; v <= HI; v++) { L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: v === 0 ? "czero" : "grid" }, svg); tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }); }
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Coefficient (change in log-odds per standard deviation)", { "text-anchor": "middle" });
+    const rh = (H - m.t - m.b) / 5;
+    for (let j = 1; j <= 5; j++) {
+      const cy = m.t + rh * (j - 0.5);
+      tx(svg, m.l - 8, cy + 4, NAMES[j - 1], { "text-anchor": "end", class: "lbl-ink" });
+      L.svg("line", { x1: x(TRUE[j]), x2: x(TRUE[j]), y1: cy - rh * 0.42, y2: cy + rh * 0.42, class: "ctrue" }, svg);
+      let sum = 0;
+      fits.forEach((th, k) => {
+        const v = th[j]; sum += v;
+        const jit = ((k * 37) % 11 - 5) / 5 * rh * 0.3;
+        L.svg("circle", { cx: x(L.clamp(v, LO, HI)), cy: cy + jit, r: 3.3, class: "cdot" }, svg);
+      });
+      const mv = sum / NS;
+      L.svg("path", { d: `M${x(L.clamp(mv, LO, HI))} ${cy - 7}l6 7l-6 7l-6 -7z`, class: "cmean" }, svg);
+    }
+    const mt = med(teL), mtr = med(trL);
+    const su = sd(fits.map(t => t[1])), ss = sd(fits.map(t => t[1] + t[2]));
+    $("st3-te").textContent = mt.toFixed(3); $("st3-te-s").textContent = "best possible " + bayesLL.toFixed(3) + ", median of 30 fits";
+    cls($("st3-te-b"), mt > bayesLL + 0.05 ? "bad" : mt > bayesLL + 0.015 ? "warn" : "ok");
+    $("st3-tr").textContent = mtr.toFixed(3);
+    $("st3-su").textContent = su.toFixed(2); $("st3-ss").textContent = ss.toFixed(2);
+    $("s3-verdict").innerHTML = "With <b>" + L.fmtInt(n) + "</b> applicants (about " + Math.round(n * 0.14) + " defaults) and " + (lam === 0 ? "no penalty" : "penalty " + lam.toFixed(lam < 1 ? 2 : 1)) + ": the utilisation coefficient varies by <b>" + su.toFixed(2) + "</b> between refits (truth 0.70), but utilisation plus debt-to-income varies by only <b>" + ss.toFixed(2) + "</b> (truth 1.20). Log loss on new applicants is <b>" + mt.toFixed(3) + "</b>, " + (mt - bayesLL).toFixed(3) + " above the best possible.";
+  }
+  L.bind("s3-n", v => L.fmtInt(Math.round(Math.pow(10, v))), v => { S3.v = v; renderLR(); });
+  L.bind("s3-lam", v => v === 0 ? "none" : lamOf(+v.toFixed(1)).toPrecision(2), v => { S3.s = +v.toFixed(1); renderLR(); });
+
+  function renderAll() { renderFit(); renderBV(); renderLR(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

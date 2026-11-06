@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Neural Networks from the Inside: Neurons, Backpropagation and Trainable Depth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .grp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+  .grp > span { font-size: 12px; color: var(--muted); min-width: 70px; }
+  .cell-hi { fill: var(--warn); }
+  .cell-lo { fill: var(--neutral); }
+  .pt1 { fill: var(--warn); stroke: var(--surface); stroke-width: 1.5; }
+  .pt0 { fill: var(--ink); fill-opacity: .75; stroke: var(--surface); stroke-width: 1.5; }
+  .ln-bound { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .ln-loss { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .ln-grad { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .ln-act { stroke: var(--warn); stroke-width: 2.2; fill: none; stroke-dasharray: 5 3; }
+  .ln-ref { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 4; fill: none; }
+  .ex-dot { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  pre { background: var(--sunk); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 13px; line-height: 1.5; max-width: 100%; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations, deeply understood</span>
+    <span>Module F5 · Deep learning</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F5.1 · F5.2</span>
+        <span class="pill d">Day one</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Neural Networks from the Inside: Neurons, Backpropagation and Trainable Depth</h1>
+      <p class="dek">What a network actually computes, how one clean rule (the chain rule) trains millions of weights, and why depth only works because of three tricks: careful initialisation, normalisation and skip connections.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A neural network is a stack of weighted sums and bends that learns by measuring, for every weight, how much the error would change if it moved (backpropagation), and very deep stacks train only because initialisation, normalisation and residual connections keep that signal from vanishing or exploding on its way back.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Picture a fraud analyst deciding whether a card payment looks wrong. She does not run one rule. She weighs several small signals at once: the amount is high for this customer, it is 3 a.m., the merchant is new, the device is unfamiliar. Each signal nudges her suspicion up or down by a different amount. If the total passes some level, she pauses the payment.</p>
+        <p>That is one <strong>neuron</strong>: a weighted sum of inputs, plus a bias, passed through a bend. A <strong>layer</strong> is many such analysts, each weighting the same inputs differently, so each learns to notice a different pattern. The next layer does not see raw transactions at all. It sees the first layer's verdicts ("looks like card testing", "looks like travel") and combines <em>those</em>. Stack enough layers and the network builds its own features, ones nobody wrote down.</p>
+        <p>Learning is the part that feels like magic and is not. Start with random weights. Show the network a transaction and the truth. It is wrong by some amount. <strong>Backpropagation</strong> asks, for every single weight, "if I nudged you up a tiny bit, would the error go up or down, and by how much?" Then every weight takes a small step in the direction that reduces the error. Repeat a few million times.</p>
+        <p>Depth adds one more problem. The "how much would the error change" message has to travel backwards through every layer. At each layer it is multiplied by something. Multiply a hundred numbers a little smaller than one and the message dies. Multiply a hundred numbers a little bigger than one and it explodes. Most of the engineering history of deep learning, from 2010 to today, is the story of keeping that message alive.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Three ideas carry the whole lesson. (1) A neuron is a weighted sum followed by a non-linear bend; without the bend, stacking layers adds nothing. (2) Backpropagation is the chain rule applied efficiently: one backward sweep gives the gradient for every weight at once. (3) Depth is a signal-propagation problem, and initialisation, normalisation and skip connections are the three standard fixes.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-neuron">One neuron: a weighted vote and a bend</h3>
+      <div class="prose">
+        <p>A neuron takes a list of numbers <i>x</i> (the inputs), multiplies each by a weight, adds a bias, and applies an activation function <i>f</i>:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>z</mi><mo>=</mo><msub><mi>w</mi><mn>1</mn></msub><msub><mi>x</mi><mn>1</mn></msub><mo>+</mo><msub><mi>w</mi><mn>2</mn></msub><msub><mi>x</mi><mn>2</mn></msub><mo>+</mo><mi>b</mi><mspace width="1.5em"></mspace><mi>a</mi><mo>=</mo><mi>f</mi><mo stretchy="false">(</mo><mi>z</mi><mo stretchy="false">)</mo></math>
+        <p class="where">The weights say how much each input matters and in which direction. The bias sets how easily the neuron fires. <i>z</i> is the "pre-activation": a plain linear score. <i>a</i> is what the neuron passes on. With a logistic sigmoid for <i>f</i> and nothing else, this is exactly logistic regression (F4.2). A neural network is logistic regression's core repeated and stacked.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Geometrically, the set of points where <i>z</i> = 0 is a straight line (a plane in more dimensions). The neuron answers one question: which side of this line is the input on, and how far? The weights are the direction of the line's normal; this is the dot product from F1.1 doing real work. Move the sliders below and watch the line and the output change.</p>
+      </div>
+
+      <figure class="figure" id="fig-neuron">
+        <div class="fig-head"><span class="fig-title">One neuron scoring a transaction</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> the black dot is a payment with amount z-score 1.5 and a night-time score of 0.5. Raise the weight on amount and watch the dividing line rotate. Change the bias and it slides. Then switch the activation: sigmoid squashes to a probability, tanh to −1…1, ReLU outputs zero on one side of the line and a growing number on the other.</p>
+        <div class="grp" role="group" aria-label="Activation"><span>Activation</span>
+          <button class="btn" type="button" data-act="sigmoid" aria-pressed="true">Sigmoid</button>
+          <button class="btn" type="button" data-act="tanh" aria-pressed="false">Tanh</button>
+          <button class="btn" type="button" data-act="relu" aria-pressed="false">ReLU</button>
+        </div>
+        <div class="chart-wrap" id="n-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--warn)"></i>High output (neuron "fires")</span>
+          <span><i class="sq" style="background:var(--neutral)"></i>Low output</span>
+          <span><i style="background:var(--ink)"></i>Line where z = 0</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-w1">Weight on amount <output for="s-w1"></output></label><input type="range" id="s-w1" min="-3" max="3" step="0.1" value="2"></div>
+          <div class="ctl"><label for="s-w2">Weight on night-time score <output for="s-w2"></output></label><input type="range" id="s-w2" min="-3" max="3" step="0.1" value="-1"></div>
+          <div class="ctl"><label for="s-b">Bias <output for="s-b"></output></label><input type="range" id="s-b" min="-3" max="3" step="0.1" value="-0.5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">z for the black dot</div><div class="v" id="n-z"></div><div class="s" id="n-zs"></div></div>
+          <div class="stat"><div class="k">Neuron output a</div><div class="v" id="n-a"></div><div class="s" id="n-as"></div></div>
+          <div class="stat"><div class="k">Slope of f at this z</div><div class="v" id="n-d"></div><div class="s">how much a changes per unit of z</div></div>
+        </div>
+        <p class="verdict" id="n-verdict"></p>
+        <p class="sim-note">Simulated: two standardised inputs on a grid from −3 to 3. Nothing is learned here; you set the weights by hand. At the defaults z = 2×1.5 − 1×0.5 − 0.5 = 2.0 and the sigmoid gives 0.881. Exact arithmetic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The slope in the third box matters later. Backpropagation multiplies by it at every neuron. A sigmoid is steepest at its centre (slope 0.25) and flat at both ends (slope near 0); that flatness is the root of the "vanishing gradient". ReLU has slope exactly 1 on its active side and 0 on the other, which is why it largely replaced sigmoid inside deep networks. Modern language models mostly use smooth relatives of ReLU such as GELU and SiLU/Swish. The choices differ in detail, not in spirit.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Activation</th><th>Formula</th><th>Range</th><th>Where it lives today</th></tr></thead>
+          <tbody>
+            <tr><td><b>Sigmoid</b></td><td>1 / (1 + e<sup>−z</sup>)</td><td>0 to 1</td><td>Output layer for a probability. Rare in hidden layers.</td></tr>
+            <tr><td><b>Tanh</b></td><td>(e<sup>z</sup> − e<sup>−z</sup>) / (e<sup>z</sup> + e<sup>−z</sup>)</td><td>−1 to 1</td><td>Recurrent cells; small tabular nets.</td></tr>
+            <tr><td><b>ReLU</b></td><td>max(0, z)</td><td>0 to ∞</td><td>Default for feed-forward and convolutional nets.</td></tr>
+            <tr><td><b>GELU, SiLU</b></td><td>z · Φ(z), z · sigmoid(z)</td><td>about −0.28 to ∞</td><td>Inside transformer blocks, often gated (SwiGLU).</td></tr>
+            <tr><td><b>Softmax</b></td><td>e<sup>z<sub>i</sub></sup> / Σ e<sup>z<sub>j</sub></sup></td><td>0 to 1, sums to 1</td><td>Output layer for several classes; the core of attention.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub" id="m-layers">Layers, and why the bend is not optional</h3>
+      <div class="prose">
+        <p>A layer of <i>H</i> neurons applied to a vector <i>x</i> is a matrix multiplication followed by the bend: <i>a</i> = <i>f</i>(<i>Wx</i> + <i>b</i>). A network is a chain of these. For a small fraud scorer with 40 input features, 64 hidden units and one output, the parameter count is 40×64 + 64 (first layer) plus 64×1 + 1 (second): 2,689 numbers. Large language models are the same arithmetic with billions of them.</p>
+        <p>The bend is essential. If <i>f</i> were the identity, two layers would give <i>W</i><sub>2</sub>(<i>W</i><sub>1</sub><i>x</i>), which is just another single matrix <i>W</i><sub>2</sub><i>W</i><sub>1</sub> applied to <i>x</i>. A hundred linear layers collapse into one linear layer, which cannot do more than logistic regression. The non-linearity is what lets each layer carve the space in a way the previous one could not.</p>
+        <p>How much can a bent network represent? The <strong>universal approximation theorem</strong> (Cybenko 1989; Hornik 1989) says that a network with one hidden layer, wide enough, can approximate any reasonable continuous function. Read it correctly. It says such a network <em>exists</em>. It does not say gradient descent will find it, nor that it will be small, nor that it will generalise. In practice depth buys efficiency: some functions need exponentially many neurons in one layer but only a few in a stack, because each layer can reuse features built by the one before.</p>
+        <p>The classic demonstration is XOR: the label is 1 when the two inputs have the same sign. No single line separates the classes, so a single neuron, or any stack of linear layers, tops out around 50–75%. Two bent neurons in a hidden layer solve it. Simulation 2 lets you see that for yourself, with a real network learning in your browser.</p>
+      </div>
+
+      <h3 class="sub" id="m-backprop">Backpropagation: the chain rule, run backwards</h3>
+      <div class="prose">
+        <p>Training needs one quantity: the <strong>gradient</strong> of the loss <i>L</i> with respect to every weight (F1.3 covers gradients and descent; here we open up how the network produces them). Write the network as a chain: input → layer 1 → layer 2 → … → output → loss. The chain rule says the effect of a weight on the loss is the product of the local effects along the path from that weight to the loss.</p>
+        <p>The efficient trick is to share work. Do a <strong>forward pass</strong> and store every layer's activations. Then do one <strong>backward pass</strong>, carrying a running quantity δ, "how much does the loss change if this neuron's pre-activation <i>z</i> changes?". For a neuron in layer <i>l</i>:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>δ</mi><mi>l</mi></msub><mo>=</mo><mo stretchy="false">(</mo><msubsup><mi>W</mi><mrow><mi>l</mi><mo>+</mo><mn>1</mn></mrow><mi>T</mi></msubsup><msub><mi>δ</mi><mrow><mi>l</mi><mo>+</mo><mn>1</mn></mrow></msub><mo stretchy="false">)</mo><mo>⊙</mo><msup><mi>f</mi><mo>′</mo></msup><mo stretchy="false">(</mo><msub><mi>z</mi><mi>l</mi></msub><mo stretchy="false">)</mo><mspace width="1.5em"></mspace><mfrac><mrow><mo>∂</mo><mi>L</mi></mrow><mrow><mo>∂</mo><msub><mi>W</mi><mi>l</mi></msub></mrow></mfrac><mo>=</mo><msub><mi>δ</mi><mi>l</mi></msub><msubsup><mi>a</mi><mrow><mi>l</mi><mo>−</mo><mn>1</mn></mrow><mi>T</mi></msubsup></math>
+        <p class="where">Read it in words. The error signal at layer <i>l</i> is the next layer's error signal sent back through the same weights (that is the transpose <i>W</i><sup>T</sup>), then scaled neuron by neuron by the slope <i>f</i>′ of the bend. The gradient for a layer's weights is that signal times the activations that fed in: a weight changes the loss in proportion to how active its input was and how much the downstream error cares. ⊙ means multiply element by element.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>At the very end there is a pleasant simplification. For a sigmoid output with cross-entropy loss (the standard for fraud or default), the starting signal is just <strong>δ = <i>p</i> − <i>y</i></strong>: the predicted probability minus the true label (0 or 1). If the model says 0.9 for a legitimate transaction, δ = 0.9 and the network is pushed hard. If it says 0.01 for a legitimate one, δ = 0.01 and it barely moves. This is why cross-entropy is paired with sigmoid and softmax: the slope of the sigmoid cancels against the log and leaves a clean, never-vanishing error. F6 and F1.6 explain why that loss is the natural one.</p>
+        <p>The cost of all this is the key engineering fact. One backward pass costs about the same as two forward passes, whatever the number of weights. The naive alternative, nudging each weight and re-measuring the loss, costs one forward pass <em>per weight</em>. For a model with 10 billion weights that is the difference between possible and absurd. Backpropagation (Rumelhart, Hinton and Williams, 1986; the general idea of reverse-mode automatic differentiation is older) made deep learning feasible.</p>
+        <p>You will never write this by hand at work. Frameworks (PyTorch, JAX) record the forward computation and run the backward pass automatically. But you will read training logs, so know the shape of the loop:</p>
+      </div>
+<pre><code>for batch in loader:                 # a few hundred examples at a time
+    p = model(batch.x)               # forward: compute and store activations
+    loss = bce(p, batch.y)           # one number: how wrong, on average
+    optimiser.zero_grad()
+    loss.backward()                  # backward: fills .grad for every weight
+    optimiser.step()                 # w -= lr * (a function of .grad)
+</code></pre>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The next simulation runs exactly this, on a tiny network in your browser, with no libraries. The data is the XOR pattern in two features: the label is 1 when both have the same sign, with a gap around the axes. The network has one hidden layer. You choose its width and activation.</p>
+      </div>
+
+      <figure class="figure" id="fig-train">
+        <div class="fig-head"><span class="fig-title">A network learns a boundary no single line can draw</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> press <b>Run</b> with tanh and 4 hidden units: the orange region grows into the two correct corners and the loss falls. Then reset, switch the activation to <b>Linear</b> and run again: it stalls well short of 100% however long you train, because stacked linear layers are one line. Try 1 hidden unit with tanh: still stuck. Then set the learning rate to 3 and watch training become unstable.</p>
+        <div class="grp" role="group" aria-label="Activation for the hidden layer"><span>Hidden activation</span>
+          <button class="btn" type="button" data-tact="tanh" aria-pressed="true">Tanh</button>
+          <button class="btn" type="button" data-tact="relu" aria-pressed="false">ReLU</button>
+          <button class="btn" type="button" data-tact="linear" aria-pressed="false">Linear (no bend)</button>
+        </div>
+        <div class="btns" role="group" aria-label="Training controls">
+          <button class="btn" type="button" id="t-run">Run</button>
+          <button class="btn" type="button" id="t-step">Train 1 step</button>
+          <button class="btn" type="button" id="t-reset">Reset weights</button>
+        </div>
+        <div class="two-up">
+          <div class="chart-wrap" id="t-map"></div>
+          <div class="chart-wrap" id="t-loss"></div>
+        </div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--warn)"></i>Network says "same sign" (label 1)</span>
+          <span><i class="sq" style="background:var(--neutral)"></i>Network says label 0</span>
+          <span><i style="background:var(--accent)"></i>Loss (log axis)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-h">Hidden units <output for="s-h"></output></label><input type="range" id="s-h" min="1" max="8" step="1" value="4"></div>
+          <div class="ctl"><label for="s-lr">Learning rate <output for="s-lr"></output></label><input type="range" id="s-lr" min="-2" max="0.6" step="0.05" value="-0.3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Steps taken</div><div class="v" id="t-n"></div><div class="s">full-batch gradient steps</div></div>
+          <div class="stat" id="t-lossb"><div class="k">Loss (cross-entropy)</div><div class="v" id="t-l"></div><div class="s">0.69 is a coin flip</div></div>
+          <div class="stat" id="t-accb"><div class="k">Accuracy on the 160 points</div><div class="v" id="t-a"></div><div class="s">training data only</div></div>
+          <div class="stat"><div class="k">Backprop vs. finite difference</div><div class="v" id="t-gc"></div><div class="s" id="t-gcs"></div></div>
+        </div>
+        <p class="verdict" id="t-verdict"></p>
+        <p class="sim-note">Simulated and real: a 2-input, H-hidden-unit, 1-output network with sigmoid output, trained by full-batch gradient descent on cross-entropy over 160 fixed synthetic points (seeded, no noise). The gradients come from a hand-written backward pass. The last box checks one weight's gradient against nudging it by ±0.00001 and re-measuring the loss. Training is accuracy on the points shown, not held-out data.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to notice. First, the network is not given the idea of "same sign". Each hidden unit finds one slanted line; the output neuron combines them. Second, nothing happens for a while and then the loss collapses: early on the weights are small and symmetric, and learning has to break that symmetry. Third, the finite-difference check agrees with backpropagation to many digits. That check, called gradient checking, is exactly how people verify a hand-written backward pass. Autodiff frameworks make it unnecessary in daily work, but it shows there is no mystery in the number.</p>
+        <p>One more practical detail. Real training does not use all the data each step. <strong>Mini-batch stochastic gradient descent</strong> uses a random few hundred examples, giving a noisy but cheap estimate of the gradient. <strong>Adam</strong> (Kingma and Ba, 2015) and its variant AdamW, the standard optimisers, rescale each weight's step by a running estimate of that weight's gradient size, so weights with tiny gradients still move. F1.3 covers learning-rate schedules and why they matter. For a transformer, the batch size, learning rate, warm-up and weight decay together decide whether training works at all.</p>
+      </div>
+
+      <h3 class="sub" id="m-init">Initialisation: start the signal at the right size</h3>
+      <div class="prose">
+        <p>Before training, every weight needs a starting value. "Small random numbers" sounds harmless and is where deep nets used to fail. Consider a layer with <i>n</i> inputs. Each output is a sum of <i>n</i> terms, each a weight times an input. If the weights have variance σ² and the inputs have variance 1, the output has variance about <i>n</i>σ². Pick σ² too small and the signal shrinks layer after layer until the output is the same for every input. Pick it too large and it grows until activations saturate or overflow. Repeat over 50 layers and the factor compounds: 0.9 per layer becomes 0.005 after 50, and 1.1 becomes 117.</p>
+        <p>The cure is to choose the weight scale so that variance stays near 1 from layer to layer. The values to remember:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>Xavier / Glorot:</mtext><mspace width="0.6em"></mspace><mi>Var</mi><mo stretchy="false">(</mo><mi>w</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mn>1</mn><msub><mi>n</mi><mtext>in</mtext></msub></mfrac><mspace width="2em"></mspace><mtext>He / Kaiming:</mtext><mspace width="0.6em"></mspace><mi>Var</mi><mo stretchy="false">(</mo><mi>w</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mn>2</mn><msub><mi>n</mi><mtext>in</mtext></msub></mfrac></math>
+        <p class="where">Glorot and Bengio (2010) derived the first for tanh and sigmoid-like activations (their exact form averages fan-in and fan-out; for square layers it is the same). He et al. (2015) noticed that ReLU zeros out half the signal, so the weights need twice the variance to compensate. For a layer with 256 inputs: Xavier std = 1/16 = 0.0625, He std = √(2/256) ≈ 0.088. Biases usually start at zero. The frameworks apply these by default, which is why you rarely think about it; it matters when you build something custom or the loss refuses to move.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>One subtlety. Initialisation must also break symmetry. If every weight started at the same value, every hidden neuron would compute the same thing and receive the same gradient, and would stay identical forever. Random starts make the neurons different, so they can specialise.</p>
+      </div>
+
+      <h3 class="sub" id="m-norm">Normalisation: re-centre the signal at every layer</h3>
+      <div class="prose">
+        <p>Initialisation sets the right scale at step zero. During training, weights change and the scale can drift. <strong>Normalisation layers</strong> remove the drift by rescaling activations on the fly. The basic operation is to subtract the mean and divide by the standard deviation, then let the network learn a scale γ and shift β to undo it if it wants to:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mover><mi>x</mi><mo>^</mo></mover><mo>=</mo><mfrac><mrow><mi>x</mi><mo>−</mo><mi>μ</mi></mrow><msqrt><msup><mi>σ</mi><mn>2</mn></msup><mo>+</mo><mi>ε</mi></msqrt></mfrac><mspace width="1.5em"></mspace><mi>y</mi><mo>=</mo><mi>γ</mi><mover><mi>x</mi><mo>^</mo></mover><mo>+</mo><mi>β</mi></math>
+        <p class="where">What differs between the variants is <em>which numbers</em> μ and σ are computed over. <strong>Batch normalisation</strong> (Ioffe and Szegedy, 2015) uses all examples in the mini-batch, for each feature. <strong>Layer normalisation</strong> (Ba et al., 2016) uses all features of one example, so it does not depend on other examples. <strong>RMSNorm</strong> (Zhang and Sennrich, 2019) drops the mean subtraction and divides by the root-mean-square only; cheaper and about as good.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Variant</th><th>Statistics over</th><th>Behaviour at inference</th><th>Typical home</th></tr></thead>
+          <tbody>
+            <tr><td><b>BatchNorm</b></td><td>The batch, per feature</td><td>Uses stored running averages, so train and test behave differently. Awkward with small or non-i.i.d. batches.</td><td>Convolutional vision models, some tabular nets</td></tr>
+            <tr><td><b>LayerNorm</b></td><td>The features of one example</td><td>Identical to training. No batch dependence.</td><td>Transformers, sequence models</td></tr>
+            <tr><td><b>RMSNorm</b></td><td>The features of one example, no mean</td><td>Identical to training.</td><td>Most recent open large language models</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Why does it help? The original explanation, "reducing internal covariate shift", turned out to be weak. Santurkar et al. (2018) found that batch norm instead makes the loss surface smoother and the gradients more predictable, which lets you use larger learning rates. The practical effects are what matter: faster, more stable training, less sensitivity to initialisation, and a mild regularising effect from batch noise. In a transformer there is a second job covered next: normalisation placement decides whether very deep stacks train without careful warm-up.</p>
+        <p>For tabular banking models, a related and simpler point: standardise your input features (F3.4). A network fed raw transaction amounts in AED (range 1 to 5,000,000) next to a binary flag will train badly for the same signal-size reason, and no normalisation layer fully rescues it.</p>
+      </div>
+
+      <h3 class="sub" id="m-resid">Residual connections: a highway for the gradient</h3>
+      <div class="prose">
+        <p>By 2015 researchers could initialise and normalise well, and still found that a 56-layer network trained <em>worse</em> than a 20-layer one, even on the training set. That was not overfitting; the deeper network was simply harder to optimise. He et al. (2016) fixed it with a small change. Instead of each block computing <i>h</i><sub>l+1</sub> = <i>F</i>(<i>h</i><sub>l</sub>), it computes</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>h</mi><mrow><mi>l</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>h</mi><mi>l</mi></msub><mo>+</mo><mi>F</mi><mo stretchy="false">(</mo><msub><mi>h</mi><mi>l</mi></msub><mo stretchy="false">)</mo><mspace width="1.5em"></mspace><mfrac><mrow><mo>∂</mo><msub><mi>h</mi><mrow><mi>l</mi><mo>+</mo><mn>1</mn></mrow></msub></mrow><mrow><mo>∂</mo><msub><mi>h</mi><mi>l</mi></msub></mrow></mfrac><mo>=</mo><mi>I</mi><mo>+</mo><mfrac><mrow><mo>∂</mo><mi>F</mi></mrow><mrow><mo>∂</mo><msub><mi>h</mi><mi>l</mi></msub></mrow></mfrac></math>
+        <p class="where">The block only has to learn a <em>correction</em> to its input. The derivative has an identity matrix <i>I</i> added, so going backwards the gradient always has a direct path of multiplication by 1, whatever <i>F</i> does. Across 100 blocks the product no longer has to survive 100 shrinking factors; it travels along the skip path and picks up contributions from the blocks as it goes. A zero-output block is a perfectly valid "do nothing" layer, so adding depth cannot easily make things worse.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The same idea runs through every transformer. A transformer block is <i>h</i> + Attention(Norm(<i>h</i>)), then <i>h</i> + MLP(Norm(<i>h</i>)). The running vector <i>h</i> is often called the <strong>residual stream</strong>, and each layer reads from it and writes small additions back. Interpretability work (R5) treats that stream as the model's working memory.</p>
+        <p>Residual connections bring a side effect that normalisation then fixes. Each block adds to <i>h</i>, so with no care its size grows with depth: with a ReLU branch at He scale, the variance roughly doubles per block. The common arrangement is <strong>pre-norm</strong>: normalise the input to each branch and leave the stream itself alone. Xiong et al. (2020) showed that pre-norm transformers have well-behaved gradients at initialisation and need much less warm-up than the original post-norm design; most large models since use it.</p>
+        <p>Simulation 3 puts all three tricks on one stage. It builds a random deep network, sends one input forward and a gradient backward, and shows what survives. Everything here is computed exactly in your browser.</p>
+      </div>
+
+      <figure class="figure" id="fig-depth">
+        <div class="fig-head"><span class="fig-title">Does the signal survive 40 layers?</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> the start (sigmoid, Xavier scale, 20 layers, no tricks) has a gradient at layer 0 that is a vanishing fraction of the last layer's. Switch to ReLU with He scale and it holds. Push the init to "too large ×2" and it explodes. Now switch on <b>skip connections</b> with ReLU at He scale: the identity path stops the vanishing, but every block adds to the stream, so signal and gradient both grow with depth. Add <b>layer norm</b> and both come back to a sane range. Increase depth to 50 and compare.</p>
+        <div class="grp" role="group" aria-label="Activation"><span>Activation</span>
+          <button class="btn" type="button" data-dact="sigmoid" aria-pressed="true">Sigmoid</button>
+          <button class="btn" type="button" data-dact="tanh" aria-pressed="false">Tanh</button>
+          <button class="btn" type="button" data-dact="relu" aria-pressed="false">ReLU</button>
+        </div>
+        <div class="grp" role="group" aria-label="Initial weight scale"><span>Weight scale</span>
+          <button class="btn" type="button" data-dinit="0.5" aria-pressed="false">Too small ×0.5</button>
+          <button class="btn" type="button" data-dinit="1" aria-pressed="true">Xavier ×1</button>
+          <button class="btn" type="button" data-dinit="1.4142" aria-pressed="false">He ×√2</button>
+          <button class="btn" type="button" data-dinit="2" aria-pressed="false">Too large ×2</button>
+        </div>
+        <div class="toggles" role="group" aria-label="Tricks">
+          <button class="toggle" type="button" id="d-res" aria-pressed="false">Skip connections</button>
+          <button class="toggle" type="button" id="d-ln" aria-pressed="false">Layer norm (before each block)</button>
+        </div>
+        <div class="chart-wrap" id="d-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>Gradient size at each layer, relative to the last (backward)</span>
+          <span><i style="background:var(--warn)"></i>Size of the signal at each layer (forward)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-d">Depth (number of layers) <output for="s-d"></output></label><input type="range" id="s-d" min="2" max="50" step="1" value="20"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="d-gb"><div class="k">Gradient at layer 1 vs. the last layer</div><div class="v" id="d-g"></div><div class="s" id="d-gs"></div></div>
+          <div class="stat" id="d-fb"><div class="k">Signal size at the last layer</div><div class="v" id="d-f"></div><div class="s">input has size 1</div></div>
+          <div class="stat"><div class="k">Parameters in the stack</div><div class="v" id="d-p"></div><div class="s">width 64 per layer</div></div>
+        </div>
+        <p class="verdict" id="d-verdict"></p>
+        <p class="sim-note">Simulated: a width-64 network with Gaussian random weights (fixed seed), one random input, and a loss equal to the sum of the final layer's outputs. Gradients are exact backpropagation through the stack, including the layer-norm Jacobian. This is a snapshot at initialisation, not a trained model. One seed gives one realisation; the exact numbers vary by seed, the orders of magnitude do not. The vertical axis is logarithmic and clipped to 10<sup>−12</sup> … 10<sup>12</sup>.</p>
+      </figure>
+
+      <div class="prose">
+        <p>What the picture shows, in order. Sigmoid at depth 20: the slope is at most 0.25, so each layer multiplies the gradient by something of order 0.25 × (weights). After 20 layers the early layers receive about nothing; they cannot learn. That is the <strong>vanishing gradient</strong> problem (Hochreiter, 1991; Bengio et al., 1994), and it kept deep nets out of reach for twenty years. ReLU with He scale preserves size on average. Too-large weights, even with ReLU, multiply at every layer: the <strong>exploding gradient</strong>, usually met in practice as a loss that suddenly becomes NaN. A standard emergency measure is gradient clipping, which caps the gradient's norm.</p>
+        <p>With skips and no normalisation, nothing vanishes, but at He scale each block adds a full-size contribution, so the forward signal and the gradient both grow with depth (shrink the weight scale and you can tame it, which is why residual branches are often initialised small). With layer norm before each block, both are held within a modest range. This pairing is no accident: it is the arrangement in essentially every transformer you will meet, and Part 4 covers where researchers are still tinkering with it.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>This lesson is the base for everything else in Module F5 and for the whole large-model track. The links below tell you where each idea returns.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F1.3 · Gradients and optimisation</span><span class="t"><a href="f1-gradients-optimisation.html">The maths under the training loop</a></span><p>Gradient descent, learning rates, momentum and Adam. This lesson shows how the gradient is produced; that one shows how it is used.</p></div>
+        <div class="link-card"><span class="code">F1.1 · Vectors and matrices</span><span class="t"><a href="f1-vectors-matrices-geometry.html">A layer is a matrix multiplication</a></span><p>The weighted sum is a dot product and the layer a matrix product. The line z = 0 is a hyperplane.</p></div>
+        <div class="link-card"><span class="code">F4.2 · Logistic regression</span><span class="t"><a href="f4-bias-variance-and-generalisation.html">The one-neuron network</a></span><p>A single sigmoid neuron trained on cross-entropy is logistic regression. The scorecard baseline is where a network must prove itself.</p></div>
+        <div class="link-card"><span class="code">F6 · Loss functions and regularisation</span><span class="t"><a href="f6-loss-functions-and-what-they.html">What gets differentiated</a></span><p>The loss defines the starting error signal. Cross-entropy, squared error and focal loss each send a different message back through the network.</p></div>
+        <div class="link-card"><span class="code">F6 · Overfitting and dropout</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">When more weights hurt</a></span><p>Networks have more parameters than your fraud positives. Dropout, weight decay and early stopping control that.</p></div>
+        <div class="link-card"><span class="code">F5 · Convolutions</span><span class="t"><a href="f5-convolutions.html">Weight sharing for images and signals</a></span><p>A convolution is a layer whose weights are shared across positions. ResNets are where the skip connection was born.</p></div>
+        <div class="link-card"><span class="code">F5 · Attention</span><span class="t"><a href="f5-attention.html">The transformer block</a></span><p>Attention plus an MLP, wrapped in norms and residuals exactly as in Simulation 3.</p></div>
+        <div class="link-card"><span class="code">F5 · Self-supervised learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">What the network learns without labels</a></span><p>The training machinery is the same; only the loss and the source of "labels" change.</p></div>
+        <div class="link-card"><span class="code">F4 · Autoencoders for anomalies</span><span class="t"><a href="f4-anomaly-detection-isolation-forests-autoencoders.html">A network that reproduces its input</a></span><p>An autoencoder is a small stack with a narrow middle. Its reconstruction error becomes an anomaly score.</p></div>
+        <div class="link-card"><span class="code">M1 · Pretraining</span><span class="t"><a href="m1-pretraining-then-post-training.html">The same loop at scale</a></span><p>A large language model is trained by this loop on trillions of tokens: forward, loss, backward, step, with the stability tricks of this lesson.</p></div>
+        <div class="link-card"><span class="code">F4 · Hyperparameter tuning</span><span class="t"><a href="f4-hyperparameter-tuning-grid-random-and.html">Learning rate first</a></span><p>For networks the learning rate is usually the most sensitive setting, followed by batch size and weight decay.</p></div>
+        <div class="link-card"><span class="code">P3 · Quantization</span><span class="t"><a href="p3-quantization-pruning-and-distillation.html">Shrinking the trained weights</a></span><p>Everything trained here ends as large matrices of numbers that can be stored with fewer bits.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at a bank:</p>
+        <ul>
+          <li><strong>Card fraud on sequences.</strong> A network can read a customer's last 50 transactions as a sequence and learn behavioural features directly. Large processors report real gains over hand-built features, but at a Gulf retail bank with a few thousand confirmed cases, a tuned boosted-tree model with good features is a hard baseline to beat.</li>
+          <li><strong>Tabular credit and churn models.</strong> Studies on benchmark tabular data (Grinsztajn et al., 2022; Part 4) find trees usually win at medium data sizes. Networks earn their place when you have embeddings of text, merchants or accounts, many tasks sharing one representation, or very large data.</li>
+          <li><strong>Text and documents.</strong> Complaint triage, KYC document extraction and Arabic-English call-centre analytics all rest on pretrained transformers. Understanding why they train at all is what lets you reason about their cost, instability and fine-tuning.</li>
+          <li><strong>Validation and governance.</strong> A validator will ask what the architecture is, how it was initialised and stopped, how stable results are across random seeds, and how it can be explained (F8). A network gives a different model each time you change the seed; plan for that.</li>
+          <li><strong>Image and signature checks.</strong> Cheque images, ID cards and face match use convolutional and transformer nets. All the sizing here applies.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The core of this lesson is settled and thirty-plus years old. The live research is mostly at the second topic: how to arrange normalisation and the residual stream so that models with hundreds of layers, trained at extreme scale, do not diverge, and how to make that arrangement more expressive.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Checked 6 November 2026. One search run on the recent residual-stream work; the earlier items are well-established papers cited from memory, so verify details before quoting them.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1986</span><div><div class="t">Backpropagation popularised</div><p>Rumelhart, Hinton and Williams showed that gradient descent through hidden layers learns useful internal representations.</p><div class="src">Nature, 1986</div></div></li>
+        <li><span class="yr">2010</span><div><div class="t">Variance-preserving initialisation</div><p>Glorot and Bengio explained why deep networks with naive initialisation fail and gave the Xavier scale. He et al. followed in 2015 with the ReLU-aware version.</p><div class="src">Glorot &amp; Bengio, AISTATS 2010; He et al., ICCV 2015</div></div></li>
+        <li><span class="yr">2015–16</span><div><div class="t">Batch norm, residual networks, layer norm</div><p>Together they made 100-plus layer networks routine. ResNet won the ImageNet 2015 challenge; layer norm was designed for recurrent and later transformer models.</p><div class="src">Ioffe &amp; Szegedy 2015; He et al. 2016; Ba et al. 2016</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">Why batch norm works, revisited</div><p>The smoothing of the loss landscape, not "covariate shift", was identified as the main effect.</p><div class="src">Santurkar et al., NeurIPS 2018</div></div></li>
+        <li><span class="yr">2019–20</span><div><div class="t">RMSNorm and pre-norm transformers</div><p>RMSNorm cut the mean subtraction. Xiong et al. showed that placing the norm before each sub-layer gives well-behaved gradients at initialisation and reduces the need for warm-up. Recent open LLMs commonly use RMSNorm in a pre-norm layout.</p><div class="src">Zhang &amp; Sennrich 2019; Xiong et al., ICML 2020</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Trees still beat networks on typical tabular data</div><p>Across 45 medium-sized datasets, tree-based models remained state of the art, even after heavy tuning of the networks. Reasons given include networks' bias towards smooth functions and sensitivity to uninformative features.</p><div class="src">Grinsztajn, Oyallon, Varoquaux, NeurIPS 2022 Datasets and Benchmarks</div></div></li>
+        <li><span class="yr">2024–25</span><div><div class="t">Hyper-connections: widening the residual stream</div><p>Instead of one residual stream, keep several and let the network learn how to mix them between layers. The idea relaxes the fixed "add the input back" rule.</p><div class="src">Zhu et al. (ByteDance), arXiv 2409.19606, ICLR 2025</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Constraining the mixing for stability</div><p>DeepSeek's mHC reports that unconstrained hyper-connections can become unstable at scale and constrains the mixing matrices to be doubly stochastic, which preserves the "signal neither grows nor shrinks" property of the identity skip. The paper reports gains on models up to 27B parameters, and DeepSeek-V4's report states it uses mHC. Treat reported loss gains as the authors' own results.</p><div class="src">arXiv 2512.24880 (Dec 2025/Jan 2026); DeepSeek-V4 report, arXiv 2606.19348</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>He/Xavier initialisation, AdamW, residual connections</b></td><td>Framework defaults in essentially every deep model.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Pre-norm with RMSNorm or LayerNorm</b></td><td>The standard transformer block in open and (as far as is disclosed) closed LLMs.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Gradient clipping and warm-up schedules</b></td><td>Routine guards against loss spikes in large runs.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Neural nets for tabular credit and fraud</b></td><td>Used alongside or after boosted trees; often for embeddings and sequences rather than as a replacement.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Multi-stream residuals (hyper-connections, mHC)</b></td><td>Published at research scale, reported in one frontier model family.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Loss-spike handling, seed sweeps and instability tricks</b></td><td>Large labs keep many informal recipes (extra norms inside attention, restarts); few are written up.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Depth works because the signal is kept near constant size, forward and backward: sensible initialisation, a normalisation layer before each block, and an identity skip path. Research now asks how much more the residual stream can be made to do without breaking that guarantee.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Most failures in practice are quiet: training runs and produces a number. Each item has the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Loss does not move from about 0.69 (or the base-rate value)</div><p>The network outputs the same probability for everyone. Causes: learning rate far too small, dead activations, unscaled inputs, a bug in the labels.</p><div class="spot"><b>Spot it</b>Check that the model can overfit a batch of 50 examples to near-zero loss. If not, the pipeline is broken, not the idea. Check the average prediction against the base rate.</div></li>
+        <li><div class="t">Loss turns NaN or jumps</div><p>Exploding gradients, a learning rate too high, or log(0) in a hand-written loss.</p><div class="spot"><b>Spot it</b>Log the gradient norm each step. A sudden rise precedes the spike. Gradient clipping and lower learning rate are the first fixes.</div></li>
+        <li><div class="t">Dead ReLUs</div><p>A neuron whose pre-activation is negative for every input outputs zero, gets a zero gradient and never recovers. Large learning rates cause it.</p><div class="spot"><b>Spot it</b>Count the share of hidden units that are zero on a whole batch. If it is above 30–50% something is off.</div></li>
+        <li><div class="t">Unscaled inputs</div><p>AED amounts next to binary flags. The big feature dominates every weighted sum.</p><div class="spot"><b>Spot it</b>Look at each input's mean and standard deviation before training. Standardise, or log-transform heavy tails.</div></li>
+        <li><div class="t">Different results on every run</div><p>Random initialisation and batch order give a different model per seed. A single run's score may be luck.</p><div class="spot"><b>Spot it</b>Ask for results over five or more seeds, with the spread. Differences smaller than the seed-to-seed spread are noise.</div></li>
+        <li><div class="t">Train/eval mismatch from batch norm</div><p>Excellent training metrics, poor live ones, because batch statistics differ from the stored averages at inference, or the model was left in training mode.</p><div class="spot"><b>Spot it</b>Confirm evaluation uses eval mode, and compare metrics with and without batch statistics. Layer norm avoids the issue.</div></li>
+        <li><div class="t">A network where a simpler model would do</div><p>A deep net on 3,000 labelled rows and 30 columns, claimed to beat logistic regression by a point of AUC.</p><div class="spot"><b>Spot it</b>Ask for the boosted-tree and logistic baselines on the same time-ordered split, with intervals. A one-point gain on small data is usually noise.</div></li>
+        <li><div class="t">Believing the universal approximation theorem means it will work</div><p>The theorem says a good network exists, not that training finds it or that it generalises.</p><div class="spot"><b>Spot it</b>When a pitch cites it as evidence, ask for held-out, forward-in-time results instead.</div></li>
+        <li><div class="t">Treating output scores as probabilities</div><p>A sigmoid output is not automatically calibrated. Modern deep networks tend to be overconfident (Guo et al., 2017).</p><div class="spot"><b>Spot it</b>Plot a reliability curve on held-out data (F7.4) and recalibrate before using the score in a threshold or an expected-loss figure.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“A neural network is a long chain of simple scoring steps. It learns by seeing how wrong it was on each example and nudging millions of dials a tiny amount in the direction that reduces the error. That is a lot of arithmetic but not a mystery. For our structured customer data, simpler models often match it, so the real case for networks is text, documents, sequences of transactions and images, where they find patterns we cannot hand-code.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“A layer is an affine map followed by a non-linearity; backprop is the chain rule with cached activations, so the cost of a gradient is about two forward passes. Deep stacks train because of variance-preserving initialisation, He for ReLU, a norm before each block, and identity skip paths that give the gradient a direct route. I'd report results across seeds, compare to a boosted-tree baseline on a forward-in-time split, and recalibrate output scores before anything depends on them as probabilities.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just use a deep network for everything?”</summary><div class="ans"><p>On medium-sized tabular data, trees are usually as accurate or better, train faster, need less tuning and are easier to explain. Networks earn their place with unstructured data (text, images, sequences), shared representations across many tasks, or very large data. I'd start with a boosted baseline and add a network when it clears that baseline with intervals.</p></div></details>
+        <details class="reveal"><summary>“What actually is backpropagation?”</summary><div class="ans"><p>The chain rule organised to reuse work. A forward pass stores activations; a backward pass carries an error signal from the loss back through each layer, multiplying by the local slopes and weights, which yields the gradient for every weight in one sweep. It costs roughly two forward passes regardless of parameter count.</p></div></details>
+        <details class="reveal"><summary>“Why did deeper networks used to be harder to train?”</summary><div class="ans"><p>The backward signal is multiplied by a factor at every layer. If those factors are typically below one, as with sigmoids, it vanishes; above one, it explodes. Fixes: variance-preserving initialisation, ReLU-type activations, normalisation, and above all residual connections, which add an identity path so the gradient is never forced through all those factors.</p></div></details>
+        <details class="reveal"><summary>“Batch norm or layer norm?”</summary><div class="ans"><p>Batch norm depends on the other examples in the batch and behaves differently at inference, which is fine for large-batch image models and awkward otherwise. Layer norm works on one example at a time, so it is the default for transformers and sequences. Recent large language models mostly use RMSNorm, a cheaper variant, in pre-norm position.</p></div></details>
+        <details class="reveal"><summary>“Our network's AUC changes by 0.01 each time we retrain. Is that a problem?”</summary><div class="ans"><p>It is normal seed variation, but it matters for governance. Measure it over several seeds and report the spread, treat gains smaller than it as noise, and fix seeds and data order for reproducible validation. If scores for individual customers swing a lot between retrains, consider averaging a few models.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A sigmoid neuron has weights (2, −1), bias −0.5, and receives inputs (1.5, 0.5). What does it output?</summary><div class="ans"><p>z = 2×1.5 − 1×0.5 − 0.5 = 2.0. The sigmoid of 2 is 1 ÷ (1 + e<sup>−2</sup>) ≈ <strong>0.881</strong>. Its slope there is 0.881 × 0.119 ≈ 0.105.</p></div></details>
+        <details class="reveal"><summary>2. How many parameters has a network with 100 inputs, a hidden layer of 64, a second hidden layer of 32, and one output?</summary><div class="ans"><p>(100×64 + 64) + (64×32 + 32) + (32×1 + 1) = 6,464 + 2,080 + 33 = <strong>8,577</strong>. Each layer has a weight matrix plus one bias per output unit.</p></div></details>
+        <details class="reveal"><summary>3. Why can't ten stacked linear layers do more than one?</summary><div class="ans"><p>The product of matrices is a single matrix. <i>W</i><sub>10</sub>…<i>W</i><sub>1</sub><i>x</i> equals <i>Mx</i> for <i>M</i> = <i>W</i><sub>10</sub>…<i>W</i><sub>1</sub>. Without a non-linearity between them, the layers add no expressive power. This is why Simulation 2 stalls well short of 100% with "Linear".</p></div></details>
+        <details class="reveal"><summary>4. The output is a sigmoid with cross-entropy loss. The model says 0.9 for a transaction that is legitimate (y = 0). What is the starting error signal, and what if it had said 0.01?</summary><div class="ans"><p>δ = p − y = 0.9 − 0 = <strong>0.9</strong>, a strong push. At 0.01 it is 0.01, nearly none. The error signal is simply "prediction minus truth".</p></div></details>
+        <details class="reveal"><summary>5. A 20-layer network uses sigmoids, whose slope is at most 0.25. Roughly how much can the gradient shrink from the slopes alone?</summary><div class="ans"><p>0.25<sup>20</sup> ≈ 9 × 10<sup>−13</sup>. Weights can partly offset this, but with sizes near one the early layers receive essentially no signal. That is the vanishing gradient.</p></div></details>
+        <details class="reveal"><summary>6. A layer takes 256 inputs and uses ReLU. What weight standard deviation does He initialisation use, and why not the Xavier value?</summary><div class="ans"><p>√(2/256) ≈ <strong>0.088</strong>, against Xavier's 1/16 = 0.0625. ReLU zeros out about half the pre-activations, which halves the variance of the signal, so the weights need twice the variance to compensate.</p></div></details>
+        <details class="reveal"><summary>7. Why does a residual connection help the gradient, in one sentence?</summary><div class="ans"><p>The derivative of <i>h</i> + <i>F</i>(<i>h</i>) is <i>I</i> + ∂<i>F</i>/∂<i>h</i>, so the backward signal always has a direct path multiplied by one, however poorly the block <i>F</i> is behaving.</p></div></details>
+        <details class="reveal"><summary>8. A colleague says "more hidden units guarantees a better model because of universal approximation". What is wrong?</summary><div class="ans"><p>The theorem is about existence of an approximating network, not about finding it by gradient descent or about generalising to new data. More units can fit noise and need more regularisation, more positives to support them and more compute.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>D. Rumelhart, G. Hinton, R. Williams. <a href="https://doi.org/10.1038/323533a0">Learning representations by back-propagating errors</a>. Nature, 1986.</li>
+        <li>K. Hornik, M. Stinchcombe, H. White. <a href="https://doi.org/10.1016/0893-6080(89)90020-8">Multilayer feedforward networks are universal approximators</a>. Neural Networks, 1989.</li>
+        <li>X. Glorot, Y. Bengio. <a href="https://proceedings.mlr.press/v9/glorot10a.html">Understanding the difficulty of training deep feedforward neural networks</a>. AISTATS, 2010.</li>
+        <li>K. He, X. Zhang, S. Ren, J. Sun. <a href="https://arxiv.org/abs/1502.01852">Delving Deep into Rectifiers</a>. ICCV, 2015.</li>
+        <li>S. Ioffe, C. Szegedy. <a href="https://arxiv.org/abs/1502.03167">Batch Normalization</a>. ICML, 2015.</li>
+        <li>K. He, X. Zhang, S. Ren, J. Sun. <a href="https://arxiv.org/abs/1512.03385">Deep Residual Learning for Image Recognition</a>. CVPR, 2016.</li>
+        <li>J. Ba, J. Kiros, G. Hinton. <a href="https://arxiv.org/abs/1607.06450">Layer Normalization</a>. arXiv, 2016.</li>
+        <li>D. Kingma, J. Ba. <a href="https://arxiv.org/abs/1412.6980">Adam: A Method for Stochastic Optimization</a>. ICLR, 2015.</li>
+        <li>S. Santurkar et al. <a href="https://arxiv.org/abs/1805.11604">How Does Batch Normalization Help Optimization?</a> NeurIPS, 2018.</li>
+        <li>B. Zhang, R. Sennrich. <a href="https://arxiv.org/abs/1910.07467">Root Mean Square Layer Normalization</a>. NeurIPS, 2019.</li>
+        <li>R. Xiong et al. <a href="https://arxiv.org/abs/2002.04745">On Layer Normalization in the Transformer Architecture</a>. ICML, 2020.</li>
+        <li>C. Guo et al. <a href="https://arxiv.org/abs/1706.04599">On Calibration of Modern Neural Networks</a>. ICML, 2017.</li>
+        <li>L. Grinsztajn, E. Oyallon, G. Varoquaux. <a href="https://arxiv.org/abs/2207.08815">Why do tree-based models still outperform deep learning on typical tabular data?</a> NeurIPS Datasets and Benchmarks, 2022.</li>
+        <li>D. Zhu et al. <a href="https://arxiv.org/abs/2409.19606">Hyper-Connections</a>. arXiv 2409.19606, ICLR 2025.</li>
+        <li>DeepSeek-AI. <a href="https://www.alphaxiv.org/abs/2512.24880">mHC: Manifold-Constrained Hyper-Connections</a>. arXiv 2512.24880, 2025/26.</li>
+        <li>DeepSeek-AI. <a href="https://arxiv.org/pdf/2606.19348">DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence</a>. arXiv 2606.19348, 2026.</li>
+        <li>I. Goodfellow, Y. Bengio, A. Courville. <a href="https://www.deeplearningbook.org/">Deep Learning</a>. MIT Press, 2016. Chapters 6 and 8.</li>
+        <li>S. Prince. <a href="https://udlbook.github.io/udlbook/">Understanding Deep Learning</a>. MIT Press, 2023. Free online.</li>
+        <li>A. Karpathy. <a href="https://github.com/karpathy/micrograd">micrograd</a>. A small autograd engine, about 100 lines, that shows backprop completely.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F5: Convolutions</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  function mk(box, W, H, label) { box.innerHTML = ""; return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box); }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function pressGroup(sel, attr, onPick) {
+    const bs = [...document.querySelectorAll(sel)];
+    bs.forEach(b => b.addEventListener("click", () => { bs.forEach(o => o.setAttribute("aria-pressed", String(o === b))); onPick(b.getAttribute(attr)); }));
+  }
+  const sci = v => { if (!isFinite(v)) return "overflow"; if (v === 0) return "0"; const e = Math.floor(Math.log10(Math.abs(v))); if (e > -3 && e < 4) return v.toPrecision(2); return (v / Math.pow(10, e)).toFixed(1) + "e" + e; };
+
+  // shared maths
+  function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = 0; while (u === 0) u = r(); const v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+
+  // =====================================================================
+  // Simulation 1: one neuron
+  // =====================================================================
+  const S1 = { act: "sigmoid", w1: 2, w2: -1, b: -0.5 };
+  const EX = [1.5, 0.5];
+  const A1 = {
+    sigmoid: [z => 1 / (1 + Math.exp(-z)), a => a * (1 - a)],
+    tanh: [Math.tanh, a => 1 - a * a],
+    relu: [z => Math.max(0, z), (a, z) => z > 0 ? 1 : 0]
+  };
+  const nBox = $("n-chart");
+  function renderNeuron() {
+    const W = Math.max(300, nBox.clientWidth), H = Math.min(340, Math.max(260, W * 0.8)), m = { l: 34, r: 10, t: 10, b: 32 };
+    const svg = mk(nBox, W, H, "Neuron output over amount and night-time score");
+    const x = L.scale(-3, 3, m.l, W - m.r), y = L.scale(-3, 3, H - m.b, m.t);
+    const f = A1[S1.act][0], n = 26, step = 6 / n;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const cx = -3 + (i + 0.5) * step, cy = -3 + (j + 0.5) * step;
+      const o = f(S1.w1 * cx + S1.w2 * cy + S1.b);
+      let hi, op;
+      if (S1.act === "sigmoid") { hi = o > 0.5; op = Math.abs(2 * o - 1) * 0.75; }
+      else if (S1.act === "tanh") { hi = o > 0; op = Math.abs(o) * 0.75; }
+      else { hi = true; op = Math.min(o / 4, 1) * 0.75; }
+      L.svg("rect", { x: x(-3 + i * step), y: y(-3 + (j + 1) * step), width: x(-3 + step) - x(-3) + 0.5, height: y(-3) - y(-3 + step) + 0.5, class: hi ? "cell-hi" : "cell-lo", "fill-opacity": op.toFixed(3) }, svg);
+    }
+    [-3, -2, -1, 0, 1, 2, 3].forEach(v => {
+      tx(svg, x(v), H - m.b + 15, String(v), { "text-anchor": "middle" });
+      tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" });
+    });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Amount (z-score)", { "text-anchor": "middle" });
+    tx(svg, 10, (m.t + H - m.b) / 2, "Night-time score", { "text-anchor": "middle", transform: `rotate(-90 10 ${(m.t + H - m.b) / 2})` });
+    // line z = 0: w1*x + w2*y + b = 0
+    const pts = [];
+    if (Math.abs(S1.w2) > 1e-6) { [-3, 3].forEach(px => pts.push([px, -(S1.w1 * px + S1.b) / S1.w2])); }
+    else if (Math.abs(S1.w1) > 1e-6) { const px = -S1.b / S1.w1; pts.push([px, -3], [px, 3]); }
+    if (pts.length === 2) L.svg("line", { x1: x(pts[0][0]), y1: y(pts[0][1]), x2: x(pts[1][0]), y2: y(pts[1][1]), class: "ln-bound", "clip-path": "none" }, svg);
+    L.svg("circle", { cx: x(EX[0]), cy: y(EX[1]), r: 6, class: "ex-dot" }, svg);
+    const z = S1.w1 * EX[0] + S1.w2 * EX[1] + S1.b, a = f(z), d = A1[S1.act][1](a, z);
+    $("n-z").textContent = z.toFixed(2);
+    $("n-zs").textContent = S1.w1.toFixed(1) + "×1.5 + " + S1.w2.toFixed(1) + "×0.5 + " + S1.b.toFixed(1);
+    $("n-a").textContent = a.toFixed(3);
+    $("n-as").textContent = S1.act === "sigmoid" ? "read as a probability" : S1.act === "tanh" ? "between −1 and 1" : "zero or positive";
+    $("n-d").textContent = d.toFixed(3);
+    $("n-verdict").innerHTML = d < 0.02
+      ? "The neuron is <b>saturated</b> for this input: its slope is almost zero, so a backward error signal passing through it would be crushed. " + (S1.act === "relu" ? "For ReLU this means the neuron is off (a dead unit if it is off for every input)." : "This is the root of the vanishing gradient.")
+      : "The line is where z = 0. This payment sits " + (z >= 0 ? "on the high side" : "on the low side") + " of it, with a slope of <b>" + d.toFixed(2) + "</b>: a nudge to z changes the output by about that fraction.";
+  }
+  L.bind("s-w1", v => v.toFixed(1), v => { S1.w1 = v; renderNeuron(); });
+  L.bind("s-w2", v => v.toFixed(1), v => { S1.w2 = v; renderNeuron(); });
+  L.bind("s-b", v => v.toFixed(1), v => { S1.b = v; renderNeuron(); });
+  pressGroup("[data-act]", "data-act", a => { S1.act = a; renderNeuron(); });
+
+  // =====================================================================
+  // Simulation 2: training a tiny network
+  // =====================================================================
+  const ACT = { tanh: [Math.tanh, a => 1 - a * a], relu: [z => z > 0 ? z : 0, (a, z) => z > 0 ? 1 : 0], linear: [z => z, () => 1] };
+  const DATA = (function () { const r = rng(11), X = [], Y = []; while (X.length < 160) { const a = r() * 4 - 2, b = r() * 4 - 2; if (Math.abs(a) < 0.25 || Math.abs(b) < 0.25) continue; X.push([a, b]); Y.push(a * b > 0 ? 1 : 0); } return { X, Y }; })();
+  const T = { act: "tanh", H: 4, lk: -0.3, net: null, steps: 0, hist: [], run: false, raf: 0, last: null };
+  function initNet() {
+    const r = rng(5), H = T.H, n = { H, W1: [], b1: [], W2: [], b2: 0 };
+    for (let j = 0; j < H; j++) { n.W1.push([gauss(r) * 0.7, gauss(r) * 0.7]); n.b1.push(0); n.W2.push(gauss(r) * 0.7); }
+    T.net = n; T.steps = 0; T.hist = []; T.last = lossGrad(n);
+    T.hist.push(T.last.L);
+  }
+  function fwd(n, x) {
+    const f = ACT[T.act][0]; let z2 = n.b2; const A = [], Z = [];
+    for (let j = 0; j < n.H; j++) { const z = n.W1[j][0] * x[0] + n.W1[j][1] * x[1] + n.b1[j]; Z.push(z); const a = f(z); A.push(a); z2 += n.W2[j] * a; }
+    return { Z, A, p: 1 / (1 + Math.exp(-z2)) };
+  }
+  function lossGrad(n) {
+    const N = DATA.X.length, df = ACT[T.act][1];
+    const g = { W1: n.W1.map(() => [0, 0]), b1: n.b1.map(() => 0), W2: n.W2.map(() => 0), b2: 0 };
+    let Lo = 0, c = 0;
+    for (let i = 0; i < N; i++) {
+      const x = DATA.X[i], y = DATA.Y[i], o = fwd(n, x), p = Math.min(Math.max(o.p, 1e-12), 1 - 1e-12);
+      Lo += -(y ? Math.log(p) : Math.log(1 - p)) / N; if ((p > 0.5) === (y === 1)) c++;
+      const dz2 = (o.p - y) / N;                       // output error signal: prediction minus truth
+      g.b2 += dz2;
+      for (let j = 0; j < n.H; j++) {
+        g.W2[j] += dz2 * o.A[j];
+        const dz1 = dz2 * n.W2[j] * df(o.A[j], o.Z[j]);   // sent back through W2, scaled by the slope
+        g.W1[j][0] += dz1 * x[0]; g.W1[j][1] += dz1 * x[1]; g.b1[j] += dz1;
+      }
+    }
+    return { L: Lo, acc: c / N, g };
+  }
+  function stepOnce() {
+    const n = T.net, lr = Math.pow(10, T.lk), r = T.last;
+    for (let j = 0; j < n.H; j++) { n.W1[j][0] -= lr * r.g.W1[j][0]; n.W1[j][1] -= lr * r.g.W1[j][1]; n.b1[j] -= lr * r.g.b1[j]; n.W2[j] -= lr * r.g.W2[j]; }
+    n.b2 -= lr * r.g.b2;
+    T.last = lossGrad(n); T.steps++;
+    T.hist.push(isFinite(T.last.L) ? T.last.L : 50);
+  }
+  function gradCheck() {
+    const n = T.net, e = 1e-5, a = T.last.g.W1[0][0]; const w = n.W1[0][0];
+    n.W1[0][0] = w + e; const lp = lossGrad(n).L; n.W1[0][0] = w - e; const lm = lossGrad(n).L; n.W1[0][0] = w;
+    const fd = (lp - lm) / (2 * e); return { a, fd, rel: Math.abs(a - fd) / Math.max(1e-9, Math.abs(a) + Math.abs(fd)) };
+  }
+  const tMap = $("t-map"), tLoss = $("t-loss");
+  function renderTrain() {
+    const n = T.net, r = T.last;
+    const W = Math.max(240, tMap.clientWidth), H = Math.min(300, W), m = { l: 6, r: 6, t: 6, b: 6 };
+    const svg = mk(tMap, W, H, "Decision map of the network over the two inputs");
+    const x = L.scale(-2.5, 2.5, m.l, W - m.r), y = L.scale(-2.5, 2.5, H - m.b, m.t), g = 22, st = 5 / g;
+    for (let i = 0; i < g; i++) for (let j = 0; j < g; j++) {
+      const cx = -2.5 + (i + 0.5) * st, cy = -2.5 + (j + 0.5) * st, p = fwd(n, [cx, cy]).p;
+      L.svg("rect", { x: x(-2.5 + i * st), y: y(-2.5 + (j + 1) * st), width: x(-2.5 + st) - x(-2.5) + 0.5, height: y(-2.5) - y(-2.5 + st) + 0.5, class: p > 0.5 ? "cell-hi" : "cell-lo", "fill-opacity": (Math.abs(2 * p - 1) * 0.7).toFixed(3) }, svg);
+    }
+    L.svg("line", { x1: x(0), x2: x(0), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: "grid" }, svg);
+    DATA.X.forEach((p, i) => L.svg("circle", { cx: x(p[0]), cy: y(p[1]), r: 3.4, class: DATA.Y[i] ? "pt1" : "pt0" }, svg));
+    // loss curve
+    const W2 = Math.max(240, tLoss.clientWidth), H2 = H, q = { l: 40, r: 8, t: 10, b: 28 };
+    const sv2 = mk(tLoss, W2, H2, "Training loss against steps");
+    const hist = T.hist, nn = hist.length, xmax = Math.max(100, nn - 1);
+    const lo = Math.log10(0.003), hi = Math.log10(3);
+    const lx = L.scale(0, xmax, q.l, W2 - q.r), ly = v => L.scale(lo, hi, H2 - q.b, q.t)(Math.log10(L.clamp(v, 0.003, 3)));
+    [[0.01, "0.01"], [0.1, "0.1"], [1, "1"]].forEach(([v, s]) => { L.svg("line", { x1: q.l, x2: W2 - q.r, y1: ly(v), y2: ly(v), class: "grid" }, sv2); tx(sv2, q.l - 5, ly(v) + 4, s, { "text-anchor": "end" }); });
+    L.svg("line", { x1: q.l, x2: W2 - q.r, y1: ly(0.693), y2: ly(0.693), class: "ln-ref" }, sv2);
+    tx(sv2, W2 - q.r, ly(0.693) - 4, "coin flip", { "text-anchor": "end" });
+    const pts = [], stp = Math.max(1, Math.floor(nn / 300));
+    for (let i = 0; i < nn; i += stp) pts.push([lx(i), ly(hist[i])]);
+    pts.push([lx(nn - 1), ly(hist[nn - 1])]);
+    if (pts.length > 1) L.svg("path", { d: L.path(pts), class: "ln-loss" }, sv2); else L.svg("circle", { cx: pts[0][0], cy: pts[0][1], r: 3, class: "ex-dot" }, sv2);
+    tx(sv2, (q.l + W2 - q.r) / 2, H2 - 6, "Training steps", { "text-anchor": "middle" });
+    tx(sv2, q.l, H2 - q.b + 14, "0", { "text-anchor": "middle" });
+    tx(sv2, W2 - q.r, H2 - q.b + 14, String(xmax), { "text-anchor": "end" });
+
+    $("t-n").textContent = L.fmtInt(T.steps);
+    const lossTxt = r.L > 10 ? "unstable" : r.L.toFixed(3);
+    $("t-l").textContent = lossTxt; cls($("t-lossb"), r.L > 0.6 ? "warn" : r.L < 0.1 ? "ok" : "");
+    $("t-a").textContent = (100 * r.acc).toFixed(0) + "%"; cls($("t-accb"), r.acc > 0.95 ? "ok" : r.acc < 0.8 && T.steps > 300 ? "bad" : "");
+    const gc = gradCheck();
+    $("t-gc").textContent = gc.rel < 1e-6 ? "agree" : (gc.rel < 1e-3 ? "close" : "differ");
+    $("t-gcs").textContent = "backprop " + sci(gc.a) + ", nudge " + sci(gc.fd);
+    const acc = r.acc, wide = T.H;
+    let v;
+    if (T.steps === 0) v = "Weights are random, so the network guesses. Press <b>Run</b>.";
+    else if (r.L > 5 || T.hist.slice(-1)[0] >= 50) v = "The learning rate is too high: each step overshoots, and the loss bounces or blows up. Lower it.";
+    else if (acc > 0.95) v = "Solved: " + wide + " bent hidden units combine into the pattern the data needs, and training accuracy is <b>" + (100 * acc).toFixed(0) + "%</b>. The boundary is built from " + wide + " slanted lines, one per hidden unit, joined by the output neuron.";
+    else if (T.act === "linear") v = "With no bend, the hidden layer collapses into one linear map, so the network is one line. It stalls at <b>" + (100 * acc).toFixed(0) + "%</b> whatever the width or number of steps.";
+    else if (T.H <= 1 && T.steps > 300) v = "One bent unit can draw only one line plus a bend; the pattern needs at least two. Add hidden units.";
+    else v = "Learning, but not there yet (" + (100 * acc).toFixed(0) + "%). Keep running, add hidden units, or raise the learning rate a little.";
+    $("t-verdict").innerHTML = v;
+  }
+  function setRunLabel() { $("t-run").textContent = L.reduced ? "Train 500 steps" : (T.run ? "Pause" : "Run"); }
+  function loop() {
+    if (!T.run) return;
+    for (let i = 0; i < 12; i++) stepOnce();
+    renderTrain();
+    if (T.steps >= 6000) { T.run = false; setRunLabel(); return; }
+    T.raf = requestAnimationFrame(loop);
+  }
+  function resetNet() { T.run = false; cancelAnimationFrame(T.raf); initNet(); setRunLabel(); renderTrain(); }
+  $("t-run").addEventListener("click", () => {
+    if (L.reduced) { for (let i = 0; i < 500; i++) stepOnce(); renderTrain(); return; }
+    T.run = !T.run; setRunLabel(); if (T.run) T.raf = requestAnimationFrame(loop);
+  });
+  $("t-step").addEventListener("click", () => { stepOnce(); renderTrain(); });
+  $("t-reset").addEventListener("click", resetNet);
+  pressGroup("[data-tact]", "data-tact", a => { T.act = a; resetNet(); });
+  L.bind("s-h", v => String(v), v => { T.H = v; resetNet(); });
+  L.bind("s-lr", v => Math.pow(10, v).toFixed(2), v => { T.lk = v; renderTrain(); });
+
+  // =====================================================================
+  // Simulation 3: signal and gradient through depth
+  // =====================================================================
+  const WID = 64, MAXD = 50;
+  const D3 = { act: "sigmoid", gain: 1, res: false, ln: false, d: 20 };
+  const RAW = (function () { const r = rng(2024), Ws = []; for (let l = 0; l < MAXD; l++) { const M = []; for (let i = 0; i < WID; i++) { const row = new Float64Array(WID); for (let j = 0; j < WID; j++) row[j] = gauss(r) / Math.sqrt(WID); M.push(row); } Ws.push(M); } const x0 = new Float64Array(WID); for (let i = 0; i < WID; i++) x0[i] = gauss(r); return { Ws, x0 }; })();
+  const ACT3 = {
+    sigmoid: [z => 1 / (1 + Math.exp(-z)), (a, z) => a * (1 - a)],
+    tanh: [Math.tanh, (a, z) => 1 - a * a],
+    relu: [z => z > 0 ? z : 0, (a, z) => z > 0 ? 1 : 0]
+  };
+  const rms = v => { let s = 0; for (let i = 0; i < v.length; i++) s += v[i] * v[i]; return Math.sqrt(s / v.length); };
+  function runDepth() {
+    const D = D3.d, f = ACT3[D3.act][0], df = ACT3[D3.act][1], gain = D3.gain;
+    const hs = [RAW.x0], store = [];
+    for (let l = 0; l < D; l++) {
+      const h = hs[l]; let a = h, sd = 1;
+      if (D3.ln) { let mu = 0; for (let i = 0; i < WID; i++) mu += h[i]; mu /= WID; let va = 0; for (let i = 0; i < WID; i++) va += (h[i] - mu) * (h[i] - mu); va /= WID; sd = Math.sqrt(va + 1e-5); a = new Float64Array(WID); for (let i = 0; i < WID; i++) a[i] = (h[i] - mu) / sd; }
+      const z = new Float64Array(WID), y = new Float64Array(WID), W = RAW.Ws[l];
+      for (let i = 0; i < WID; i++) { let s = 0; const row = W[i]; for (let j = 0; j < WID; j++) s += row[j] * a[j]; z[i] = gain * s; y[i] = f(z[i]); }
+      const hn = new Float64Array(WID); for (let i = 0; i < WID; i++) hn[i] = (D3.res ? h[i] : 0) + y[i];
+      hs.push(hn); store.push({ a, z, y, sd });
+    }
+    // backward: loss = sum of last layer
+    let g = new Float64Array(WID).fill(1); const gn = new Array(D + 1); gn[D] = rms(g);
+    for (let l = D - 1; l >= 0; l--) {
+      const { a, z, y, sd } = store[l], W = RAW.Ws[l];
+      const gz = new Float64Array(WID); for (let i = 0; i < WID; i++) gz[i] = g[i] * df(y[i], z[i]);
+      const ga = new Float64Array(WID); for (let j = 0; j < WID; j++) { let s = 0; for (let i = 0; i < WID; i++) s += W[i][j] * gz[i]; ga[j] = gain * s; }
+      let gh = ga;
+      if (D3.ln) { let mg = 0, mga = 0; for (let i = 0; i < WID; i++) { mg += ga[i]; mga += ga[i] * a[i]; } mg /= WID; mga /= WID; gh = new Float64Array(WID); for (let i = 0; i < WID; i++) gh[i] = (ga[i] - mg - a[i] * mga) / sd; }
+      const gnew = new Float64Array(WID); for (let i = 0; i < WID; i++) gnew[i] = gh[i] + (D3.res ? g[i] : 0);
+      g = gnew; gn[l] = rms(g);
+    }
+    const fs = hs.map(rms);
+    return { gn, fs };
+  }
+  const dBox = $("d-chart");
+  function renderDepth() {
+    const r = runDepth(), D = D3.d;
+    const W = Math.max(300, dBox.clientWidth), H = 280, m = { l: 48, r: 10, t: 12, b: 38 };
+    const svg = mk(dBox, W, H, "Gradient size and signal size at each layer");
+    const x = L.scale(0, D, m.l, W - m.r), LO = -12, HI = 12;
+    const y = v => L.scale(LO, HI, H - m.b, m.t)(L.clamp(Math.log10(Math.max(v, 1e-300)), LO, HI));
+    [-12, -6, 0, 6, 12].forEach(e => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(Math.pow(10, e)), y2: y(Math.pow(10, e)), class: e === 0 ? "ln-ref" : "grid" }, svg); tx(svg, m.l - 6, y(Math.pow(10, e)) + 4, "1e" + e, { "text-anchor": "end" }); });
+    const gp = [], fp = [], g0 = r.gn[D];
+    for (let l = 0; l <= D; l++) { gp.push([x(l), y(r.gn[l] / g0)]); fp.push([x(l), y(r.fs[l])]); }
+    L.svg("path", { d: L.path(fp), class: "ln-act" }, svg);
+    L.svg("path", { d: L.path(gp), class: "ln-grad" }, svg);
+    tx(svg, x(0), H - m.b + 15, "layer 0 (input)", { "text-anchor": "start" });
+    tx(svg, x(D), H - m.b + 15, "layer " + D + " (output)", { "text-anchor": "end" });
+    tx(svg, (m.l + W - m.r) / 2, H - 4, "Depth", { "text-anchor": "middle" });
+    const ratio = r.gn[0] / g0, fl = r.fs[D];
+    $("d-g").textContent = sci(ratio) + "×";
+    $("d-gs").textContent = ratio < 1e-3 ? "vanishing: early layers cannot learn" : ratio > 1e3 ? "exploding: training will diverge" : "healthy range";
+    cls($("d-gb"), ratio < 1e-3 || ratio > 1e3 ? "bad" : "ok");
+    $("d-f").textContent = sci(fl);
+    cls($("d-fb"), fl > 1e3 || fl < 1e-3 ? "warn" : "ok");
+    const P = D * (WID * WID) + (D3.ln ? 0 : 0);
+    $("d-p").textContent = L.fmtInt(D * WID * WID);
+    const bits = [];
+    if (ratio < 1e-3) bits.push("The gradient reaching layer 1 is <b>" + sci(ratio) + "</b> of the last layer's. Those weights would barely move.");
+    else if (ratio > 1e3) bits.push("The gradient reaching layer 1 is <b>" + sci(ratio) + "</b> times the last layer's: updates would be violent.");
+    else bits.push("The gradient reaching layer 1 is <b>" + sci(ratio) + "</b> of the last layer's: every layer gets a usable signal.");
+    if (fl > 1e3) bits.push("The forward signal has grown to <b>" + sci(fl) + "</b>; activations this large saturate or overflow. " + (D3.res && !D3.ln ? "Each skip adds a new block's output to the stream, so size grows with depth. A norm before each block is the standard cure." : ""));
+    else if (fl < 1e-3) bits.push("The forward signal has shrunk to <b>" + sci(fl) + "</b>: the output hardly depends on the input.");
+    else bits.push("The forward signal stays around <b>" + sci(fl) + "</b>.");
+    $("d-verdict").innerHTML = bits.join(" ");
+  }
+  pressGroup("[data-dact]", "data-dact", a => { D3.act = a; renderDepth(); });
+  pressGroup("[data-dinit]", "data-dinit", a => { D3.gain = +a; renderDepth(); });
+  [["d-res", "res"], ["d-ln", "ln"]].forEach(([id, k]) => $(id).addEventListener("click", e => { D3[k] = !D3[k]; e.currentTarget.setAttribute("aria-pressed", String(D3[k])); renderDepth(); }));
+  L.bind("s-d", v => v + " layers", v => { D3.d = v; renderDepth(); });
+
+  function renderAll() { renderNeuron(); renderTrain(); renderDepth(); }
+  resetNet(); renderAll();
+  let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

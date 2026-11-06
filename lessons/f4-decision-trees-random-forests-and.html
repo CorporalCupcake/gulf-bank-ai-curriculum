@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trees, Forests, Boosting and the Art of Holding Them Back</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 12px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .hb-leg { fill: var(--neutral); fill-opacity: .75; }
+  .hb-fr { fill: var(--warn); fill-opacity: .85; }
+  .sp-line { stroke: var(--accent); stroke-width: 2.2; }
+  .sp-best { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; }
+  .dp { fill: var(--neutral); fill-opacity: .75; }
+  .ln-true { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 4 4; fill: none; }
+  .ln-tree { stroke: var(--warn); stroke-width: 1.8; fill: none; }
+  .ln-fit { stroke: var(--accent); stroke-width: 2.6; fill: none; }
+  .ln-train { stroke: var(--neutral); stroke-width: 2.2; fill: none; }
+  .ln-test { stroke: var(--bad); stroke-width: 2.4; fill: none; }
+  .ln-ridge { stroke: var(--warn); stroke-width: 2.2; fill: none; }
+  .ln-lasso { stroke: var(--accent); stroke-width: 2.2; fill: none; }
+  .ln-floor { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; fill: none; }
+  .ln-now { stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 2 3; }
+  .cv-now { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .cb-pos { fill: var(--accent); fill-opacity: .85; }
+  .cb-neg { fill: var(--warn); fill-opacity: .85; }
+  .cb-zero { fill: var(--neutral); fill-opacity: .5; }
+  .cb-true { fill: none; stroke: var(--ink); stroke-width: 1.6; }
+  pre { max-width: var(--measure); }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F4 · Classical machine learning</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F4.3 · F4.4</span>
+        <span class="pill d">Day one</span>
+        <span>★ Priority</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Trees, Forests, Boosting and the Art of Holding Them Back</h1>
+      <p class="dek">How a decision tree picks its questions, why averaging many unstable trees works, how boosting builds a model one correction at a time, and how L1, L2, shrinkage and early stopping decide how much any of it is allowed to memorise.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A tree is a flowchart learned greedily from data; one tree memorises, so we either average many (forests) or stack small ones that each fix the last one's errors (boosting), and every knob that matters, from tree depth to learning rate to L2 and early stopping, is a way of limiting how much of the noise gets learned.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>Picture a senior credit officer who reviews personal-finance applications. After years of cases she carries a flowchart in her head. <em>Is the instalment over 45% of income? If yes, is there a missed payment in the last six months? If no, is the customer salary-transferred to us?</em> Each question splits applicants into two groups, and each group is asked a further question, until she is confident enough to say "approve" or "decline".</p>
+        <p>A <strong>decision tree</strong> is that flowchart, learned from data instead of years. At every step the algorithm asks one question: <em>of all the yes/no questions I could ask about one feature, which one separates defaulters from non-defaulters most cleanly?</em> It asks it, splits the data, and repeats inside each half.</p>
+        <p>This has real strengths. It handles numbers and categories, needs no scaling, finds interactions on its own ("high instalment <em>and</em> missed payment"), copes with missing values, and can be read aloud. It has one serious weakness. Left alone, a tree keeps asking questions until every leaf holds a handful of customers, at which point it has memorised the training data, noise included. Change the sample a little and you get a different tree. In F4.1's language, a single deep tree has <strong>low bias and very high variance</strong>.</p>
+        <p>Everything else in this lesson is a response to that one weakness.</p>
+        <ul>
+          <li><strong>Random forest:</strong> ask a hundred different officers, each of whom saw a different random batch of cases and considered only some of the questions. Average their verdicts. Their individual quirks cancel.</li>
+          <li><strong>Gradient boosting:</strong> start with a rough estimate, then hire a junior to fix what's still wrong, then another to fix what's still wrong after that. Each junior is deliberately small and weak. The sum is strong.</li>
+          <li><strong>Regularisation:</strong> the rules about how much any one officer may memorise: how deep, how many cases per leaf, how big a correction, when to stop hiring.</li>
+        </ul>
+        <p>On the tabular data a bank mostly has (customers, accounts, transactions, bureau fields) these methods, especially XGBoost, LightGBM and CatBoost, are still the default winners. Start by seeing how one split is chosen.</p>
+      </div>
+
+      <figure class="figure" id="fig-split">
+        <div class="fig-head"><span class="fig-title">Choosing a split: the question that cleans up the groups most</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> drag the cut-off for "amount as a multiple of the customer's usual spend". Watch the two boxes: a good cut makes the left group nearly all legitimate and the right group rich in fraud, so the weighted impurity drops. Then press <b>Find the best cut</b> and see what the algorithm sees. Try cutting at the extremes: a split that leaves everything on one side gains nothing.</p>
+        <div class="btns" role="group" aria-label="Split shortcut">
+          <button class="btn" type="button" id="b-best">Find the best cut</button>
+        </div>
+        <div class="chart-wrap" id="split-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral)"></i>Legitimate</span>
+          <span><i class="sq" style="background:var(--warn)"></i>Fraud</span>
+          <span><i style="background:var(--accent)"></i>Your cut</span>
+          <span><i style="background:var(--muted)"></i>Best cut</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-cut1">Cut-off: flag if amount is above <output for="s-cut1"></output> times usual</label><input type="range" id="s-cut1" min="0.2" max="4.5" step="0.05" value="1.2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Left group (at or below cut)</div><div class="v" id="st1-l"></div><div class="s" id="st1-ls"></div></div>
+          <div class="stat"><div class="k">Right group (above cut)</div><div class="v" id="st1-r"></div><div class="s" id="st1-rs"></div></div>
+          <div class="stat"><div class="k">Impurity: before, after</div><div class="v" id="st1-g"></div><div class="s">weighted average of the two groups</div></div>
+          <div class="stat" id="st1-gain-b"><div class="k">Gain from this split</div><div class="v" id="st1-gain"></div><div class="s" id="st1-gain-s"></div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: 300 transactions, 60 fraud and 240 legitimate. That is 20% fraud, far above a real rate, so the picture is readable. Amount multiples are drawn from two overlapping bell shapes (legitimate centred near 1.0, fraud near 2.4) with a fixed random seed. Impurity is the Gini measure; all numbers are exact for this sample.</p>
+      </figure>
+
+      <div class="callout key"><span class="k">Hold onto this</span>A tree is greedy: at each node it picks the single best split right now and never looks ahead or goes back. That is why it is fast, why it is unstable (a different sample can change the first split and so everything below it), and why the cure is to combine many trees rather than to polish one.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-tree">A decision tree: impurity, gain and greedy growth</h3>
+      <div class="prose">
+        <p>For classification, a node's <strong>impurity</strong> measures how mixed it is. The usual measure is Gini impurity:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>G</mi><mo>=</mo><mn>1</mn><mo>−</mo><msup><mi>p</mi><mn>2</mn></msup><mo>−</mo><msup><mrow><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>p</mi><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>=</mo><mn>2</mn><mi>p</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>p</mi><mo stretchy="false">)</mo></math>
+        <p class="where"><i>p</i> is the share of fraud in the node. A pure node (<i>p</i> = 0 or 1) scores 0; a 50/50 node scores the maximum, 0.5. In words: it is the chance that two transactions drawn at random from the node have different labels. Entropy (F1.7) is the alternative and behaves very similarly. For regression the impurity is simply the variance of the target in the node.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The <strong>gain</strong> of a candidate split is the parent's impurity minus the size-weighted impurity of the two children. The algorithm tries every feature and every cut point (for a numeric feature, the midpoints between sorted values), keeps the one with the largest gain, and recurses. It stops when a node is pure, too small, too deep, or no split gains enough. A prediction is the average label in the leaf: that is a probability estimate such as "7 of 40 customers like this defaulted, so 17.5%".</p>
+        <p>Four consequences worth knowing cold:</p>
+        <ul>
+          <li><strong>A tree is a step function.</strong> Predictions jump at the cut points and are flat between them. There is no smooth trend, and <strong>no extrapolation</strong>: ask a tree about an income of AED 400,000 a month when the training maximum was AED 120,000 and it returns the answer for the top bracket. This matters for inflation, growth and any quantity that trends.</li>
+          <li><strong>Interactions come free.</strong> A split below a split is an interaction. That is why trees capture "large amount at a new beneficiary at night" without anyone engineering it, and why they beat linear models when such patterns exist (F3.4).</li>
+          <li><strong>Only the order of values matters.</strong> Monotone transformations (log, scaling) change nothing. Outliers can't drag a fit the way they drag a regression line.</li>
+          <li><strong>Impurity-based importance is biased.</strong> The "feature importance" a tree library prints by default adds up the gains of every split on a feature. It favours features with many distinct values and says nothing about direction. F8 covers better attributions.</li>
+        </ul>
+        <p>Trees also have no built-in notion of a calibrated probability when grown deep: a leaf with two customers, both of whom defaulted, says 100%. Averaging and shrinkage (below) fix most of this; F7.4 covers recalibrating what remains.</p>
+      </div>
+
+      <h3 class="sub" id="m-forest">Random forests: bagging and decorrelation</h3>
+      <div class="prose">
+        <p>Breiman's recipe has two random ingredients. First, <strong>bootstrap</strong> the rows (F2.2): each tree trains on a sample drawn with replacement, so about 63% of distinct rows appear and the rest are left out. Second, at every split the tree is allowed to look at only a random subset of the features (commonly the square root of their number for classification). Grow each tree deep, so it has low bias and high variance, then average the votes or probabilities.</p>
+        <p>Why does averaging help? If each of <i>B</i> trees has variance σ² and the correlation between any two trees' predictions is ρ, the average has variance</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>Var</mi><mo>=</mo><mi>ρ</mi><msup><mi>σ</mi><mn>2</mn></msup><mo>+</mo><mfrac><mrow><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>ρ</mi><mo stretchy="false">)</mo><msup><mi>σ</mi><mn>2</mn></msup></mrow><mi>B</mi></mfrac></math>
+        <p class="where">The second term vanishes as you add trees, so more trees never hurt and quickly stop helping. The first term does not: it is the part of the variance the trees share. Resampling rows and restricting features exist to push ρ down, because if every tree makes the same mistake, averaging keeps the mistake. Averaging cuts variance and leaves bias roughly where it was, which is why the individual trees are grown deep.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Two bonuses. The rows each tree never saw give a free validation estimate, the <strong>out-of-bag</strong> error. And forests are forgiving: with sensible defaults (hundreds of trees, deep ones, a feature subset at each split) they rarely do badly and rarely need much tuning. They are a strong first baseline. They are usually beaten slightly by well-tuned boosting, and are larger and slower to score.</p>
+      </div>
+
+      <figure class="figure" id="fig-bag">
+        <div class="fig-head"><span class="fig-title">One deep tree versus an average of many</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> set depth to 8 and trees to 1. The orange single tree (and the one-tree "forest") chase every noisy dot and its test error is poor. Now raise the number of trees to 50 or 100: the green average becomes smooth, follows the dashed true curve and the test error falls well below the single tree's. Then drop the depth to 1 or 2: both are too simple, and averaging can't fix bias.</p>
+        <div class="chart-wrap" id="bag-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>True underlying curve</span>
+          <span><i style="background:var(--warn)"></i>Single tree on all the data</span>
+          <span><i style="background:var(--accent)"></i>Average of bootstrap trees</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-dep2">Tree depth <output for="s-dep2"></output></label><input type="range" id="s-dep2" min="1" max="8" step="1" value="8"></div>
+          <div class="ctl"><label for="s-b2">Number of trees in the average <output for="s-b2"></output></label><input type="range" id="s-b2" min="1" max="100" step="1" value="25"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st2-single-b"><div class="k">Single tree: test error</div><div class="v" id="st2-single"></div><div class="s" id="st2-single-s"></div></div>
+          <div class="stat" id="st2-forest-b"><div class="k">Average of trees: test error</div><div class="v" id="st2-forest"></div><div class="s" id="st2-forest-s"></div></div>
+          <div class="stat"><div class="k">Unavoidable noise</div><div class="v">0.49</div><div class="s">no model can go below this</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: 50 training points from a smooth curve plus noise (standard deviation 0.7, so noise variance 0.49), with one input feature. Test error is the mean squared error on 400 fresh points from the same process. With a single feature there is no feature subsetting, so this is bagging, the first half of a random forest. The bootstrap samples are fixed in advance, so the picture is stable.</p>
+      </figure>
+
+      <h3 class="sub" id="m-boost">Gradient boosting: fit the mistakes, a little at a time</h3>
+      <div class="prose">
+        <p>Boosting builds the model additively. Start with a constant (the average default rate). Measure what is still wrong, fit a small tree to <em>that</em>, and add a fraction of it:</p>
+        <p style="font-family:var(--font-mono);font-size:14px">F<sub>m</sub>(x) = F<sub>m−1</sub>(x) + η · tree<sub>m</sub>(x)</p>
+        <p>η, the <strong>learning rate</strong> (also called shrinkage), is typically 0.01 to 0.1. With squared error, the thing each tree fits is literally the residual (actual minus current prediction). For other losses, such as log loss for default or fraud, it is the <em>negative gradient</em> of the loss at the current predictions, which is the same idea in general form and the reason for the name. F1.3 introduced gradients as the direction of steepest descent; boosting does gradient descent in the space of functions, taking one small tree-shaped step per round.</p>
+        <p>The trees are deliberately <strong>weak</strong>: depth 3 to 8, sometimes just one split. Each round can only fix a little, so the model builds up slowly and the ensemble has low bias and, if you stop in time, controlled variance. Unlike a forest, more rounds <em>can</em> hurt: keep going and the model eventually fits the noise. That is why boosting needs early stopping (below).</p>
+        <p>XGBoost, the library that made boosting dominant in competitions and then in industry, adds second-order information. For each row it uses the gradient <i>g</i> and curvature <i>h</i> of the loss. For a candidate leaf holding a set of rows, the best output value is</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msup><mi>w</mi><mo>*</mo></msup><mo>=</mo><mo>−</mo><mfrac><mrow><mo>∑</mo><mi>g</mi></mrow><mrow><mo>∑</mo><mi>h</mi><mo>+</mo><mi>λ</mi></mrow></mfrac></math>
+        <p class="where">With squared error, <i>g</i> is minus the residual and <i>h</i> is 1, so this is "the sum of residuals in the leaf divided by (number of rows + λ)": the leaf's mean residual, shrunk toward zero. A leaf with 4 rows and mean residual 5 outputs 5 with λ = 0, but 4 × 5 ÷ (4 + 1) = 4 with λ = 1. Small leaves, which are the noisy ones, are shrunk the most. That is L2 regularisation on leaf values, built into the tree. The same λ appears in the split gain, together with a penalty γ per extra leaf, so a split must earn its keep.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The three mainstream libraries differ in engineering more than in idea.</p>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Library</th><th>What it does differently</th><th>When you notice</th></tr></thead>
+          <tbody>
+            <tr><td><b>XGBoost</b></td><td>Regularised objective with second-order steps; histogram and exact split finding; GPU and distributed training; sparse and missing-value aware.</td><td>The safe, widely documented default. Strong GPU story and broad language support.</td></tr>
+            <tr><td><b>LightGBM</b></td><td>Histogram binning for speed; grows the tree <em>leaf-wise</em> (always splitting the leaf with the largest gain) rather than level by level; sampling and feature bundling tricks for wide sparse data.</td><td>Fastest on large tables. Leaf-wise growth overfits small data unless <code>num_leaves</code> and <code>min_data_in_leaf</code> are set sensibly.</td></tr>
+            <tr><td><b>CatBoost</b></td><td>Native categorical handling using ordered target statistics, and "ordered boosting" to reduce a subtle target leakage in how residuals are computed; symmetric (oblivious) trees.</td><td>Good out of the box on data with many categorical fields (merchant, branch, product code) and little tuning time.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The hyperparameters that matter, in the order to think about them:</p>
+        <ul>
+          <li><strong>Learning rate and number of rounds</strong> trade against each other. Lower rate, more rounds, usually slightly better and slower. Fix the rate (0.05 is a fine start) and let early stopping choose the rounds.</li>
+          <li><strong>Tree depth or leaves.</strong> Depth 1 gives an additive model with no interactions; deeper trees allow higher-order interactions. Between 3 and 8 covers most bank problems.</li>
+          <li><strong>Minimum rows (or hessian weight) per leaf.</strong> The strongest protection against fitting a handful of customers. On rare-event data, make it large enough that a leaf can contain several positives (F3.5).</li>
+          <li><strong>Row and column subsampling</strong> (e.g. 0.7 each, per tree). Borrowed from forests: it decorrelates the trees and cuts variance.</li>
+          <li><strong>λ, α, γ.</strong> L2 on leaf values, L1 on leaf values, and the minimum gain to split. Part 2's next section covers them.</li>
+          <li><strong>Monotone constraints.</strong> You can force the model to be non-decreasing in a feature, for example probability of default never falls as days-past-due rises. XGBoost and LightGBM both support this. Credit teams use it to meet explainability and sense-check requirements without giving up the accuracy.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-boost">
+        <div class="fig-head"><span class="fig-title">Boosting round by round, and where to stop</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start at 60 rounds with learning rate 0.1 and depth 2, then drag the rounds slider from 0 upward. The fit starts flat and grows into the curve. Past some point the training error (grey) keeps falling while the test error (red) turns up: that valley is where early stopping would halt. Press <b>Jump to the best round</b>. Then raise the learning rate to 1 and see the valley arrive within a few rounds and sit higher; lower it to 0.02 and see a slower, wider valley (best round in the hundreds) that ends up about as low as at 0.1.</p>
+        <div class="btns" role="group" aria-label="Boosting shortcut">
+          <button class="btn" type="button" id="b-es">Jump to the best round</button>
+        </div>
+        <div class="chart-wrap" id="boost-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>True curve</span>
+          <span><i style="background:var(--accent)"></i>Boosted model now</span>
+        </div>
+        <div class="chart-wrap" id="boost-err"></div>
+        <div class="legend">
+          <span><i style="background:var(--neutral)"></i>Training error</span>
+          <span><i style="background:var(--bad)"></i>Test error</span>
+          <span><i style="background:var(--muted)"></i>Noise floor 0.49</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-rounds">Boosting rounds <output for="s-rounds"></output></label><input type="range" id="s-rounds" min="0" max="300" step="1" value="60"></div>
+          <div class="ctl"><label for="s-lr">Learning rate <output for="s-lr"></output></label><input type="range" id="s-lr" min="-2" max="0" step="0.05" value="-1"></div>
+          <div class="ctl"><label for="s-dep3">Tree depth <output for="s-dep3"></output></label><input type="range" id="s-dep3" min="1" max="4" step="1" value="2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Training error now</div><div class="v" id="st3-tr"></div><div class="s">can fall below the noise floor: that is memorising</div></div>
+          <div class="stat" id="st3-te-b"><div class="k">Test error now</div><div class="v" id="st3-te"></div><div class="s" id="st3-te-s"></div></div>
+          <div class="stat"><div class="k">Best test error</div><div class="v" id="st3-best"></div><div class="s" id="st3-best-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: the same 50 training points as Simulation 2 and the same 400 test points. Gradient boosting with squared error is real and exact here: each round fits a small tree to the current residuals and adds the learning rate times it. Errors are mean squared errors. One dataset, so the exact best round is specific to it; the shape is what generalises.</p>
+      </figure>
+
+      <h3 class="sub" id="m-reg">Regularisation: L2, L1 and early stopping</h3>
+      <div class="prose">
+        <p><strong>Regularisation</strong> is any change that makes the fit worse on the training data in order to make it better on new data. The classic form adds a penalty to the loss: <em>fit the data, but pay for large coefficients.</em></p>
+        <ul>
+          <li><strong>L2 (ridge):</strong> penalty proportional to the sum of squared coefficients. It shrinks all coefficients smoothly toward zero and never quite reaches it. When two features carry the same information (a customer's salary and their average monthly credit), ridge shares the weight between them. It tames the wild, offsetting coefficients you see with correlated inputs.</li>
+          <li><strong>L1 (lasso):</strong> penalty proportional to the sum of absolute values. Its corner at zero means coefficients are pushed exactly to zero as the penalty rises: it selects features. With a correlated pair it tends to keep one and drop the other, somewhat arbitrarily, which makes the selection unstable across samples.</li>
+          <li><strong>Elastic net:</strong> a mix of both. It selects like lasso but spreads weight across correlated groups like ridge.</li>
+        </ul>
+        <p>Why does a penalty help? A model with many flexible parameters and few examples has coefficients that are mostly noise, and noise in coefficients becomes noise in predictions (variance, F4.1). Shrinking trades a little bias for a larger cut in variance. A Bayesian reading, which is useful in a meeting: L2 is a prior that says "most effects are small and bell-shaped around zero", and L1 is a prior that says "most effects are exactly zero". The penalty strength λ is how strongly you believe it, and you choose it by cross-validation (F4.5, F4.9).</p>
+        <p>Practical details: standardise features before penalising linear models, or the penalty treats AED amounts and 0/1 flags unequally; never penalise the intercept; and compare λ on a log scale.</p>
+      </div>
+
+      <figure class="figure" id="fig-reg">
+        <div class="fig-head"><span class="fig-title">Ridge shrinks, lasso selects</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> on L2 (ridge), drag the penalty up from tiny. All twelve bars shrink together and none reach zero. Switch to L1 (lasso) and repeat: noise features hit exactly zero one by one. Look at the two correlated true features (the first two): lasso tends to hold one and let the other go, while ridge keeps both, roughly equal. In the lower chart, find the penalty that minimises test error for each: too small overfits, too large throws away signal.</p>
+        <div class="btns" role="group" aria-label="Penalty type">
+          <button class="btn" type="button" id="b-l2" aria-pressed="true">L2 (ridge)</button>
+          <button class="btn" type="button" id="b-l1" aria-pressed="false">L1 (lasso)</button>
+        </div>
+        <div class="chart-wrap" id="reg-bars"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--accent)"></i>Fitted coefficient (positive)</span>
+          <span><i class="sq" style="background:var(--warn)"></i>Fitted coefficient (negative)</span>
+          <span><i class="sq" style="background:none;border:1.6px solid var(--ink)"></i>True value</span>
+        </div>
+        <div class="chart-wrap" id="reg-curve"></div>
+        <div class="legend">
+          <span><i style="background:var(--warn)"></i>Ridge test error</span>
+          <span><i style="background:var(--accent)"></i>Lasso test error</span>
+          <span><i style="background:var(--muted)"></i>Noise floor 9</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-lam">Penalty strength λ <output for="s-lam"></output></label><input type="range" id="s-lam" min="-3" max="1" step="0.05" value="-2"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Features with non-zero weight</div><div class="v" id="st4-nz"></div><div class="s">3 are truly useful</div></div>
+          <div class="stat"><div class="k">Training error</div><div class="v" id="st4-tr"></div><div class="s">always rises with the penalty</div></div>
+          <div class="stat" id="st4-te-b"><div class="k">Test error</div><div class="v" id="st4-te"></div><div class="s" id="st4-te-s"></div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: 40 training rows and 500 test rows, 12 standardised features, outcome = 2 × feature 1 + 2 × feature 2 + 1.5 × feature 3 + noise (standard deviation 3, so noise variance 9). Features 1 and 2 are correlated at about 0.9; features 4 to 12 are pure noise. Ridge is solved exactly; lasso by coordinate descent run to convergence. Errors are mean squared errors on the test rows. One random draw: the exact optimum moves between draws, the pattern does not.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Regularisation in tree models has more forms than the penalty above, and all of them are doing the same job:</p>
+        <ul>
+          <li><strong>Structural limits:</strong> maximum depth, minimum rows per leaf, minimum gain to split (γ). They prevent the tree from carving out tiny groups.</li>
+          <li><strong>Shrinkage:</strong> the learning rate. A small step per round is regularisation by caution.</li>
+          <li><strong>Penalties on leaf values:</strong> λ (L2) and α (L1) in XGBoost, as in the leaf formula above.</li>
+          <li><strong>Randomisation:</strong> row and column subsampling. Averaging noisy learners is the forest's whole trick.</li>
+          <li><strong>Early stopping:</strong> watch the error on a validation set after every round and stop when it hasn't improved for, say, 50 rounds. The number of rounds is then the complexity dial, set by data rather than guessed. In neural nets the same idea appears with epochs, next to dropout and data augmentation (F6.3).</li>
+        </ul>
+        <p>Early stopping hides a trap. The validation set used to pick the stopping round has influenced the model, so it can't also be your honest final test. You need three sets: train, validation (for stopping and tuning), and a held-out test that is touched once. For bank data the validation and test sets should come later in time than the training set (F4.6).</p>
+      </div>
+      <pre><code># XGBoost with early stopping, a monotone constraint, and a time-ordered split.
+# train < valid < test in time. Test is only scored once, at the end.
+import xgboost as xgb
+
+model = xgb.XGBClassifier(
+    n_estimators=2000,        # an upper bound; early stopping picks the real number
+    learning_rate=0.05,
+    max_depth=4,
+    min_child_weight=20,      # leaves must carry enough "weight" (a count, for log loss it is hessian mass)
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_lambda=5.0,           # L2 on leaf values
+    reg_alpha=0.0,            # L1 on leaf values
+    gamma=0.0,                # minimum gain to make a split
+    monotone_constraints={"days_past_due": 1},   # risk never falls as this rises
+    eval_metric="aucpr",
+    early_stopping_rounds=50,
+)
+model.fit(X_train, y_train, eval_set=[(X_valid, y_valid)], verbose=False)
+print(model.best_iteration)</code></pre>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Trees and their regularisation are the working form of ideas from earlier in the course, and the base that later topics build on.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F4.1 · F4.2 · Bias, variance and linear models</span><span class="t"><a href="f4-bias-variance-and-generalisation.html">Why every dial here exists</a></span><p>A deep tree is the textbook high-variance model; bagging reduces variance and boosting reduces bias. L1 and L2 on logistic regression are the same shrinkage as Simulation 4.</p></div>
+        <div class="link-card"><span class="code">F4.5 · F4.6 · Cross-validation</span><span class="t"><a href="f4-cross-validation-including-temporal-splits.html">Choosing λ, depth and the stopping round</a></span><p>Every regularisation strength is chosen on held-out data. For transactions and loans, the held-out data must be later in time.</p></div>
+        <div class="link-card"><span class="code">F4.9 · F4.10 · Hyperparameter tuning</span><span class="t"><a href="f4-hyperparameter-tuning-grid-random-and.html">Searching the knobs sensibly</a></span><p>A gradient-boosting model has a dozen dials. Random and Bayesian search find good settings far faster than a grid.</p></div>
+        <div class="link-card"><span class="code">F4.7 · Anomaly detection</span><span class="t"><a href="f4-anomaly-detection-isolation-forests-autoencoders.html">Isolation forests are trees too</a></span><p>An isolation forest uses random splits to see how quickly a point can be cut off from the rest. Same building blocks, different goal.</p></div>
+        <div class="link-card"><span class="code">F1.3 · Gradients</span><span class="t"><a href="f1-gradients-optimisation.html">Boosting is gradient descent over functions</a></span><p>The residual each tree fits is a negative gradient. The learning rate is a step size.</p></div>
+        <div class="link-card"><span class="code">F2.5 · Regression and GLMs</span><span class="t"><a href="f2-regression-glms.html">The interpretable benchmark</a></span><p>A regularised logistic regression is the model to beat and the model auditors know. Compare boosted trees against it, not against nothing.</p></div>
+        <div class="link-card"><span class="code">F3.3 · F3.4 · F3.5 · Data practice</span><span class="t"><a href="f3-feature-engineering.html">What trees need and don't</a></span><p>Trees skip scaling and interaction engineering but still need clean, point-in-time features (<a href="f3-leakage-point-in-time.html">leakage</a>) and care on <a href="f3-imbalanced-data.html">rare classes</a>, where class weights shift the probabilities.</p></div>
+        <div class="link-card"><span class="code">F6.1 – F6.5 · Deep learning practice</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">The same ideas, other clothes</a></span><p>Weight decay is L2, dropout is randomised averaging, early stopping is early stopping. See also <a href="f6-loss-functions-and-what-they.html">loss functions</a>.</p></div>
+        <div class="link-card"><span class="code">F7.4 · F7.7 · Calibration and drift</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Fixing probabilities, watching them decay</a></span><p>Boosted and forest scores are good rankings but often need recalibration; <a href="f7-drift-monitoring-psi-ks-and.html">drift monitoring</a> tells you when the retrain is due.</p></div>
+        <div class="link-card"><span class="code">F8 · Explainability</span><span class="t"><a href="f8-global-versus-local-explanations.html">Making a 500-tree model speak</a></span><p>SHAP and <a href="f8-partial-dependence-and-ice-plots.html">partial dependence</a> are how boosted trees are explained to a validator and to a declined customer.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Credit scoring and probability of default.</strong> Boosted trees with monotone constraints, benchmarked against a regularised logistic scorecard. Governance cares about stability, explanation and calibration as much as AUC.</li>
+          <li><strong>Card and payment fraud.</strong> Boosting on engineered velocity and history features, scored in milliseconds. Depth, leaf size and early stopping need the rare-event care of F3.5.</li>
+          <li><strong>AML alert scoring and prioritisation.</strong> Trees rank alerts for investigators. Few confirmed positives mean heavy regularisation and a simple model often wins.</li>
+          <li><strong>Churn, cross-sell and collections.</strong> Mid-sized tabular problems where a forest or a lightly tuned boosting model is a strong, quick baseline.</li>
+          <li><strong>Islamic finance products.</strong> The same models apply. Features and decisions must stay within product rules; for example, models should not use anything the Shariah-governance framework excludes, which is a requirement for the institution to state, not for the algorithm.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Gradient-boosted trees remain the workhorse for tabular data in 2026. The live debates are whether deep learning and pretrained tabular models are finally catching them, and how to keep boosted models explainable and stable in regulated settings.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with two quick searches. Dates for older milestones come from my own knowledge of the literature, and the 2026 search results were largely blog posts and vendor material, so treat the headline claims about new tabular foundation models with caution.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1984</span><div><div class="t">CART</div><p>Breiman, Friedman, Olshen and Stone formalised classification and regression trees with impurity-based splitting and pruning.</p><div class="src">Breiman et al., Classification and Regression Trees, 1984</div></div></li>
+        <li><span class="yr">2001</span><div><div class="t">Random forests, and gradient boosting machines</div><p>Breiman combined bagging with random feature subsets. In the same year Friedman set out gradient boosting as functional gradient descent, with shrinkage and subsampling.</p><div class="src">Breiman, Machine Learning, 2001; Friedman, Annals of Statistics, 2001</div></div></li>
+        <li><span class="yr">2016–18</span><div><div class="t">XGBoost, LightGBM, CatBoost</div><p>Engineering made boosting fast, regularised and easy: second-order objective and sparsity handling (XGBoost), histogram binning and leaf-wise growth (LightGBM), ordered boosting and native categoricals (CatBoost).</p><div class="src">Chen &amp; Guestrin, KDD 2016; Ke et al., NeurIPS 2017; Prokhorenkova et al., NeurIPS 2018</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Why trees still beat deep nets on tabular data</div><p>On a benchmark of mid-sized tabular datasets, tree ensembles outperformed deep networks even after heavy tuning of the networks. The authors tie it to trees' robustness to uninformative features and to the irregular, non-smooth target functions common in tables. A companion study found the same, with ensembles of both doing best.</p><div class="src">Grinsztajn, Oyallon &amp; Varoquaux, NeurIPS 2022; Shwartz-Ziv &amp; Armon, Information Fusion, 2022</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">When do neural nets outperform boosted trees?</div><p>A large study of 176 datasets found no single winner and that the gap depends on dataset properties. Boosted trees were often competitive or best, and the differences between top methods were small compared with the effort of choosing between them.</p><div class="src">McElfresh et al., NeurIPS 2023</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">XGBoost 3.0 and tabular foundation models</div><p>XGBoost 3.0 (February 2025) reworked external-memory training so very large data can be staged on the host and read in batches; later 3.x releases have followed, and I could not confirm the very latest version number. In January 2025 a Nature paper presented TabPFN, a transformer pretrained on many synthetic tables that predicts on a new small table in one forward pass without training. A follow-up, TabPFN-2.5 (arXiv, November 2025), extends it to larger tables.</p><div class="src">XGBoost release notes; Hollmann et al., Nature, 2025; TabPFN-2.5 report, arXiv 2511.08667</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Where pretrained tabular models stand</div><p>Reported results favour them on small to medium tables, where they beat default and often tuned boosted trees with almost no tuning. Independent checks are more mixed: one 2026 test on a roughly 12,000-row fraud dataset had TabPFN ahead on AUC and AUCPR while LightGBM trained far faster; other work finds trees equal or better and much cheaper to serve at scale. For large, low-latency, CPU-served bank workloads, tuned boosting is still the norm. Most 2026 claims I found were secondary sources, so read the benchmark yourself before relying on one.</p><div class="src">H2O.ai blog, March 2026; arXiv 2512.00888; TabPFN-2.5 report</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> described in tutorials or vendor material, thin evidence of production use</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Gradient boosting (XGBoost, LightGBM, CatBoost) for fraud, credit and churn</b></td><td>The standard high-accuracy model on bank tabular data, tuned with time-ordered validation and early stopping.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Regularised logistic regression as benchmark or challenger</b></td><td>Often still the production scorecard, with boosted trees as challenger or as a feature-discovery tool.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Monotone constraints in credit models</b></td><td>Forces sensible direction of effect to satisfy explainability and review.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Random forest as quick baseline and for out-of-bag checks</b></td><td>Few settings to get wrong; used to size how much signal exists before heavier tuning.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Pretrained tabular foundation models (TabPFN family)</b></td><td>Strong on small and mid-sized tables; mostly in experiments. Questions remain on latency, GPU needs, validation and model-risk approval.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Deep tabular architectures replacing boosting</b></td><td>Competitive in some benchmarks and on very large or multimodal data; not a general replacement.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>For a bank's tabular problem, a well-regularised gradient-boosted model with honest time-ordered validation is the model to beat. Newer approaches earn a place by beating it on your data, at your latency, with your validators able to approve them.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Training score reported as performance</div><p>"The forest scores 0.999 AUC." A deep forest nearly memorises its training rows.</p><div class="spot"><b>Spot it</b>Ask which data the number comes from. Out-of-bag or a later-in-time hold-out is the only honest answer.</div></li>
+        <li><div class="t">Early stopping on the test set</div><p>The number of rounds is picked by watching test error, so the test score is optimistic.</p><div class="spot"><b>Spot it</b>Ask how many datasets exist and which one chose the number of rounds. If two roles share a set, the final number is inflated.</div></li>
+        <li><div class="t">Random split on time-ordered data</div><p>Neat validation scores, then weak live results. Boosted trees are very good at exploiting information from the neighbouring weeks.</p><div class="spot"><b>Spot it</b>Re-run with train strictly before validation strictly before test. If the score drops sharply, the earlier number was borrowed from the future.</div></li>
+        <li><div class="t">Leakage a tree finds instantly</div><p>A field filled in after the outcome (collections status, account closed flag) becomes the top split.</p><div class="spot"><b>Spot it</b>One feature with enormous importance and near-perfect AUC. Ask when that field is populated relative to the decision time.</div></li>
+        <li><div class="t">Trusting impurity importance</div><p>"Account ID bucket is the third most important feature." High-cardinality and noisy features inflate in default importance.</p><div class="spot"><b>Spot it</b>Add a random-noise column and see where it ranks. Use permutation importance on held-out data or SHAP (F8).</div></li>
+        <li><div class="t">Expecting trees to extrapolate</div><p>Forecasting exposure for a growing book, or scoring a new product with higher ticket sizes.</p><div class="spot"><b>Spot it</b>Plot predictions against the feature beyond the training range: they go flat. Use a linear component, detrend the target, or differ the model.</div></li>
+        <li><div class="t">Over-tuning on a small positive count</div><p>200 defaults, 40 features, 500 boosting rounds, and a hyperparameter search that wins by 0.004 AUC.</p><div class="spot"><b>Spot it</b>Compute an interval for the metric (F2.2). If it is wider than the gain from tuning, the tuning found noise.</div></li>
+        <li><div class="t">Raw leaf-wise boosting on small data</div><p>LightGBM defaults used on a few thousand rows build deep lopsided trees.</p><div class="spot"><b>Spot it</b>Large gap between training and validation error. Cut <code>num_leaves</code>, raise <code>min_data_in_leaf</code>, add subsampling.</div></li>
+        <li><div class="t">Unstandardised features under L1 or L2</div><p>The penalty bites features measured in AED far less than features measured as 0/1.</p><div class="spot"><b>Spot it</b>Check for a scaling step before any penalised linear model. Trees don't need one; penalised linear models do.</div></li>
+        <li><div class="t">Treating lasso's chosen features as "the true drivers"</div><p>Among correlated predictors, lasso's pick is partly arbitrary and changes with the sample.</p><div class="spot"><b>Spot it</b>Refit on bootstrap resamples. If the selected set changes a lot, the selection is not evidence of causes.</div></li>
+        <li><div class="t">Scores used as probabilities without checking</div><p>Boosted scores rank well but are not guaranteed calibrated, especially after class weights.</p><div class="spot"><b>Spot it</b>Reliability curve on a later hold-out set (F7.4). Recalibrate before using the score in a loss or provisioning calculation.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“The model is a committee of several hundred small decision trees, each correcting the mistakes of the ones before it. It's the standard technique for bank data like this, fast and accurate. We keep it from memorising by limiting how much each tree can learn and by stopping when a later period of data stops improving. We compare it to a plain scorecard so we know what the extra complexity buys.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd start with a regularised logistic baseline and a random forest, then a gradient-boosted model at a fixed low learning rate with early stopping on a validation window that follows the training window, and a final test touched once. Depth and minimum leaf size are tuned for the positive count, I'd add monotone constraints where policy requires a direction, check calibration on the later hold-out, and report intervals so differences below noise aren't sold as wins.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just use one decision tree? It's explainable.”</summary><div class="ans"><p>A single tree is explainable but unstable: a small change in the sample can change the top split and the whole structure, and a shallow tree that stays readable is usually much less accurate. If the business needs a readable rule set, I'd fit a small tree or scorecard as the explainable layer and use the ensemble for accuracy, with SHAP to explain it, and show how much accuracy the simple version gives up.</p></div></details>
+        <details class="reveal"><summary>“Random forest or XGBoost?”</summary><div class="ans"><p>Forest first when I want a robust baseline with little tuning, since it rarely overfits as trees are added. Boosting when I want the last few points of accuracy and can afford tuning, because it reduces bias as well as variance. On most bank tabular problems tuned boosting edges out the forest, but the gap is often smaller than the gap between a careful validation and a sloppy one.</p></div></details>
+        <details class="reveal"><summary>“How do you stop a boosted model overfitting?”</summary><div class="ans"><p>Low learning rate, shallow trees, a minimum leaf size sized to the positive count, row and column subsampling, L2 on leaf values, and early stopping on a validation window later than training. And a separate untouched test. I'd also look at the gap between training and validation error as the diagnostic.</p></div></details>
+        <details class="reveal"><summary>“Lasso or ridge for a credit scorecard?”</summary><div class="ans"><p>Ridge when features are correlated and I want to keep all of them with stable, shared weights. Lasso when I need a short list of variables for governance. Elastic net when I want both. If selection matters, I'd check the stability of the chosen set across bootstrap resamples before presenting it as meaningful.</p></div></details>
+        <details class="reveal"><summary>“Should we try the new tabular foundation models?”</summary><div class="ans"><p>As a challenger on small and mid-sized problems, yes, because reported results are strong and tuning is minimal. For production I'd want evidence on our data against a tuned boosted baseline, plus answers on serving cost, latency, stability across retrains and how our model-risk process would validate a pretrained model. Most published comparisons come from the developers or secondary sources, so I'd run our own.</p></div></details>
+        <details class="reveal"><summary>“Why does more boosting rounds sometimes make it worse?”</summary><div class="ans"><p>Each round fits what's left, and after the signal is captured what's left is mostly noise. The training error keeps falling but the model is learning noise, so validation error turns up. A forest doesn't do this as trees are added, because its trees are independent and averaging only reduces variance.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A node holds 100 transactions, 20 of them fraud. A split sends 60 left (2 fraud) and 40 right (18 fraud). Compute the Gini gain.</summary><div class="ans"><p>Parent: 2 × 0.2 × 0.8 = <strong>0.32</strong>. Left: p = 2/60 = 0.0333, impurity 2 × 0.0333 × 0.9667 = 0.0644. Right: p = 18/40 = 0.45, impurity 2 × 0.45 × 0.55 = 0.495. Weighted: 0.6 × 0.0644 + 0.4 × 0.495 = 0.0387 + 0.198 = 0.2367. Gain = 0.32 − 0.2367 ≈ <strong>0.083</strong>. The tree compares this with the gain of every other candidate split and takes the largest.</p></div></details>
+        <details class="reveal"><summary>2. 100 trees, each with variance 1, pairwise correlation 0.3. What is the variance of their average, and what is the limit with infinitely many trees?</summary><div class="ans"><p>ρσ² + (1 − ρ)σ²/B = 0.3 + 0.7/100 = <strong>0.307</strong>. With infinite trees: <strong>0.3</strong>. Adding trees beyond a modest number barely helps. Lowering the correlation (more row and feature randomness) is what moves the floor.</p></div></details>
+        <details class="reveal"><summary>3. A boosted-tree leaf holds 10 rows, all with residual +3 (squared error). What does it output with λ = 0, with λ = 1 and with λ = 10?</summary><div class="ans"><p>Output = (sum of residuals) ÷ (rows + λ). Sum = 30. λ = 0: 30 ÷ 10 = <strong>3.0</strong>. λ = 1: 30 ÷ 11 ≈ <strong>2.73</strong>. λ = 10: 30 ÷ 20 = <strong>1.5</strong>. The penalty shrinks small, noisy leaves the most, because the λ is a bigger share of a small count. A leaf of 100 rows with the same residual would be 300 ÷ 110 ≈ 2.73 at λ = 10, far less affected.</p></div></details>
+        <details class="reveal"><summary>4. Two highly correlated features both genuinely predict default. What happens under lasso and under ridge as the penalty rises?</summary><div class="ans"><p>Ridge shrinks both and keeps them near each other, sharing the effect. Lasso tends to keep one and drive the other to zero, and which one survives can flip with a different sample. So lasso's selected list is not evidence that the dropped feature doesn't matter.</p></div></details>
+        <details class="reveal"><summary>5. You choose the number of boosting rounds by early stopping on the test set and report the test AUC. What is wrong, and what is the fix?</summary><div class="ans"><p>The test set influenced the model (it picked the round count), so its AUC is optimistically biased. Use three sets: train, validation (early stopping and tuning), and a final untouched test, all in time order for bank data. Report the test score once.</p></div></details>
+        <details class="reveal"><summary>6. You lower the learning rate from 0.1 to 0.01 and change nothing else. What happens to the best number of rounds and to training time?</summary><div class="ans"><p>The best number of rounds rises, roughly in proportion (order of ten times as many), so training and scoring take longer. Test error at the best round is usually similar or slightly better. That's why practice is to fix a low rate and let early stopping set the rounds, and to use a higher rate while exploring.</p></div></details>
+        <details class="reveal"><summary>7. Your forest predicts monthly card spend for a customer segment whose income is above anything in the training data. What goes wrong?</summary><div class="ans"><p>Trees don't extrapolate. Above the training maximum the prediction is the value of the top leaf, flat. If spend rises with income, the model underestimates for the new segment. Fixes: add a linear or trend component, model a ratio (spend as a share of income) instead of the level, or collect data for the new range.</p></div></details>
+        <details class="reveal"><summary>8. In Simulation 2 at depth 1 the average of 100 trees is barely better than one tree. Why?</summary><div class="ans"><p>A depth-1 tree has high bias and low variance: it can only draw one step. Averaging cuts variance, not bias, so the average is a smoother step function that is still too simple. Bagging helps deep, unstable trees. Boosting, by contrast, is built to reduce the bias of shallow ones.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>T. Hastie, R. Tibshirani, J. Friedman. <a href="https://hastie.su.domains/ElemStatLearn/">The Elements of Statistical Learning</a>, 2nd ed., 2009. Chapters 9 (trees), 10 (boosting), 15 (random forests), 3 (shrinkage). Free online.</li>
+        <li>L. Breiman, J. Friedman, R. Olshen, C. Stone. Classification and Regression Trees. Wadsworth, 1984.</li>
+        <li>L. Breiman. <a href="https://doi.org/10.1023/A:1010933404324">Random Forests</a>. Machine Learning, 2001.</li>
+        <li>J. Friedman. <a href="https://doi.org/10.1214/aos/1013203451">Greedy Function Approximation: A Gradient Boosting Machine</a>. Annals of Statistics, 2001.</li>
+        <li>T. Chen, C. Guestrin. <a href="https://arxiv.org/abs/1603.02754">XGBoost: A Scalable Tree Boosting System</a>. KDD, 2016.</li>
+        <li>G. Ke et al. <a href="https://papers.nips.cc/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html">LightGBM: A Highly Efficient Gradient Boosting Decision Tree</a>. NeurIPS, 2017.</li>
+        <li>L. Prokhorenkova et al. <a href="https://arxiv.org/abs/1706.09516">CatBoost: unbiased boosting with categorical features</a>. NeurIPS, 2018.</li>
+        <li>A. Hoerl, R. Kennard. Ridge Regression: Biased Estimation for Nonorthogonal Problems. Technometrics, 1970. R. Tibshirani. <a href="https://doi.org/10.1111/j.2517-6161.1996.tb02080.x">Regression Shrinkage and Selection via the Lasso</a>. JRSS B, 1996.</li>
+        <li>H. Zou, T. Hastie. <a href="https://doi.org/10.1111/j.1467-9868.2005.00503.x">Regularization and Variable Selection via the Elastic Net</a>. JRSS B, 2005.</li>
+        <li>C. Strobl et al. <a href="https://doi.org/10.1186/1471-2105-8-25">Bias in random forest variable importance measures</a>. BMC Bioinformatics, 2007.</li>
+        <li>L. Grinsztajn, E. Oyallon, G. Varoquaux. <a href="https://arxiv.org/abs/2207.08815">Why do tree-based models still outperform deep learning on typical tabular data?</a> NeurIPS Datasets and Benchmarks, 2022.</li>
+        <li>R. Shwartz-Ziv, A. Armon. <a href="https://arxiv.org/abs/2106.03253">Tabular Data: Deep Learning is Not All You Need</a>. Information Fusion, 2022.</li>
+        <li>D. McElfresh et al. <a href="https://arxiv.org/abs/2305.02997">When Do Neural Nets Outperform Boosted Trees on Tabular Data?</a> NeurIPS Datasets and Benchmarks, 2023.</li>
+        <li>N. Hollmann et al. Accurate predictions on small data with a tabular foundation model (TabPFN). Nature, 2025. See also <a href="https://arxiv.org/abs/2511.08667">TabPFN-2.5: Advancing the State of the Art in Tabular Foundation Models</a>, arXiv 2511.08667, 2025.</li>
+        <li><a href="https://xgboost.readthedocs.io/en/stable/changes/">XGBoost release notes</a> and <a href="https://xgboost.readthedocs.io/en/stable/tutorials/monotonic.html">monotonic constraints tutorial</a>. <a href="https://lightgbm.readthedocs.io/en/latest/Parameters-Tuning.html">LightGBM parameter tuning guide</a>.</li>
+        <li><a href="https://h2o.ai/blog/2026/using-tabpfn-v2-in-h2o-driverless-ai/">Using TabPFN v2 in H2O Driverless AI</a>. H2O.ai blog, 2026. A vendor test on a fraud dataset; read as indicative only.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F4: Cross-validation, including temporal splits (F4.5 · F4.6)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+  function axes(svg, W, H, m, xs, xlab, ys, ylab) {
+    ys.forEach(([v, s, yy]) => { L.svg("line", { x1: m.l, x2: W - m.r, y1: yy, y2: yy, class: "grid" }, svg); tx(svg, m.l - 6, yy + 4, s, { "text-anchor": "end" }); });
+    xs.forEach(([v, s, xx]) => tx(svg, xx, H - m.b + 16, s, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, xlab, { "text-anchor": "middle" });
+    if (ylab) tx(svg, 12, (m.t + H - m.b) / 2, ylab, { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+  }
+
+  // =====================================================================
+  // Simulation 1: choosing a split
+  // =====================================================================
+  const r1 = rng(11);
+  const D1 = [];
+  for (let i = 0; i < 240; i++) D1.push({ x: Math.max(0.05, 1.0 + 0.5 * gauss(r1)), y: 0 });
+  for (let i = 0; i < 60; i++) D1.push({ x: Math.max(0.05, 2.4 + 0.9 * gauss(r1)), y: 1 });
+  const N1 = D1.length, F1 = 60;
+  const gini = (f, n) => n > 0 ? 2 * (f / n) * (1 - f / n) : 0;
+  const G0 = gini(F1, N1);
+  function split1(t) {
+    let nl = 0, fl = 0;
+    D1.forEach(d => { if (d.x <= t) { nl++; fl += d.y; } });
+    const nr = N1 - nl, fr = F1 - fl;
+    const w = (nl / N1) * gini(fl, nl) + (nr / N1) * gini(fr, nr);
+    return { nl, fl, nr, fr, w, gain: G0 - w };
+  }
+  let bestT = 0.2, bestG = -1;
+  for (let t = 0.2; t <= 4.5001; t += 0.05) { const s = split1(t); if (s.gain > bestG + 1e-12) { bestG = s.gain; bestT = Math.round(t * 100) / 100; } }
+  const S1 = { t: 1.2 };
+  const splitBox = $("split-chart");
+  const BINS = 20, BW = 0.25;
+  const bins = Array.from({ length: BINS }, () => [0, 0]);
+  D1.forEach(d => { const b = Math.min(BINS - 1, Math.floor(d.x / BW)); bins[b][d.y]++; });
+  const binMax = Math.max(...bins.map(b => b[0] + b[1]));
+  let cutCtl1;
+  function renderSplit() {
+    const W = Math.max(300, splitBox.clientWidth), H = 240, m = { l: 40, r: 12, t: 16, b: 40 };
+    const svg = mk(splitBox, W, H, "Histogram of amount multiples for legitimate and fraud transactions with a cut-off");
+    const x = L.scale(0, BINS * BW, m.l, W - m.r), y = L.scale(0, binMax * 1.1, H - m.b, m.t);
+    axes(svg, W, H, m, [0, 1, 2, 3, 4].map(v => [v, v + "×", x(v)]), "Amount as a multiple of the customer's usual spend", [0, 20, 40].map(v => [v, String(v), y(v)]), "Transactions");
+    bins.forEach((b, i) => {
+      const x0 = x(i * BW) + 1, w = Math.max(1, x(BW) - x(0) - 2);
+      L.svg("rect", { x: x0, y: y(b[0]), width: w, height: y(0) - y(b[0]), class: "hb-leg" }, svg);
+      L.svg("rect", { x: x0, y: y(b[0] + b[1]), width: w, height: y(b[0]) - y(b[0] + b[1]), class: "hb-fr" }, svg);
+    });
+    L.svg("line", { x1: x(bestT), x2: x(bestT), y1: m.t, y2: H - m.b, class: "sp-best" }, svg);
+    L.svg("line", { x1: x(S1.t), x2: x(S1.t), y1: m.t, y2: H - m.b, class: "sp-line" }, svg);
+    const s = split1(S1.t), fp = v => v.toFixed(3);
+    $("st1-l").textContent = s.nl; $("st1-ls").textContent = s.fl + " fraud (" + pct(s.nl ? s.fl / s.nl : 0, 1) + ")";
+    $("st1-r").textContent = s.nr; $("st1-rs").textContent = s.fr + " fraud (" + pct(s.nr ? s.fr / s.nr : 0, 1) + ")";
+    $("st1-g").textContent = fp(G0) + " → " + fp(s.w);
+    $("st1-gain").textContent = fp(s.gain);
+    $("st1-gain-s").textContent = "best possible: " + fp(bestG) + " at " + bestT.toFixed(2) + "×";
+    cls($("st1-gain-b"), s.gain > 0.9 * bestG ? "ok" : (s.gain < 0.4 * bestG ? "bad" : "warn"));
+    $("s1-verdict").innerHTML = s.gain > 0.98 * bestG
+      ? "At or very near the best cut. The right group is <b>" + pct(s.nr ? s.fr / s.nr : 0, 0) + "</b> fraud against 20% overall, and the left is <b>" + pct(s.nl ? s.fl / s.nl : 0, 1) + "</b>. The tree would now repeat this inside each group, using other features or the same one again."
+      : "This cut has a gain of <b>" + fp(s.gain) + "</b> against <b>" + fp(bestG) + "</b> for the best one. " + (s.nl < 15 || s.nr < 15 ? "One side is almost empty, so the groups hardly differ from the whole: impurity barely falls." : "Move toward the grey dashed line to cut the groups more cleanly.");
+  }
+  cutCtl1 = L.bind("s-cut1", v => v.toFixed(2) + "×", v => { S1.t = v; renderSplit(); });
+  $("b-best").addEventListener("click", () => { S1.t = bestT; cutCtl1.set(bestT); renderSplit(); });
+
+  // =====================================================================
+  // Shared regression data for simulations 2 and 3
+  // =====================================================================
+  const f = x => 1.5 * Math.sin(1.3 * x) + 0.2 * x;
+  const SD = 0.7, NOISE = SD * SD;
+  const r2 = rng(5);
+  const TR = [];
+  for (let i = 0; i < 50; i++) { const x = 6 * r2(); TR.push({ x, y: f(x) + SD * gauss(r2) }); }
+  const TE = [];
+  for (let i = 0; i < 400; i++) { const x = 6 * r2(); TE.push({ x, y: f(x) + SD * gauss(r2) }); }
+  const XG = Array.from({ length: 180 }, (_, i) => 6 * i / 179);
+
+  function buildTree(pts, depth, maxD) {
+    const n = pts.length;
+    let sum = 0; pts.forEach(p => sum += p.y);
+    const mean = sum / n;
+    if (depth >= maxD || n < 2) return { v: mean };
+    const s = pts.slice().sort((a, b) => a.x - b.x);
+    let tot = 0; s.forEach(p => tot += p.y);
+    let best = -Infinity, bi = -1, ls = 0;
+    for (let i = 1; i < n; i++) {
+      ls += s[i - 1].y;
+      if (s[i].x === s[i - 1].x) continue;
+      const rs = tot - ls, sc = ls * ls / i + rs * rs / (n - i);
+      if (sc > best + 1e-12) { best = sc; bi = i; }
+    }
+    if (bi < 0) return { v: mean };
+    const thr = (s[bi - 1].x + s[bi].x) / 2;
+    return { t: thr, l: buildTree(s.slice(0, bi), depth + 1, maxD), r: buildTree(s.slice(bi), depth + 1, maxD) };
+  }
+  function predTree(nd, x) { while (nd.t !== undefined) nd = x <= nd.t ? nd.l : nd.r; return nd.v; }
+  const mse = (arr, fn) => { let s = 0; arr.forEach(p => { const e = fn(p) - p.y; s += e * e; }); return s / arr.length; };
+
+  // =====================================================================
+  // Simulation 2: bagging
+  // =====================================================================
+  const rb = rng(99);
+  const BOOT = Array.from({ length: 100 }, () => Array.from({ length: TR.length }, () => TR[Math.floor(rb() * TR.length)]));
+  const S2 = { d: 8, b: 25 };
+  const bagBox = $("bag-chart");
+  const treeCache = {};
+  function forestFor(d) {
+    if (!treeCache[d]) treeCache[d] = { single: buildTree(TR, 0, d), trees: BOOT.map(bs => buildTree(bs, 0, d)) };
+    return treeCache[d];
+  }
+  function renderBag() {
+    const { single, trees } = forestFor(S2.d), B = S2.b;
+    const fo = x => { let s = 0; for (let i = 0; i < B; i++) s += predTree(trees[i], x); return s / B; };
+    const W = Math.max(300, bagBox.clientWidth), H = 280, m = { l: 40, r: 12, t: 14, b: 40 };
+    const svg = mk(bagBox, W, H, "Training points, true curve, single tree and averaged trees");
+    const x = L.scale(0, 6, m.l, W - m.r), y = L.scale(-3.5, 3.5, H - m.b, m.t);
+    axes(svg, W, H, m, [0, 1, 2, 3, 4, 5, 6].map(v => [v, String(v), x(v)]), "Feature value", [-3, -1.5, 0, 1.5, 3].map(v => [v, String(v), y(v)]), "Outcome");
+    TR.forEach(p => L.svg("circle", { cx: x(p.x), cy: y(p.y), r: 3, class: "dp" }, svg));
+    L.svg("path", { d: L.path(XG.map(v => [x(v), y(f(v))])), class: "ln-true" }, svg);
+    L.svg("path", { d: L.path(XG.map(v => [x(v), y(predTree(single, v))])), class: "ln-tree" }, svg);
+    L.svg("path", { d: L.path(XG.map(v => [x(v), y(fo(v))])), class: "ln-fit" }, svg);
+    const es = mse(TE, p => predTree(single, p.x)), ef = mse(TE, p => fo(p.x));
+    $("st2-single").textContent = es.toFixed(2); $("st2-single-s").textContent = "training error " + mse(TR, p => predTree(single, p.x)).toFixed(2);
+    $("st2-forest").textContent = ef.toFixed(2); $("st2-forest-s").textContent = "training error " + mse(TR, p => fo(p.x)).toFixed(2);
+    cls($("st2-single-b"), es > 1.5 * NOISE ? "bad" : "ok"); cls($("st2-forest-b"), ef < es - 0.02 ? "ok" : "warn");
+    $("s2-verdict").innerHTML = S2.d <= 2
+      ? "At depth " + S2.d + " the trees are too simple. Averaging gives <b>" + ef.toFixed(2) + "</b> against <b>" + es.toFixed(2) + "</b> for one tree: little change, because the error here is bias and averaging does not remove bias."
+      : "Excess over the noise floor: single tree <b>" + (es - NOISE).toFixed(2) + "</b>, average of " + B + " trees <b>" + (ef - NOISE).toFixed(2) + "</b>. " + (B < 3 ? "Add trees to see the average settle." : "Averaging removed " + pct(Math.max(0, (es - ef) / (es - NOISE)), 0) + " of the single tree's avoidable error.");
+  }
+  L.bind("s-dep2", v => String(v), v => { S2.d = v; renderBag(); });
+  L.bind("s-b2", v => String(v), v => { S2.b = v; renderBag(); });
+
+  // =====================================================================
+  // Simulation 3: boosting
+  // =====================================================================
+  const S3 = { n: 60, lk: -1, d: 2 };
+  const boostBox = $("boost-chart"), errBox = $("boost-err");
+  const R = 300;
+  let bc = null, bcKey = "";
+  function runBoost() {
+    const lr = Math.pow(10, S3.lk), key = S3.lk + "|" + S3.d;
+    if (bcKey === key) return bc;
+    let F0 = 0; TR.forEach(p => F0 += p.y); F0 /= TR.length;
+    let ftr = TR.map(() => F0), fte = TE.map(() => F0);
+    const trees = [], etr = [mse(TR.map((p, i) => ({ y: p.y, f: ftr[i] })), p => p.f)], ete = [];
+    const mm = (arr, F) => { let s = 0; arr.forEach((p, i) => { const e = F[i] - p.y; s += e * e; }); return s / arr.length; };
+    etr[0] = mm(TR, ftr); ete.push(mm(TE, fte));
+    for (let r = 0; r < R; r++) {
+      const nd = buildTree(TR.map((p, i) => ({ x: p.x, y: p.y - ftr[i] })), 0, S3.d);
+      trees.push(nd);
+      ftr = ftr.map((v, i) => v + lr * predTree(nd, TR[i].x));
+      fte = fte.map((v, i) => v + lr * predTree(nd, TE[i].x));
+      etr.push(mm(TR, ftr)); ete.push(mm(TE, fte));
+    }
+    let bi = 0; for (let i = 1; i <= R; i++) if (ete[i] < ete[bi] - 1e-12) bi = i;
+    bc = { lr, F0, trees, etr, ete, best: bi }; bcKey = key;
+    return bc;
+  }
+  let roundCtl;
+  function renderBoost() {
+    const B = runBoost(), n = S3.n;
+    const fitAt = x => { let s = B.F0; for (let i = 0; i < n; i++) s += B.lr * predTree(B.trees[i], x); return s; };
+    let W = Math.max(300, boostBox.clientWidth), H = 240, m = { l: 40, r: 12, t: 12, b: 38 };
+    let svg = mk(boostBox, W, H, "Boosted fit after the chosen number of rounds");
+    let x = L.scale(0, 6, m.l, W - m.r), y = L.scale(-3.5, 3.5, H - m.b, m.t);
+    axes(svg, W, H, m, [0, 1, 2, 3, 4, 5, 6].map(v => [v, String(v), x(v)]), "Feature value", [-3, 0, 3].map(v => [v, String(v), y(v)]), "Outcome");
+    TR.forEach(p => L.svg("circle", { cx: x(p.x), cy: y(p.y), r: 3, class: "dp" }, svg));
+    L.svg("path", { d: L.path(XG.map(v => [x(v), y(f(v))])), class: "ln-true" }, svg);
+    L.svg("path", { d: L.path(XG.map(v => [x(v), y(fitAt(v))])), class: "ln-fit" }, svg);
+
+    W = Math.max(300, errBox.clientWidth); H = 230; m = { l: 40, r: 12, t: 12, b: 38 };
+    svg = mk(errBox, W, H, "Training and test error against number of boosting rounds");
+    x = L.scale(0, R, m.l, W - m.r); y = L.scale(0, 1.6, H - m.b, m.t);
+    axes(svg, W, H, m, [0, 100, 200, 300].map(v => [v, String(v), x(v)]), "Boosting rounds", [0, 0.5, 1, 1.5].map(v => [v, v.toFixed(1), y(v)]), "Squared error");
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(NOISE), y2: y(NOISE), class: "ln-floor" }, svg);
+    const cl = v => Math.min(1.6, v);
+    L.svg("path", { d: L.path(B.etr.map((v, i) => [x(i), y(cl(v))])), class: "ln-train" }, svg);
+    L.svg("path", { d: L.path(B.ete.map((v, i) => [x(i), y(cl(v))])), class: "ln-test" }, svg);
+    L.svg("line", { x1: x(n), x2: x(n), y1: m.t, y2: H - m.b, class: "ln-now" }, svg);
+    L.svg("circle", { cx: x(B.best), cy: y(cl(B.ete[B.best])), r: 5, class: "cv-now" }, svg);
+    tx(svg, x(B.best) + (B.best > R * 0.7 ? -8 : 8), y(cl(B.ete[B.best])) - 8, "best: round " + B.best, { class: "lbl-ink", "text-anchor": B.best > R * 0.7 ? "end" : "start" });
+
+    const te = B.ete[n], tr = B.etr[n], bt = B.ete[B.best];
+    $("st3-tr").textContent = tr.toFixed(2);
+    $("st3-te").textContent = te.toFixed(2);
+    $("st3-te-s").textContent = n > B.best ? "past the best round: over-fitting by " + (te - bt).toFixed(2) : (n < B.best ? "still under-fitted by " + (te - bt).toFixed(2) : "at the best round");
+    cls($("st3-te-b"), te - bt > 0.05 ? "bad" : (te - bt > 0.015 ? "warn" : "ok"));
+    $("st3-best").textContent = bt.toFixed(2); $("st3-best-s").textContent = "at round " + B.best + " (noise floor 0.49)";
+    $("s3-verdict").innerHTML = n === 0
+      ? "Round 0 is just the average outcome. Every round adds a small tree fitted to what is still wrong."
+      : (n > B.best + 5
+        ? "<b>" + (n - B.best) + " rounds past the best</b>: training error is " + tr.toFixed(2) + ", below the unavoidable noise 0.49, which is only possible by memorising noise. Early stopping would have halted at round " + B.best + "."
+        : (n < B.best - 5
+          ? "Still learning: " + (B.best - n) + " more rounds would lower the test error. A learning rate of " + B.lr.toFixed(2) + " takes small steps, so it needs many."
+          : "Close to the best round. Test error " + te.toFixed(2) + "; the best possible with these settings is " + bt.toFixed(2) + "."));
+  }
+  roundCtl = L.bind("s-rounds", v => String(v), v => { S3.n = v; renderBoost(); });
+  L.bind("s-lr", v => Math.pow(10, v).toFixed(v < -1.3 ? 3 : 2), v => { S3.lk = v; renderBoost(); });
+  L.bind("s-dep3", v => String(v), v => { S3.d = v; renderBoost(); });
+  $("b-es").addEventListener("click", () => { const B = runBoost(); S3.n = B.best; roundCtl.set(B.best); renderBoost(); });
+
+  // =====================================================================
+  // Simulation 4: ridge and lasso
+  // =====================================================================
+  const P = 12, NT = 40, NV = 500;
+  const BETA = [2, 2, 1.5].concat(Array(P - 3).fill(0)), SG = 3;
+  const r4 = rng(2024);
+  function genX(n) {
+    const X = [];
+    for (let i = 0; i < n; i++) {
+      const z = Array.from({ length: P }, () => gauss(r4));
+      z[1] = 0.9 * z[0] + Math.sqrt(0.19) * z[1];
+      X.push(z);
+    }
+    return X;
+  }
+  const Xr = genX(NT), Xv = genX(NV);
+  const yr = Xr.map(row => row.reduce((s, v, j) => s + v * BETA[j], 0) + SG * gauss(r4));
+  const yv = Xv.map(row => row.reduce((s, v, j) => s + v * BETA[j], 0) + SG * gauss(r4));
+  const mu = Array(P).fill(0), sd = Array(P).fill(1);
+  for (let j = 0; j < P; j++) {
+    mu[j] = Xr.reduce((s, r) => s + r[j], 0) / NT;
+    sd[j] = Math.sqrt(Xr.reduce((s, r) => s + (r[j] - mu[j]) ** 2, 0) / NT);
+  }
+  const Zr = Xr.map(r => r.map((v, j) => (v - mu[j]) / sd[j])), Zv = Xv.map(r => r.map((v, j) => (v - mu[j]) / sd[j]));
+  const ym = yr.reduce((a, b) => a + b, 0) / NT, yc = yr.map(v => v - ym);
+  const C = Array.from({ length: P }, (_, a) => Array.from({ length: P }, (_, b) => Zr.reduce((s, r) => s + r[a] * r[b], 0) / NT));
+  const cxy = Array.from({ length: P }, (_, j) => Zr.reduce((s, r, i) => s + r[j] * yc[i], 0) / NT);
+  function ridge(lam) {
+    const A = C.map((row, i) => row.map((v, j) => v + (i === j ? lam : 0)).concat([cxy[i]]));
+    for (let c = 0; c < P; c++) {
+      let p = c; for (let r = c + 1; r < P; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+      [A[c], A[p]] = [A[p], A[c]];
+      for (let r = 0; r < P; r++) if (r !== c) { const k = A[r][c] / A[c][c]; for (let q = c; q <= P; q++) A[r][q] -= k * A[c][q]; }
+    }
+    return A.map((row, i) => row[P] / row[i]);
+  }
+  const soft = (z, g) => z > g ? z - g : (z < -g ? z + g : 0);
+  function lasso(lam) {
+    const b = Array(P).fill(0);
+    for (let it = 0; it < 2000; it++) {
+      let mx = 0;
+      for (let j = 0; j < P; j++) {
+        let rho = cxy[j]; for (let k = 0; k < P; k++) if (k !== j) rho -= C[j][k] * b[k];
+        const nb = soft(rho, lam) / C[j][j];
+        mx = Math.max(mx, Math.abs(nb - b[j])); b[j] = nb;
+      }
+      if (mx < 1e-9) break;
+    }
+    return b;
+  }
+  const err = (Z, y0, b, add) => { let s = 0; Z.forEach((r, i) => { let p = add; for (let j = 0; j < P; j++) p += r[j] * b[j]; s += (p - y0[i]) ** 2; }); return s / Z.length; };
+  const trErr = b => err(Zr, yr, b, ym), teErr = b => err(Zv, yv, b, ym);
+  const LG = Array.from({ length: 81 }, (_, i) => -3 + i * 0.05);
+  const CR = { l2: LG.map(l => teErr(ridge(Math.pow(10, l)))), l1: LG.map(l => teErr(lasso(Math.pow(10, l)))) };
+  const S4 = { lam: -2, pen: "l2" };
+  const barBox = $("reg-bars"), curBox = $("reg-curve");
+  function renderReg() {
+    const lam = Math.pow(10, S4.lam), b = S4.pen === "l2" ? ridge(lam) : lasso(lam);
+    let W = Math.max(300, barBox.clientWidth), H = 300, m = { l: 80, r: 14, t: 10, b: 30 };
+    let svg = mk(barBox, W, H, "Fitted coefficients for twelve features");
+    const x = L.scale(-5, 5, m.l, W - m.r), rowH = (H - m.t - m.b) / P;
+    [-4, -2, 0, 2, 4].forEach(v => { L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid" }, svg); tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }); });
+    b.forEach((v, j) => {
+      const yy = m.t + rowH * j + 3, h = rowH - 6, vc = L.clamp(v, -5, 5);
+      if (Math.abs(vc) < 1e-6) L.svg("rect", { x: x(0) - 1.5, y: yy, width: 3, height: h, class: "cb-zero" }, svg);
+      else L.svg("rect", { x: Math.min(x(0), x(vc)), y: yy, width: Math.abs(x(vc) - x(0)), height: h, rx: 2, class: vc > 0 ? "cb-pos" : "cb-neg" }, svg);
+      L.svg("rect", { x: Math.min(x(0), x(BETA[j])) , y: yy - 1, width: Math.max(2, Math.abs(x(BETA[j]) - x(0))), height: h + 2, rx: 2, class: "cb-true", "display": BETA[j] === 0 ? "none" : "inline" }, svg);
+      tx(svg, m.l - 8, yy + h / 2 + 4, "Feature " + (j + 1) + (j < 3 ? " (real)" : ""), { "text-anchor": "end", class: "lbl-ink" });
+    });
+    L.svg("line", { x1: x(0), x2: x(0), y1: m.t, y2: H - m.b, stroke: "currentColor", "stroke-opacity": 0.3 }, svg);
+
+    W = Math.max(300, curBox.clientWidth); H = 230; m = { l: 40, r: 12, t: 12, b: 38 };
+    svg = mk(curBox, W, H, "Test error against penalty strength for ridge and lasso");
+    const all = CR.l1.concat(CR.l2), lo = Math.floor(Math.min(...all) - 0.3), hi = Math.min(Math.max(...all), 16);
+    const xx = L.scale(-3, 1, m.l, W - m.r), yy = L.scale(lo, hi, H - m.b, m.t);
+    const yt = []; for (let v = Math.ceil(lo / 2) * 2; v <= hi; v += 2) yt.push([v, String(v), yy(v)]);
+    axes(svg, W, H, m, [-3, -2, -1, 0, 1].map(v => [v, "10^" + v, xx(v)]), "Penalty strength λ (log scale)", yt, "Test error");
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: yy(9), y2: yy(9), class: "ln-floor" }, svg);
+    L.svg("path", { d: L.path(LG.map((l, i) => [xx(l), yy(Math.min(CR.l2[i], hi))])), class: "ln-ridge" }, svg);
+    L.svg("path", { d: L.path(LG.map((l, i) => [xx(l), yy(Math.min(CR.l1[i], hi))])), class: "ln-lasso" }, svg);
+    L.svg("line", { x1: xx(S4.lam), x2: xx(S4.lam), y1: m.t, y2: H - m.b, class: "ln-now" }, svg);
+
+    const nz = b.filter(v => Math.abs(v) > 1e-6).length, te = teErr(b), tr = trErr(b);
+    const ci = S4.pen === "l2" ? CR.l2 : CR.l1; let bi = 0; ci.forEach((v, i) => { if (v < ci[bi]) bi = i; });
+    $("st4-nz").textContent = nz + " of 12";
+    $("st4-tr").textContent = tr.toFixed(2);
+    $("st4-te").textContent = te.toFixed(2);
+    $("st4-te-s").textContent = "best for this penalty type: " + ci[bi].toFixed(2) + " at λ = " + Math.pow(10, LG[bi]).toFixed(Math.pow(10, LG[bi]) < 0.1 ? 3 : 2);
+    cls($("st4-te-b"), te - ci[bi] > 1 ? "bad" : (te - ci[bi] > 0.3 ? "warn" : "ok"));
+    const nzReal = b.slice(0, 3).filter(v => Math.abs(v) > 1e-6).length;
+    $("s4-verdict").innerHTML = (S4.pen === "l2"
+      ? "Ridge keeps all 12 features and shrinks them together: the largest weights fall and the noise weights get small, but none is exactly zero."
+      : "Lasso keeps <b>" + nz + "</b> features (" + nzReal + " of the 3 real ones). Weights of exactly zero are features dropped from the model.") +
+      (te - ci[bi] > 0.3 ? " Test error is <b>" + (te - ci[bi]).toFixed(2) + "</b> above the best setting for this penalty type: " + (S4.lam < LG[bi] ? "too little penalty, so noise is being fitted." : "too much penalty, so real signal is being shrunk away.") : " This is close to the best test error.");
+  }
+  const setPen = p => { S4.pen = p; $("b-l2").setAttribute("aria-pressed", String(p === "l2")); $("b-l1").setAttribute("aria-pressed", String(p === "l1")); renderReg(); };
+  $("b-l2").addEventListener("click", () => setPen("l2"));
+  $("b-l1").addEventListener("click", () => setPen("l1"));
+  L.bind("s-lam", v => "10^" + v.toFixed(2) + " = " + Math.pow(10, v).toFixed(Math.pow(10, v) < 0.1 ? 3 : 2), v => { S4.lam = v; renderReg(); });
+
+  function renderAll() { renderSplit(); renderBag(); renderBoost(); renderReg(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Convolutions and Recurrence: Finding Patterns in Space and in Time</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict.mono { font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
+
+  .px-bg { fill: none; stroke: var(--line); stroke-width: 1; }
+  .px-ink { fill: var(--ink); }
+  .px-pos { fill: var(--accent); }
+  .px-neg { fill: var(--warn); }
+  .px-win { fill: none; stroke: var(--accent); stroke-width: 2.6; }
+  .px-cur { fill: none; stroke: var(--ink); stroke-width: 2; }
+  .bar-a { fill: var(--bad); fill-opacity: .75; }
+  .bar-b { fill: var(--accent); }
+  .ln-a { stroke: var(--bad); stroke-width: 2.4; fill: none; }
+  .ln-b { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .ln-need { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 4 3; }
+  .dot-a { fill: var(--bad); }
+  .dot-b { fill: var(--accent); }
+
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F5 · Deep learning</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F5.3 · F5.4</span>
+        <span class="pill n">90 days</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Convolutions and Recurrence: Finding Patterns in Space and in Time</h1>
+      <p class="dek">How a small sliding filter finds edges, stamps and local patterns in images and sequences with a tiny number of weights, how a recurrent network carries memory from one event to the next, and why one of them faded while the other quietly stayed in production.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A convolution reuses one small detector at every position, so it learns local patterns cheaply but sees only as far as its stack of layers reaches, while a recurrent network reads events one by one and carries a state forward, which gives it unlimited reach in theory and a fading memory in practice.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A clerk checks a scanned cheque. She does not stare at the whole page at once. Her eye lands on the amount box, then the signature, then the date, and at each spot she asks the same small questions: is there a straight edge here? A curve? A stamp? The questions are the same wherever she looks. That is a <strong>convolution</strong>: one small detector, slid across the page, asked at every position.</p>
+        <p>Now picture a fraud analyst reading a customer's card history. She does not read it as a picture. She reads it in order: three tiny AED 1 charges at an online shop, then a AED 4,800 purchase twenty minutes later. What matters is the order and what came before. She keeps a running impression ("this card is being tested") and updates it with each new line. That is a <strong>recurrent network</strong>: it reads one event at a time and carries a summary forward.</p>
+        <p>Both ideas are about the same thing, which is <em>structure you should not have to relearn</em>. A stamp is a stamp wherever it sits on the page. A burst of small charges means the same thing on Tuesday as on Friday. A plain fully connected network (F5.1) would learn "stamp in the top-left corner" and "stamp in the middle" as two separate facts, and would need examples of each. Convolutions and recurrence build the repetition into the architecture so the model learns the pattern once.</p>
+      </div>
+
+      <div class="callout key"><span class="k">Hold onto this</span>Both are about sharing weights. A convolution shares one filter across <em>positions</em>. A recurrent network shares one set of weights across <em>time steps</em>. Sharing is why they have few parameters, why they generalise from modest data, and also where their limits come from: a filter only sees locally, and a memory passed along many steps fades.</div>
+
+      <figure class="figure" id="fig-conv">
+        <div class="fig-head"><span class="fig-title">A filter sliding over a page</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> pick <b>Vertical edges</b> and press <b>Play</b>. A 3×3 window (green outline) moves across a 10×10 picture of a "T", and at each stop one number is written into the feature map. Green means "bright to the right of dark", orange the opposite. Then swap in <b>Horizontal edges</b> and see the bar of the T light up instead. Use the slider to stop at any position and read the arithmetic.</p>
+        <div class="btns" role="group" aria-label="Filter">
+          <button class="btn" type="button" data-k="0" aria-pressed="true">Vertical edges</button>
+          <button class="btn" type="button" data-k="1" aria-pressed="false">Horizontal edges</button>
+          <button class="btn" type="button" data-k="2" aria-pressed="false">Blur</button>
+          <button class="btn" type="button" data-k="3" aria-pressed="false">Sharpen</button>
+        </div>
+        <div class="btns" role="group" aria-label="Playback">
+          <button class="btn" type="button" id="b-play">Play</button>
+          <button class="btn" type="button" id="b-fill">Fill the whole map</button>
+        </div>
+        <div class="chart-wrap" id="conv-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-pos">Window position <output for="s-pos"></output></label><input type="range" id="s-pos" min="0" max="63" step="1" value="9"></div>
+        </div>
+        <div class="verdict mono" id="conv-math"></div>
+        <div class="stats">
+          <div class="stat"><div class="k">Output at this position</div><div class="v" id="st1-out"></div><div class="s">one number in the feature map</div></div>
+          <div class="stat"><div class="k">Strongest response anywhere</div><div class="v" id="st1-max"></div><div class="s" id="st1-max-s"></div></div>
+          <div class="stat"><div class="k">Weights in this filter</div><div class="v">9</div><div class="s">reused at all 64 positions</div></div>
+        </div>
+        <p class="sim-note">Simulated: a hand-drawn 10×10 grey-level image (0 to 9) and four fixed 3×3 filters (the Sobel edge pair, a box blur, a sharpen). Exact arithmetic, no padding, stride 1, so the output is 8×8. A trained network learns its filter values from data instead of using these.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three things to take from the picture.</p>
+        <ul>
+          <li><strong>The filter is a question with numbers in it.</strong> Multiply each pixel under the window by the matching filter weight and add. A big positive total means "this patch looks like what I am built to find". A total near zero means it does not.</li>
+          <li><strong>The output is a map of where the question was answered "yes".</strong> It is not a smaller copy of the image. It says <em>where</em> the feature is, which is what lets later layers combine features into shapes.</li>
+          <li><strong>A real network does not choose its filters.</strong> It starts them random and uses backpropagation (F5.1, <a href="f1-gradients-optimisation.html">F1.3</a>) to shape them until they help the task. Early filters usually end up as edges and colour blobs. Later ones respond to textures, then parts, then objects or, in documents, to rules, boxes and stamps.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-conv">Convolution: the operation, and why it is so cheap</h3>
+      <div class="prose">
+        <p>Strictly, deep learning libraries compute <em>cross-correlation</em> (no flipping of the filter), but everyone calls it convolution and since the filter is learned the difference is invisible. For a 2-D input X and a filter K of size k×k, the output at row r, column c is:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>Y</mi><mo stretchy="false">[</mo><mi>r</mi><mo>,</mo><mi>c</mi><mo stretchy="false">]</mo><mo>=</mo><munder><mo>∑</mo><mrow><mi>i</mi><mo>,</mo><mi>j</mi></mrow></munder><mi>K</mi><mo stretchy="false">[</mo><mi>i</mi><mo>,</mo><mi>j</mi><mo stretchy="false">]</mo><mo>·</mo><mi>X</mi><mo stretchy="false">[</mo><mi>r</mi><mo>+</mo><mi>i</mi><mo>,</mo><mi>c</mi><mo>+</mo><mi>j</mi><mo stretchy="false">]</mo><mo>+</mo><mi>b</mi></math>
+        <p class="where">Slide the window to (r, c), multiply element by element, add, add a bias <i>b</i>. A nonlinearity such as ReLU (F5.1) follows. With an input of side <i>n</i>, padding <i>p</i> on each edge, filter size <i>k</i> and stride <i>s</i>, the output side is ⌊(<i>n</i> + 2<i>p</i> − <i>k</i>) ÷ <i>s</i>⌋ + 1. In Simulation 1: (10 + 0 − 3) ÷ 1 + 1 = 8.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The vocabulary you need, and what each piece does:</p>
+        <ul>
+          <li><strong>Channels.</strong> A colour image has three input channels (red, green, blue). A filter is really k×k×(input channels) numbers, and a layer holds many filters, each producing one output channel. A layer with 3 input channels, 3×3 filters and 16 output channels has 3·3·3·16 + 16 = <strong>448</strong> parameters, whatever the image size.</li>
+          <li><strong>Padding.</strong> Adding a border of zeros so the output keeps the input's size ("same" padding). Without it, each layer shrinks the map and edge pixels are seen fewer times.</li>
+          <li><strong>Stride.</strong> Moving the window two pixels at a time halves the map and cuts compute fourfold. It is how networks reduce resolution as they go deeper.</li>
+          <li><strong>Pooling.</strong> Replace each small block by its maximum or mean. It throws away exact position and keeps "was it there?". Modern networks often use strided convolutions instead.</li>
+          <li><strong>Translation equivariance.</strong> Move the stamp and the feature map's bright spot moves with it. After a final pooling over all positions the answer becomes <em>invariant</em>: "there is a stamp somewhere".</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-share">
+        <div class="fig-head"><span class="fig-title">What sharing weights saves</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> leave the image at 224×224 and compare a convolutional layer with a fully connected layer producing the same output. Then shrink the image to 28×28 (a digit) and watch the fully connected layer become merely wasteful instead of impossible. Raise the filter size and see that the convolution barely notices.</p>
+        <div class="chart-wrap" id="share-chart"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-side">Image side in pixels <output for="s-side"></output></label><input type="range" id="s-side" min="1.447" max="2.709" step="0.01" value="2.35"></div>
+          <div class="ctl"><label for="s-k">Filter size <output for="s-k"></output></label><input type="range" id="s-k" min="1" max="7" step="2" value="3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Convolution parameters</div><div class="v" id="st2-conv"></div><div class="s">3 channels in, 16 out</div></div>
+          <div class="stat bad"><div class="k">Fully connected parameters</div><div class="v" id="st2-dense"></div><div class="s" id="st2-dense-s"></div></div>
+          <div class="stat"><div class="k">Times each filter weight is reused</div><div class="v" id="st2-reuse"></div><div class="s">once per output position</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: exact parameter counts for one layer mapping an s×s×3 image to an s×s×16 feature map. The fully connected comparison is a deliberately naive baseline: nobody builds it, which is the point. Memory assumes 4-byte floats. The side slider is logarithmic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The saving is the whole reason convolutional nets exist. It comes from two assumptions that happen to be true of images and of many documents: <strong>locality</strong> (a pixel is best explained by its neighbours) and <strong>stationarity</strong> (the same pattern can appear anywhere). These are called <em>inductive biases</em>. They shrink the space of functions the network can represent, so with limited data it generalises better than a model that could in principle learn anything. When the assumptions are wrong, as they are for a table of unrelated columns, the bias hurts, which is partly why gradient boosting still beats deep nets on tabular data.</p>
+      </div>
+
+      <h3 class="sub" id="m-stack">Stacking layers: receptive fields and the feature hierarchy</h3>
+      <div class="prose">
+        <p>One 3×3 filter sees a 3×3 patch. Stack a second 3×3 layer on top and each of its outputs depends on a 5×5 patch of the original, because its window covers three first-layer outputs which each covered three pixels, overlapping. This region of the input that can influence one unit is its <strong>receptive field</strong>. For plain stride-1 layers it grows by <i>k</i> − 1 per layer:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>RF</mi><mo stretchy="false">(</mo><mi>L</mi><mo stretchy="false">)</mo><mo>=</mo><mn>1</mn><mo>+</mo><mi>L</mi><mo>·</mo><mo stretchy="false">(</mo><mi>k</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo></math>
+        <p class="where"><i>L</i> layers of filter size <i>k</i>. Ten 3×3 layers see only 21 pixels across. If each layer also halves the resolution (stride 2, or pooling), or if the filters are <em>dilated</em> (spaced apart, with gaps), the reach doubles each layer instead: RF = 1 + (<i>k</i> − 1)(2<sup><i>L</i></sup> − 1). Ten layers of that see 2,047 pixels.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>This is why deep conv nets build a <strong>hierarchy</strong>. Early layers, with small receptive fields, detect edges. Middle layers combine them into corners, strokes and textures. Late layers, with large fields, respond to whole objects: a logo, a signature block, a table. Deeper is not decoration, it is how the network reaches far enough to see context.</p>
+        <p>The same arithmetic applies in one dimension, over a sequence, which matters for the next topic: a stack of 1-D convolutions over a customer's transactions sees only as many past events as its receptive field covers.</p>
+      </div>
+
+      <figure class="figure" id="fig-rf">
+        <div class="fig-head"><span class="fig-title">How far can the stack see?</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> say a fraud pattern (a burst of small test charges followed by the cash-out) stretches over 100 transactions. The red line grows by two each layer and needs about 50 layers. The green line doubles its reach each layer and gets there in 6. Drag the pattern length and filter size and read off the layers and parameters.</p>
+        <div class="chart-wrap" id="rf-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Plain stack: reach grows by k−1 per layer</span>
+          <span><i style="background:var(--accent)"></i>Doubling (strides or dilation): reach doubles</span>
+          <span><i style="background:var(--warn)"></i>Span the pattern needs</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-span">Pattern spans this many steps <output for="s-span"></output></label><input type="range" id="s-span" min="1" max="3" step="0.02" value="2"></div>
+          <div class="ctl"><label for="s-k3">Filter size <output for="s-k3"></output></label><input type="range" id="s-k3" min="3" max="7" step="2" value="3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat bad"><div class="k">Layers needed, plain stack</div><div class="v" id="st3-pl"></div><div class="s" id="st3-pl-s"></div></div>
+          <div class="stat ok"><div class="k">Layers needed, doubling</div><div class="v" id="st3-db"></div><div class="s" id="st3-db-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: exact receptive-field formulas for a 1-D stack. Parameter counts assume 64 channels in and out with no biases or extras. The doubling case is the idea behind temporal convolutional networks and dilated convolutions. Chart axis is logarithmic and stops at 12 layers.</p>
+      </figure>
+
+      <h3 class="sub" id="m-conv1d">Convolutions beyond photographs</h3>
+      <div class="prose">
+        <p>Nothing in the operation needs pixels. Anything laid out along a line or a grid, where nearby values belong together and patterns repeat, fits.</p>
+        <ul>
+          <li><strong>1-D convolutions on sequences.</strong> Slide a filter along a customer's transactions, with features like amount, merchant category and time gap in the channels. A filter can learn "three small charges in a row" or "a new country followed by a large amount". These run in parallel over all positions, so they train fast. Stacking them with growing dilation gives the <em>temporal convolutional network</em> (TCN), shown by Bai, Kolter and Koltun (2018) to match or beat standard recurrent networks on many sequence benchmarks. Making the convolution <em>causal</em> (no peeking at future steps) is essential for any scoring task.</li>
+          <li><strong>Text.</strong> Character-level convolutions find prefixes, suffixes and spelling patterns without a vocabulary. That is useful for noisy names, transliteration variants of Arabic names in Latin script, and OCR garbage, though today a pretrained transformer (<a href="f5-attention.html">F5.5</a>) is the usual choice.</li>
+          <li><strong>Document images.</strong> Scanned statements, cheques, Emirates ID cards and trade documents are pictures first. Convolutional backbones find text lines, tables, stamps, signatures and handwriting; layout models then read the text in position. Right-to-left Arabic script, mixed Arabic and English fields and diacritics make these pipelines harder than the Latin-only benchmarks suggest (<a href="b7-document-ai-for-trade-finance.html">B7</a>, <a href="a14-arabic-ocr-and-document-ai.html">A14</a>).</li>
+          <li><strong>Signals and spectrograms.</strong> Voice biometrics and call-centre audio are often turned into time-frequency images and given to convolutional networks. The same family spots tampered images and manipulated faces in eKYC (<a href="a3-deepfakes-against-ekyc-and-call.html">A3</a>).</li>
+          <li><strong>Autoencoders.</strong> Convolutional autoencoders learn to compress and reconstruct images, and the reconstruction error flags oddities (<a href="f4-anomaly-detection-isolation-forests-autoencoders.html">F4.4</a>).</li>
+        </ul>
+        <p>A short sketch of what this looks like in code. PyTorch reads data as (batch, channels, length), so a batch of 32 customers, each with their last 200 transactions described by 6 features, goes in as (32, 6, 200):</p>
+      </div>
+<pre><code>import torch.nn as nn
+
+# Causal 1-D conv: pad only on the left so step t never sees step t+1.
+class CausalConv(nn.Module):
+    def __init__(self, c_in, c_out, k, dilation=1):
+        super().__init__()
+        self.pad = (k - 1) * dilation
+        self.conv = nn.Conv1d(c_in, c_out, k, dilation=dilation)
+    def forward(self, x):                      # x: (batch, channels, time)
+        x = nn.functional.pad(x, (self.pad, 0))
+        return self.conv(x).relu()
+
+net = nn.Sequential(                           # reach: 1 + 2*(1+2+4+8) = 31 steps
+    CausalConv(6, 32, 3, 1), CausalConv(32, 32, 3, 2),
+    CausalConv(32, 32, 3, 4), CausalConv(32, 32, 3, 8))</code></pre>
+
+      <h3 class="sub" id="m-rnn">Recurrent networks: reading one event at a time</h3>
+      <div class="prose">
+        <p>A convolution has a fixed window. A recurrent neural network (RNN) has no window at all. It keeps a vector <strong>h</strong>, the hidden state, which is its memory. At each step it takes the new input and the old state and produces a new state:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>h</mi><mi>t</mi></msub><mo>=</mo><mi>tanh</mi><mo stretchy="false">(</mo><mi>W</mi><mspace width="0.2em"></mspace><msub><mi>h</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><mi>U</mi><mspace width="0.2em"></mspace><msub><mi>x</mi><mi>t</mi></msub><mo>+</mo><mi>b</mi><mo stretchy="false">)</mo></math>
+        <p class="where"><i>x<sub>t</sub></i> is the event at step <i>t</i> (amount, merchant type, time since the last one). <i>W</i>, <i>U</i> and <i>b</i> are the <em>same</em> weights at every step, the time-axis version of a shared filter. To score a customer you can read off <i>h</i> after the last event, or after every event to give a running risk score.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Training uses backpropagation through time: unroll the loop into a very deep network, one layer per step, with the same weights in every layer, and run backprop (F5.1) through it. That is where the trouble starts. To learn that an event 30 steps ago mattered, the learning signal has to travel back through 30 copies of <i>W</i>. At each step it is multiplied by roughly <i>W</i> times the slope of tanh. The signal reaching step <i>k</i> from step <i>T</i> is a product:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mfrac><mrow><mo>∂</mo><msub><mi>h</mi><mi>T</mi></msub></mrow><mrow><mo>∂</mo><msub><mi>h</mi><mi>k</mi></msub></mrow></mfrac><mo>=</mo><munderover><mo>∏</mo><mrow><mi>j</mi><mo>=</mo><mi>k</mi><mo>+</mo><mn>1</mn></mrow><mi>T</mi></munderover><mi>W</mi><mo>·</mo><msup><mi>tanh</mi><mo>′</mo></msup><mo stretchy="false">(</mo><mo>·</mo><mo stretchy="false">)</mo></math>
+        <p class="where">Written for one number for clarity; in a real network <i>W</i> is a matrix and the size of the product is governed by its largest singular value. If each factor is below 1, the signal shrinks geometrically: 0.6 multiplied 30 times is 2 × 10<sup>−7</sup>. That is the <strong>vanishing gradient</strong>. If each factor is above 1 it blows up, the <strong>exploding gradient</strong>. Gradient clipping fixes the explosion. The vanishing case is structural.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The consequence is plain: a vanilla RNN learns short-range structure and struggles to link events far apart, which was exactly the thing it was meant to do. Bengio, Simard and Frasconi (1994) analysed why, and Hochreiter's 1991 thesis had already found it.</p>
+      </div>
+
+      <h3 class="sub" id="m-lstm">LSTM and GRU: gates that protect the memory</h3>
+      <div class="prose">
+        <p>The fix, from Hochreiter and Schmidhuber (1997), is to give the network a second channel, the <strong>cell state</strong> <i>c</i>, that is updated by <em>adding</em> rather than by repeated squashing:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>c</mi><mi>t</mi></msub><mo>=</mo><msub><mi>f</mi><mi>t</mi></msub><mo>⊙</mo><msub><mi>c</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><msub><mi>i</mi><mi>t</mi></msub><mo>⊙</mo><msub><mi>g</mi><mi>t</mi></msub></math>
+        <p class="where">The <strong>forget gate</strong> <i>f</i> (values between 0 and 1, computed from the current input and state) decides how much of the old memory to keep. The <strong>input gate</strong> <i>i</i> decides how much of the new candidate <i>g</i> to write. An <strong>output gate</strong> decides how much of the memory to expose as <i>h</i>. ⊙ is element-wise multiplication. If <i>f</i> stays near 1, the gradient along the cell state is a product of numbers near 1, so it survives many steps.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The GRU (Cho et al., 2014) merges these into two gates and a single state. It has fewer parameters and often performs the same. Choosing between LSTM and GRU rarely matters more than the data and the features.</p>
+        <p>The gates are learned and depend on the input, so the network learns what to remember. A forget gate can hold a "this is a new device" flag for fifty events and drop it when a trusted login arrives. Compare the two kinds of memory directly.</p>
+      </div>
+
+      <figure class="figure" id="fig-grad">
+        <div class="fig-head"><span class="fig-title">How far back can the learning signal reach?</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> with the recurrent weight at 0.9 the plain RNN's signal falls below 1% within about ten steps (red). The gated cell state with a forget gate at 0.95 still carries about a fifth of its signal 30 steps back (green). Raise the recurrent weight to 1.8: the signal still dies, because a larger w pushes tanh into its flat region where the slope is near zero (in real networks with matrices, explosions do happen). Push the forget gate to 0.8 and see that gates only help if they are kept open.</p>
+        <div class="chart-wrap" id="grad-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Plain RNN: product of w·tanh′</span>
+          <span><i style="background:var(--accent)"></i>Gated cell state: product of forget gates</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-w">Recurrent weight w, plain RNN <output for="s-w"></output></label><input type="range" id="s-w" min="0.3" max="1.8" step="0.01" value="0.9"></div>
+          <div class="ctl"><label for="s-f">Forget gate value f, gated cell <output for="s-f"></output></label><input type="range" id="s-f" min="0.7" max="1" step="0.005" value="0.95"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st4-a-b"><div class="k">Plain RNN: signal 30 steps back</div><div class="v" id="st4-a30"></div><div class="s" id="st4-a-s"></div></div>
+          <div class="stat" id="st4-b-b"><div class="k">Gated cell: signal 30 steps back</div><div class="v" id="st4-b30"></div><div class="s" id="st4-b-s"></div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: a single-number RNN, h = tanh(w·h + x), run for 100 steps on a fixed random input sequence. The plotted value is the exact product of w·(1 − h²) from the last step back to each earlier step. The gated line is f raised to the number of steps back, with f held constant (real gates vary with the input). Other gradient paths are ignored. The axis is logarithmic.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Two practical points follow.</p>
+        <ul>
+          <li><strong>"Remembers" means "can be trained to use".</strong> The simulation is about gradients, which decide what the network can <em>learn</em>. Gating does not make memory perfect: LSTMs still forget over hundreds of steps, and long-range recall remains weaker than attention's direct lookup.</li>
+          <li><strong>A recurrent model is a streaming state machine.</strong> To score a customer's next event you need only their stored state <i>h</i> and the new event, not their full history. Memory per customer is a fixed small vector, and the cost of one update does not grow as the history does. That is a real advantage for low-latency scoring, and it is the main reason recurrent ideas survive.</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-after">Why attention displaced both, and where they still win</h3>
+      <div class="prose">
+        <p>Recurrent networks have two weaknesses beyond fading memory. They are <strong>sequential</strong>: step 100 cannot be computed until step 99 is done, so they train slowly on GPUs. And their memory is a <strong>bottleneck</strong>: everything about the past must be squeezed into one vector. Attention (F5.5), introduced as an add-on to recurrent translation models by Bahdanau et al. (2014) and made the whole architecture by Vaswani et al. (2017), lets every position look directly at every other. It parallelises well and has no bottleneck. The price is cost that grows with the square of the sequence length.</p>
+        <p>The picture is not one-sided:</p>
+        <ul>
+          <li><strong>Vision.</strong> Vision transformers (Dosovitskiy et al., 2020) beat convolutional nets on large datasets, but modernised convolutional networks such as ConvNeXt (Liu et al., 2022) closed most of the gap, and convolutions are still cheaper, easier to compress (<a href="p3-quantization-pruning-and-distillation.html">P3</a>) and strong when data is limited. They remain a normal choice for on-device or high-throughput vision.</li>
+          <li><strong>Sequences.</strong> Short per-customer histories, tight latency budgets and small training sets are where a small GRU, LSTM or TCN is a sensible choice against a transformer.</li>
+          <li><strong>Recurrence returns in new clothes.</strong> State-space models such as Mamba (Gu and Dao, 2023) and gated recurrent designs like xLSTM (Beck et al., 2024) go back to a fixed-size running state with linear cost, using lessons from both worlds. Part 4 says how far that has got.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>These two architectures sit between the basic network and the attention-based models that now dominate. They also explain choices you will meet in fraud, document and voice systems.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F5.1 – F5.2 · Neurons, layers, backpropagation</span><span class="t"><a href="f5-neurons-layers-and-backpropagation.html">The machinery both reuse</a></span><p>A convolutional layer is a fully connected layer with most weights forced to zero and the rest tied together. Training a recurrent net is backprop on an unrolled copy.</p></div>
+        <div class="link-card"><span class="code">F5.5 · Attention</span><span class="t"><a href="f5-attention.html">Direct lookup replaces compressed memory</a></span><p>Attention removes the recurrent bottleneck and the fixed window. Read this next to see what the two designs here were missing.</p></div>
+        <div class="link-card"><span class="code">F5.6 · Self-supervised and contrastive learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">Pretraining the backbone</a></span><p>Modern vision and sequence encoders are pretrained without labels and then fine-tuned, which matters when you have 300 labelled cases.</p></div>
+        <div class="link-card"><span class="code">F1.3 · Gradients</span><span class="t"><a href="f1-gradients-optimisation.html">Why the product of factors matters</a></span><p>The vanishing and exploding signal is the chain rule applied across many layers or steps. The same applies to very deep convolutional stacks, which residual connections rescued.</p></div>
+        <div class="link-card"><span class="code">F6 · Overfitting and augmentation</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">Flipping, cropping and noise</a></span><p>Augmentation is how conv nets get more out of limited images: rotations, crops and scan noise on cheques and IDs.</p></div>
+        <div class="link-card"><span class="code">F4.4 · Anomaly detection</span><span class="t"><a href="f4-anomaly-detection-isolation-forests-autoencoders.html">Autoencoders</a></span><p>Convolutional and recurrent autoencoders reconstruct images or sequences; high reconstruction error flags the unusual.</p></div>
+        <div class="link-card"><span class="code">F9 · Time series and forecasting</span><span class="t"><a href="f9-time-series-and-forecasting.html">Sequences as forecasts</a></span><p>LSTMs and TCNs are standard deep forecasters, and a well-tuned linear or boosted baseline often matches them.</p></div>
+        <div class="link-card"><span class="code">F4.3 · Validation</span><span class="t"><a href="f4-cross-validation-including-temporal-splits.html">Sequence models and time splits</a></span><p>A customer's events must stay together and the split must run forward in time, or the recurrent state leaks the future (<a href="f3-leakage-point-in-time.html">F3.1</a>).</p></div>
+        <div class="link-card"><span class="code">A8 · Foundation models for transaction data</span><span class="t"><a href="a8-foundation-models-for-transaction-data.html">Where sequence models are heading</a></span><p>Large pretrained models over transaction streams are the modern descendant of the recurrent fraud models described here.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Card and payment fraud.</strong> Per-card or per-customer recurrent or convolutional sequence models turn a history into features or a running score, usually alongside hand-built aggregates and a boosted-tree model (<a href="b1-transaction-and-card-fraud-detection.html">B1</a>). Their stored state fits a real-time scoring path (<a href="p2-deployment-patterns-batch-real-time.html">P2</a>).</li>
+          <li><strong>Document processing.</strong> Cheques, IDs, invoices, bills of lading and letters of credit: convolutional backbones for detection and OCR, layout models on top (B7, A14, <a href="a6-search-over-document-images-colpali.html">A6</a>).</li>
+          <li><strong>eKYC and voice.</strong> Face matching, liveness checks and voice verification rely on convolutional encoders. Deepfake detection is an arms race (A3, <a href="a9-behavioural-biometrics-and-device-intelligence.html">A9</a>).</li>
+          <li><strong>Behavioural signals.</strong> Typing rhythm, touch and mouse traces, and app navigation sequences are short streams where small recurrent or convolutional models are practical (A9).</li>
+          <li><strong>Call-centre analytics.</strong> Speech recognition stacks have long used convolutional front-ends and recurrent decoders before moving to attention. Arabic dialects remain a data problem more than an architecture one.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The core ideas are settled and old. The live questions are how much of the work attention-only designs have taken, whether linear-cost recurrent designs can match transformers, and whether, for a bank's own data, any of this beats a good tree model.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Searches were light and returned mostly explainers; items below marked "from memory" were not re-verified.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1989–98</span><div><div class="t">Convolutional nets for handwriting</div><p>LeCun and colleagues trained convolutional networks with backpropagation to read handwritten digits and cheques, deployed in US cheque reading in the 1990s. The architecture still recognisable today.</p><div class="src">LeCun et al., Neural Computation 1989; Proc. IEEE 1998 (from memory)</div></div></li>
+        <li><span class="yr">1997</span><div><div class="t">LSTM</div><p>Gated cell state to carry gradients through time, designed to fix the vanishing gradient.</p><div class="src">Hochreiter &amp; Schmidhuber, Neural Computation, 1997</div></div></li>
+        <li><span class="yr">2012–15</span><div><div class="t">Deep conv nets take over vision</div><p>AlexNet won ImageNet in 2012 on GPUs. Residual networks (ResNets) in 2015 added skip connections that let nets with over a hundred layers train, the same additive trick as the LSTM cell state.</p><div class="src">Krizhevsky et al., 2012; He et al., CVPR 2016 (from memory)</div></div></li>
+        <li><span class="yr">2014</span><div><div class="t">GRU, sequence-to-sequence, and attention</div><p>Recurrent encoder-decoders for translation, then the attention mechanism added to them, the step that led to transformers.</p><div class="src">Cho et al. 2014; Sutskever et al. 2014; Bahdanau et al. 2014</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">Temporal convolutional networks match recurrent ones</div><p>A generic causal, dilated convolutional architecture matched or outperformed LSTMs and GRUs on a range of sequence tasks, with simpler and faster training.</p><div class="src">Bai, Kolter &amp; Koltun, arXiv 1803.01271</div></div></li>
+        <li><span class="yr">2018–20</span><div><div class="t">Recurrent models for card fraud</div><p>Academic work on card transactions found LSTMs over a cardholder's history improved on models that saw one transaction at a time, with gains that were largest for card-not-present fraud. Later work on interleaved sequences and learned transaction embeddings followed.</p><div class="src">Jurgovsky et al., Expert Systems with Applications, 2018; Branco et al., KDD 2020 (from memory)</div></div></li>
+        <li><span class="yr">2020–22</span><div><div class="t">Vision transformers, then modernised convnets</div><p>Vision transformers showed attention can beat convolutions given enough data. ConvNeXt then re-engineered a ResNet with transformer-era training and design choices and matched transformer accuracy, showing much of the gap was recipe rather than architecture.</p><div class="src">Dosovitskiy et al., ICLR 2021; Liu et al., CVPR 2022</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Trees still beat deep nets on typical tabular data</div><p>A large benchmark found tree ensembles remained ahead of neural networks, including sequence-style and attention designs, on medium-sized tabular datasets. Relevant to any bank feature table; less so to raw sequences, images or text.</p><div class="src">Grinsztajn, Oyallon &amp; Varoquaux, NeurIPS 2022 (from memory)</div></div></li>
+        <li><span class="yr">2023–24</span><div><div class="t">Recurrence comes back with a fixed-size state</div><p>Mamba (a selective state-space model) and xLSTM (an LSTM with exponential gating and matrix memory) aim to match transformer quality with linear cost in sequence length and constant-size inference state. Pure versions still tend to trail comparable transformers on general language benchmarks; hybrids that mix attention with such layers are a common compromise. Secondary sources checked in November 2026 describe a Mamba-3 successor; I did not verify it against the primary paper.</p><div class="src">Gu &amp; Dao, arXiv 2312.00752; Beck et al., NeurIPS 2024 (arXiv 2405.04517)</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Convolutional students from a giant vision transformer</div><p>DINOv3 trained a very large self-supervised vision transformer, then distilled it into smaller models that include ConvNeXt variants, partly because convolutional nets are cheaper to run and quantise. A sign that convolutions have survived as the deployment-friendly form of the same features.</p><div class="src">Siméoni et al., DINOv3, arXiv 2508.10104</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Convolutional backbones in document and ID pipelines</b></td><td>Detection of text lines, tables, stamps and faces; OCR engines; cheque and ID capture on mobile.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Convolutional face and voice encoders for eKYC</b></td><td>Embedding networks compared against enrolment templates, with liveness checks.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Boosted trees on hand-built sequence aggregates</b></td><td>Counts, sums and gaps over windows (F3.4) feed a tree model; often the baseline that deep sequence models must beat.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>LSTM / GRU / TCN sequence features for fraud</b></td><td>A sequence model produces an embedding or score fed into the main model, or runs in parallel.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Transformer or state-space models over transaction streams</b></td><td>Pretrained models on payment histories, fine-tuned for fraud or propensity (A8).</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Recurrent models inside production call-centre or voice stacks</b></td><td>Present in older speech systems; newer ones are mostly attention-based.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Use convolutions where the data is a grid or a short local signal and you want a small fast model; use recurrence or sequence models where state must be carried event by event at low cost; use attention-based models where long-range context and pretraining matter; and always keep a tuned boosted-tree baseline on aggregate features in the room.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in bank analyses and in AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">A sequence model that peeks at the future</div><p>A convolution with symmetric padding, a bidirectional recurrent layer, or a window that includes the target transaction. Offline AUC looks superb; live, it collapses.</p><div class="spot"><b>Spot it</b>Ask whether the model is causal: could the output at time t change if you altered an event after t? Perturb a later event in a test and see.</div></li>
+        <li><div class="t">Splitting by transaction instead of by customer and time</div><p>The same cardholder's sequences appear in train and test, so the model memorises customers.</p><div class="spot"><b>Spot it</b>Check for customer or card IDs on both sides of the split, and whether the test period is later than the training period (F4.3).</div></li>
+        <li><div class="t">Skipping the tabular baseline</div><p>A deep sequence model reported with no comparison to a boosted tree on window aggregates.</p><div class="spot"><b>Spot it</b>Ask for the baseline and its score on the same split. Gains of a point or two may not justify the cost of serving the state.</div></li>
+        <li><div class="t">Receptive field shorter than the pattern</div><p>The fraud signature spans 80 events; the network sees 15.</p><div class="spot"><b>Spot it</b>Compute the receptive field from the layer settings, as in Simulation 3. If the signal is further back than it, no amount of training will find it.</div></li>
+        <li><div class="t">Shortcut learning in images</div><p>A cheque classifier learns the scanner's border or the branch's stamp colour, not the forged signature. A conv net happily uses any local cue that predicts the label.</p><div class="spot"><b>Spot it</b>Test on scans from a different branch, scanner or month. Look at saliency maps or occlude regions to see what drives the output.</div></li>
+        <li><div class="t">Resolution and format shift</div><p>Trained on clean 300 dpi scans, deployed on phone photos at an angle, in poor light, with a thumb in the corner.</p><div class="spot"><b>Spot it</b>Evaluate on a sample of real production inputs. Check performance by capture channel (branch, ATM, mobile app) and by language and script.</div></li>
+        <li><div class="t">State drift in streaming recurrent models</div><p>The stored hidden state was computed with an old model version, or after a gap in the feed, and silently disagrees with what the new model expects.</p><div class="spot"><b>Spot it</b>Version the stored state with the model. Replay a customer's full history and compare with the streamed state; they should match.</div></li>
+        <li><div class="t">Variable lengths and padding handled badly</div><p>Customers with 3 events and customers with 3,000 are padded or truncated, and the padding is treated as real events.</p><div class="spot"><b>Spot it</b>Check for masking. Score a customer with their history padded differently: the answer should not change.</div></li>
+        <li><div class="t">Adversarial and manipulated inputs</div><p>Small, deliberate pixel changes fool image classifiers; a forged document is touched up to pass; a fraudster spaces transactions to keep under the learned pattern.</p><div class="spot"><b>Spot it</b>Include adversarial and re-captured samples in testing, and do not let one model be the only control (G1).</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Two older building blocks sit under a lot of what we run. The first reads images and scans by looking for small patterns, like edges and stamps, everywhere on the page; it's why we can read cheques and IDs on a phone camera. The second reads a customer's activity in order and keeps a running memory, which helps spot patterns like card testing before a large purchase. Newer models have taken over a lot of this, but the older ones are smaller, faster and cheaper to run, so we choose by the job, and we always compare against a simpler model first.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“A convolution ties one small filter across positions, which cuts parameters and bakes in locality and translation equivariance; its reach is the receptive field, which grows linearly with depth unless you use strides or dilation. A recurrent network ties weights across time and carries a state; vanilla ones fail on long gaps because the backpropagated signal is a product of per-step factors, and gating keeps an additive path open. For transaction streams I'd compare a causal TCN or GRU with a boosted tree on window aggregates, split by customer and forward in time, and only take the sequence model if it adds lift that survives that comparison and the cost of serving state.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just use a transformer for everything?”</summary><div class="ans"><p>For large pretrained settings, often we do. But attention costs grow with the square of the sequence length, and transformers need data or pretraining to shine. For short customer histories with a tight latency budget, or for on-device image work, a small convolutional or recurrent model is cheaper, easier to explain to a validator and easier to quantise. I'd choose by the constraint and prove it against a baseline.</p></div></details>
+        <details class="reveal"><summary>“What's the difference between an LSTM and a plain RNN?”</summary><div class="ans"><p>A plain RNN rewrites its whole memory at each step, so the learning signal shrinks or explodes over long gaps. An LSTM adds a cell state updated by gated addition. When the forget gate stays near one, the signal travels along it almost unchanged, so the network can learn dependencies across tens or hundreds of steps. The gates are learned, so it decides what to keep.</p></div></details>
+        <details class="reveal"><summary>“Can the model see a pattern that spans three months of transactions?”</summary><div class="ans"><p>Only if its architecture reaches that far. A 1-D conv stack sees exactly its receptive field. A recurrent model can in principle, but in practice its memory fades after tens to hundreds of steps. Often the better answer is to give it summaries: monthly aggregates as features, with the sequence model covering the recent detail. I'd test with a pattern planted at different distances to see where it stops being found.</p></div></details>
+        <details class="reveal"><summary>“Is the OCR model reliable on Arabic?”</summary><div class="ans"><p>Not automatically. Arabic is right-to-left, letters change shape by position, diacritics are small and many fields mix Arabic and English digits. Benchmarks are often Latin-only. I'd measure character error rate separately for Arabic, English and mixed fields, by capture channel, on our own documents, and route low-confidence reads to a human.</p></div></details>
+        <details class="reveal"><summary>“A vendor says their deep model gives 99% accuracy on document classification. Convinced?”</summary><div class="ans"><p>Not until I know the sample. I'd ask what documents, from which channels, how the test set was split, and what the do-nothing baseline scores. Then I'd run it on a held-out batch of our own scans, including poor ones, and look at the errors by class and by script rather than a single average.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the formulas in Part 2.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. A 64×64 greyscale image goes through a 5×5 filter with no padding and stride 1. What is the output size, and how many weights does the filter have?</summary><div class="ans"><p>Output side = (64 + 0 − 5) ÷ 1 + 1 = 60, so 60×60. The filter has 25 weights (plus one bias), reused at all 3,600 positions.</p></div></details>
+        <details class="reveal"><summary>2. A convolutional layer takes 8 input channels and produces 32, with 3×3 filters. How many parameters, including biases?</summary><div class="ans"><p>3 × 3 × 8 × 32 = 2,304 weights, plus 32 biases, so <strong>2,336</strong>. It does not depend on the image size.</p></div></details>
+        <details class="reveal"><summary>3. You stack six 3×3 convolutions with stride 1. How many input pixels can one output unit see? What if the filters are dilated 1, 2, 4, 8, 16, 32?</summary><div class="ans"><p>Plain: 1 + 6 × 2 = 13. Dilated doubling: 1 + 2 × (1 + 2 + 4 + 8 + 16 + 32) = 1 + 2 × 63 = <strong>127</strong>. Same parameters, ten times the reach.</p></div></details>
+        <details class="reveal"><summary>4. The recurrent factor in a plain RNN averages 0.7 per step. Roughly how much signal reaches 20 steps back? And with a gated cell whose forget gate is 0.98?</summary><div class="ans"><p>0.7<sup>20</sup> ≈ 0.0008, so about 0.08% of the signal. Gated: 0.98<sup>20</sup> ≈ 0.67, about two thirds. That is the whole argument for gating.</p></div></details>
+        <details class="reveal"><summary>5. A fraud team's 1-D conv model uses symmetric padding and scores brilliantly offline. What is likely wrong?</summary><div class="ans"><p>Symmetric ("same") padding with centred filters lets each output depend on later events as well as earlier ones, so the model sees the future, including the fraudulent transaction itself. Use causal padding (left only) and re-test.</p></div></details>
+        <details class="reveal"><summary>6. Why can a convolutional network find a stamp anywhere on a cheque with a few hundred labelled examples, when a fully connected one would need far more?</summary><div class="ans"><p>The convolution ties one stamp detector across all positions, so every example teaches it at every location, and its parameter count is tiny. The fully connected model must learn the stamp separately at each position it might appear, with millions of free weights, so it needs examples of each.</p></div></details>
+        <details class="reveal"><summary>7. When would you choose a GRU or TCN over a transformer for transaction data?</summary><div class="ans"><p>Short histories (tens to a few hundred events), a strict latency or memory budget at scoring time, modest training data, and a need to keep a small per-customer state. And as always, only if it beats a boosted-tree baseline on aggregate features under a customer-grouped, forward-in-time split.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>I. Goodfellow, Y. Bengio, A. Courville. <a href="https://www.deeplearningbook.org/">Deep Learning</a>. MIT Press, 2016. Chapter 9 (convolutional networks) and chapter 10 (sequence modelling).</li>
+        <li>A. Zhang, Z. Lipton, M. Li, A. Smola. <a href="https://d2l.ai/">Dive into Deep Learning</a>. Chapters on convolutional and recurrent networks, with runnable code.</li>
+        <li>Y. LeCun, L. Bottou, Y. Bengio, P. Haffner. <a href="https://doi.org/10.1109/5.726791">Gradient-based learning applied to document recognition</a>. Proceedings of the IEEE, 1998.</li>
+        <li>S. Hochreiter, J. Schmidhuber. <a href="https://doi.org/10.1162/neco.1997.9.8.1735">Long Short-Term Memory</a>. Neural Computation, 1997.</li>
+        <li>Y. Bengio, P. Simard, P. Frasconi. <a href="https://doi.org/10.1109/72.279181">Learning long-term dependencies with gradient descent is difficult</a>. IEEE Transactions on Neural Networks, 1994.</li>
+        <li>K. Cho et al. <a href="https://arxiv.org/abs/1406.1078">Learning Phrase Representations using RNN Encoder-Decoder for Statistical Machine Translation</a>. 2014. Introduces the GRU.</li>
+        <li>D. Bahdanau, K. Cho, Y. Bengio. <a href="https://arxiv.org/abs/1409.0473">Neural Machine Translation by Jointly Learning to Align and Translate</a>. 2014.</li>
+        <li>A. Krizhevsky, I. Sutskever, G. Hinton. <a href="https://papers.nips.cc/paper/2012/hash/c399862d3b9d6b76c8436e924a68c45b-Abstract.html">ImageNet Classification with Deep Convolutional Neural Networks</a>. NeurIPS, 2012.</li>
+        <li>K. He, X. Zhang, S. Ren, J. Sun. <a href="https://arxiv.org/abs/1512.03385">Deep Residual Learning for Image Recognition</a>. CVPR, 2016.</li>
+        <li>S. Bai, J. Z. Kolter, V. Koltun. <a href="https://arxiv.org/abs/1803.01271">An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling</a>. 2018.</li>
+        <li>J. Jurgovsky et al. <a href="https://doi.org/10.1016/j.eswa.2018.05.050">Sequence classification for credit-card fraud detection</a>. Expert Systems with Applications, 2018.</li>
+        <li>A. Dosovitskiy et al. <a href="https://arxiv.org/abs/2010.11929">An Image is Worth 16x16 Words</a>. ICLR, 2021.</li>
+        <li>Z. Liu et al. <a href="https://arxiv.org/abs/2201.03545">A ConvNet for the 2020s</a>. CVPR, 2022.</li>
+        <li>L. Grinsztajn, E. Oyallon, G. Varoquaux. <a href="https://arxiv.org/abs/2207.08815">Why do tree-based models still outperform deep learning on typical tabular data?</a> NeurIPS, 2022.</li>
+        <li>A. Gu, T. Dao. <a href="https://arxiv.org/abs/2312.00752">Mamba: Linear-Time Sequence Modeling with Selective State Spaces</a>. 2023.</li>
+        <li>M. Beck et al. <a href="https://arxiv.org/abs/2405.04517">xLSTM: Extended Long Short-Term Memory</a>. NeurIPS, 2024.</li>
+        <li>O. Siméoni et al. <a href="https://arxiv.org/abs/2508.10104">DINOv3</a>. 2025.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F5: Attention (F5.5)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function big(v) {
+    if (v < 1e6) return L.fmtInt(Math.round(v));
+    const e = Math.floor(Math.log10(v)), m = v / Math.pow(10, e);
+    return m.toFixed(1) + "×10" + String(e).split("").map(d => "⁰¹²³⁴⁵⁶⁷⁸⁹"[+d]).join("");
+  }
+
+  // =====================================================================
+  // Simulation 1: sliding filter
+  // =====================================================================
+  const IMG = [
+    "0000000000",
+    "0999999000",
+    "0999999000",
+    "0000990000",
+    "0000990000",
+    "0000990000",
+    "0000990000",
+    "0000990000",
+    "0000000000",
+    "0000000000"
+  ].map(r => r.split("").map(Number));
+  const KS = [
+    { n: "Vertical edges", k: [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], d: 1 },
+    { n: "Horizontal edges", k: [[-1, -2, -1], [0, 0, 0], [1, 2, 1]], d: 1 },
+    { n: "Blur", k: [[1, 1, 1], [1, 1, 1], [1, 1, 1]], d: 9 },
+    { n: "Sharpen", k: [[0, -1, 0], [-1, 5, -1], [0, -1, 0]], d: 1 }
+  ];
+  function convAt(K, r, c) {
+    let s = 0;
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) s += K.k[i][j] * IMG[r + i][c + j];
+    return s / K.d;
+  }
+  const S1 = { k: 0, pos: 9, timer: null };
+  const convBox = $("conv-chart");
+  let posCtl;
+  function renderConv() {
+    const K = KS[S1.k];
+    const outs = [];
+    let mx = 0, mxAt = 0;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const v = convAt(K, r, c); outs.push(v);
+      if (Math.abs(v) > mx + 1e-9) { mx = Math.abs(v); mxAt = r * 8 + c; }
+    }
+    const W = Math.max(300, convBox.clientWidth), gap = 26;
+    const cell = Math.floor(Math.min(26, (W - gap - 8) / 18)), H = 10 * cell + 34;
+    const svg = mk(convBox, W, H, "A 3 by 3 filter sliding over a 10 by 10 image and the resulting feature map");
+    const ox = 4, o2 = ox + 10 * cell + gap, oy = 24;
+    tx(svg, ox, 14, "Image 10×10", { class: "lbl-ink" });
+    tx(svg, o2, 14, "Feature map 8×8", { class: "lbl-ink" });
+    for (let r = 0; r < 10; r++) for (let c = 0; c < 10; c++) {
+      L.svg("rect", { x: ox + c * cell, y: oy + r * cell, width: cell, height: cell, class: "px-bg" }, svg);
+      if (IMG[r][c]) L.svg("rect", { x: ox + c * cell + 1, y: oy + r * cell + 1, width: cell - 2, height: cell - 2, class: "px-ink", "fill-opacity": (IMG[r][c] / 9 * 0.85).toFixed(2) }, svg);
+    }
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const idx = r * 8 + c;
+      L.svg("rect", { x: o2 + c * cell, y: oy + r * cell, width: cell, height: cell, class: "px-bg" }, svg);
+      if (idx <= S1.pos && mx > 0) {
+        const v = outs[idx], a = Math.min(1, Math.abs(v) / mx);
+        if (Math.abs(v) > 1e-9) L.svg("rect", { x: o2 + c * cell + 1, y: oy + r * cell + 1, width: cell - 2, height: cell - 2, class: v > 0 ? "px-pos" : "px-neg", "fill-opacity": (0.08 + 0.9 * a).toFixed(2) }, svg);
+      }
+    }
+    const r0 = Math.floor(S1.pos / 8), c0 = S1.pos % 8;
+    L.svg("rect", { x: ox + c0 * cell, y: oy + r0 * cell, width: 3 * cell, height: 3 * cell, class: "px-win" }, svg);
+    L.svg("rect", { x: o2 + c0 * cell, y: oy + r0 * cell, width: cell, height: cell, class: "px-cur" }, svg);
+
+    const terms = [];
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+      const kv = K.k[i][j];
+      if (kv !== 0) terms.push((kv < 0 ? "(" + kv + ")" : kv) + "×" + IMG[r0 + i][c0 + j]);
+    }
+    const v = outs[S1.pos];
+    $("conv-math").innerHTML = "Position row " + (r0 + 1) + ", column " + (c0 + 1) + ":<br>" + (K.d > 1 ? "(" : "") + terms.join(" + ") + (K.d > 1 ? ") ÷ " + K.d : "") + " = <b>" + (Math.round(v * 100) / 100) + "</b>";
+    $("st1-out").textContent = String(Math.round(v * 100) / 100);
+    $("st1-max").textContent = mx.toFixed(mx % 1 ? 1 : 0);
+    $("st1-max-s").textContent = "at row " + (Math.floor(mxAt / 8) + 1) + ", column " + (mxAt % 8 + 1);
+    document.querySelectorAll("#fig-conv [data-k]").forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.k === S1.k)));
+  }
+  document.querySelectorAll("#fig-conv [data-k]").forEach(b => b.addEventListener("click", () => { S1.k = +b.dataset.k; renderConv(); }));
+  posCtl = L.bind("s-pos", v => "step " + (v + 1) + " of 64", v => { stopPlay(); S1.pos = v; renderConv(); });
+  function stopPlay() { if (S1.timer) { clearInterval(S1.timer); S1.timer = null; $("b-play").textContent = "Play"; } }
+  $("b-play").addEventListener("click", () => {
+    if (S1.timer) { stopPlay(); return; }
+    if (L.reduced) { S1.pos = 63; posCtl.set(63); renderConv(); return; }
+    if (S1.pos >= 63) { S1.pos = 0; posCtl.set(0); }
+    $("b-play").textContent = "Pause";
+    S1.timer = setInterval(() => {
+      if (S1.pos >= 63) { stopPlay(); return; }
+      S1.pos++; posCtl.set(S1.pos); renderConv();
+    }, 140);
+  });
+  $("b-fill").addEventListener("click", () => { stopPlay(); S1.pos = 63; posCtl.set(63); renderConv(); });
+
+  // =====================================================================
+  // Simulation 2: parameter sharing
+  // =====================================================================
+  const S2 = { v: 2.35, k: 3 };
+  const shareBox = $("share-chart");
+  function renderShare() {
+    const s = Math.round(Math.pow(10, S2.v)), k = S2.k, C = 16, Cin = 3;
+    const conv = k * k * Cin * C + C;
+    const dense = (s * s * Cin) * (s * s * C) + s * s * C;
+    const W = Math.max(300, shareBox.clientWidth), H = 120, m = { l: 112, r: 70, t: 8, b: 26 };
+    const svg = mk(shareBox, W, H, "Parameters in a convolutional layer and a fully connected layer");
+    const lo = 0, hi = 14, X = L.scale(lo, hi, m.l, W - m.r);
+    [0, 2, 4, 6, 8, 10, 12, 14].forEach(e => {
+      L.svg("line", { x1: X(e), x2: X(e), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, X(e), H - m.b + 15, "10" + String(e).split("").map(d => "⁰¹²³⁴⁵⁶⁷⁸⁹"[+d]).join(""), { "text-anchor": "middle" });
+    });
+    [["Convolution", conv, "bar-b"], ["Fully connected", dense, "bar-a"]].forEach(([n, v, c], i) => {
+      const y = m.t + 10 + i * 40;
+      L.svg("rect", { x: X(0), y, width: Math.max(2, X(Math.log10(v)) - X(0)), height: 26, rx: 3, class: c }, svg);
+      tx(svg, m.l - 8, y + 18, n, { "text-anchor": "end", class: "lbl-ink" });
+      tx(svg, Math.min(X(Math.log10(v)) + 6, W - m.r + 4), y + 18, big(v), { class: "lbl-strong" });
+    });
+    $("st2-conv").textContent = L.fmtInt(conv);
+    $("st2-dense").textContent = big(dense);
+    $("st2-dense-s").textContent = "needs " + big(dense * 4 / 1e9) + " GB of weights";
+    $("st2-reuse").textContent = L.fmtInt(s * s);
+    $("s2-verdict").innerHTML = "At " + s + "×" + s + " pixels, the fully connected version has <b>" + big(dense / conv) + " times</b> as many parameters as the convolution, and would not fit in any machine's memory unless the image is tiny. The convolution's size does not depend on the image at all.";
+  }
+  L.bind("s-side", v => Math.round(Math.pow(10, v)) + " × " + Math.round(Math.pow(10, v)), v => { S2.v = v; renderShare(); });
+  L.bind("s-k", v => v + " × " + v, v => { S2.k = v; renderShare(); });
+
+  // =====================================================================
+  // Simulation 3: receptive field
+  // =====================================================================
+  const S3 = { v: 2, k: 3 };
+  const rfBox = $("rf-chart");
+  const rfPlain = (n, k) => 1 + n * (k - 1);
+  const rfDbl = (n, k) => 1 + (k - 1) * (Math.pow(2, n) - 1);
+  function renderRf() {
+    const span = Math.round(Math.pow(10, S3.v)), k = S3.k, P = 64;
+    const W = Math.max(300, rfBox.clientWidth), H = 260, m = { l: 48, r: 14, t: 14, b: 40 };
+    const svg = mk(rfBox, W, H, "Receptive field against number of layers");
+    const x = L.scale(1, 12, m.l, W - m.r);
+    const lo = 0, hi = Math.log10(2048);
+    const y = v => L.scale(lo, hi, H - m.b, m.t)(Math.log10(L.clamp(v, 1, 2048)));
+    [1, 4, 16, 64, 256, 1024].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" });
+    });
+    for (let n = 1; n <= 12; n++) tx(svg, x(n), H - m.b + 15, String(n), { "text-anchor": "middle" });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Layers", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Steps seen", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(span), y2: y(span), class: "ln-need" }, svg);
+    tx(svg, W - m.r - 4, y(span) - 5, "needed: " + span, { class: "lbl-warn", "text-anchor": "end" });
+    const pa = [], pb = [];
+    for (let n = 1; n <= 12; n++) { pa.push([x(n), y(rfPlain(n, k))]); pb.push([x(n), y(rfDbl(n, k))]); }
+    L.svg("path", { d: L.path(pa), class: "ln-a" }, svg);
+    L.svg("path", { d: L.path(pb), class: "ln-b" }, svg);
+    pa.forEach(p => L.svg("circle", { cx: p[0], cy: p[1], r: 3, class: "dot-a" }, svg));
+    pb.forEach(p => L.svg("circle", { cx: p[0], cy: p[1], r: 3, class: "dot-b" }, svg));
+
+    const nP = Math.max(1, Math.ceil((span - 1) / (k - 1)));
+    const nD = Math.max(1, Math.ceil(Math.log2((span - 1) / (k - 1) + 1)));
+    const prm = n => n * k * P * P;
+    $("st3-pl").textContent = span <= 1 ? "1" : String(nP);
+    $("st3-pl-s").textContent = L.fmtInt(prm(nP)) + " weights";
+    $("st3-db").textContent = span <= 1 ? "1" : String(nD);
+    $("st3-db-s").textContent = L.fmtInt(prm(nD)) + " weights";
+    $("s3-verdict").innerHTML = "To see " + span + " steps with size-" + k + " filters you need <b>" + nP + "</b> plain layers or <b>" + nD + "</b> with doubling reach (reach " + L.fmtInt(rfDbl(nD, k)) + "). The plain stack costs <b>" + (prm(nP) / prm(nD)).toFixed(1) + " times</b> the weights. The price of doubling is that it skips over detail, so networks usually mix the two.";
+  }
+  L.bind("s-span", v => Math.round(Math.pow(10, v)) + " steps", v => { S3.v = v; renderRf(); });
+  L.bind("s-k3", v => v + " wide", v => { S3.k = v; renderRf(); });
+
+  // =====================================================================
+  // Simulation 4: vanishing gradient
+  // =====================================================================
+  const S4 = { w: 0.9, f: 0.95 };
+  const gradBox = $("grad-chart");
+  const T = 100;
+  function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const XS = (() => { const r = rng(7); return Array.from({ length: T + 1 }, () => 0.9 * (2 * r() - 1)); })();
+  function plainSignal(w) {
+    let h = 0; const fac = [];
+    for (let t = 1; t <= T; t++) { h = Math.tanh(w * h + XS[t]); fac.push(Math.abs(w * (1 - h * h))); }
+    const g = [1];
+    for (let lag = 1; lag <= T - 1; lag++) g.push(g[lag - 1] * fac[T - lag]);
+    return g;
+  }
+  function renderGrad() {
+    const a = plainSignal(S4.w), b = a.map((_, lag) => Math.pow(S4.f, lag));
+    const W = Math.max(300, gradBox.clientWidth), H = 270, m = { l: 52, r: 14, t: 14, b: 40 };
+    const svg = mk(gradBox, W, H, "Learning signal against steps back");
+    const x = L.scale(0, 60, m.l, W - m.r);
+    const y = v => L.scale(-6, 2, H - m.b, m.t)(Math.log10(L.clamp(v, 1e-6, 100)));
+    [[1e-6, "10⁻⁶"], [1e-4, "10⁻⁴"], [1e-2, "1%"], [1, "100%"], [100, "10⁴%"]].forEach(([v, s]) => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, s, { "text-anchor": "end" });
+    });
+    [0, 10, 20, 30, 40, 50, 60].forEach(v => tx(svg, x(v), H - m.b + 15, String(v), { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Steps back from the end of the sequence", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Signal reaching that step", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    L.svg("line", { x1: x(30), x2: x(30), y1: m.t, y2: H - m.b, class: "ln-need" }, svg);
+    const pa = [], pb = [];
+    for (let lag = 0; lag <= 60; lag++) { pa.push([x(lag), y(a[lag])]); pb.push([x(lag), y(b[lag])]); }
+    L.svg("path", { d: L.path(pa), class: "ln-a" }, svg);
+    L.svg("path", { d: L.path(pb), class: "ln-b" }, svg);
+    const first = arr => { const i = arr.findIndex(v => v < 0.01); return i < 0 ? null : i; };
+    const fa = first(a), fb = first(b);
+    $("st4-a30").textContent = a[30] >= 1000 ? big(a[30] * 100) + "%" : (a[30] * 100 < 0.01 ? "<0.01%" : pct(a[30], a[30] < 0.1 ? 2 : 0));
+    $("st4-b30").textContent = pct(b[30], b[30] < 0.1 ? 2 : 0);
+    $("st4-a-s").textContent = a[30] > 1 ? "exploding" : (fa === null ? "stays above 1% for 99 steps" : "falls below 1% at step " + fa);
+    $("st4-b-s").textContent = fb === null ? "stays above 1% for 99 steps" : "falls below 1% at step " + fb;
+    cls($("st4-a-b"), a[30] > 1 || a[30] < 0.01 ? "bad" : (a[30] < 0.1 ? "warn" : "ok"));
+    cls($("st4-b-b"), b[30] < 0.01 ? "bad" : (b[30] < 0.1 ? "warn" : "ok"));
+    $("s4-verdict").innerHTML = a[30] > 1
+      ? "With w = " + S4.w.toFixed(2) + " the plain RNN's signal grows as it travels back: <b>exploding</b>. Training would need gradient clipping."
+      : "The plain RNN's signal is below 1% after <b>" + (fa === null ? "99+" : fa) + "</b> steps; the gated cell's after <b>" + (fb === null ? "99+" : fb) + "</b>. A pattern 30 steps back reaches the plain RNN with <b>" + (a[30] * 100 < 0.01 ? "<0.01" : (a[30] * 100).toFixed(2)) + "%</b> of the signal and the gated cell with <b>" + (b[30] * 100).toFixed(1) + "%</b>.";
+  }
+  L.bind("s-w", v => v.toFixed(2), v => { S4.w = v; renderGrad(); });
+  L.bind("s-f", v => v.toFixed(3), v => { S4.f = v; renderGrad(); });
+
+  function renderAll() { renderConv(); renderShare(); renderRf(); renderGrad(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>

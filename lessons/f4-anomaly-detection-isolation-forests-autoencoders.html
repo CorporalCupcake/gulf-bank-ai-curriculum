@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Anomaly Detection and Dimensionality Reduction: Finding the Odd One Out</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: middle; margin-right: 6px; }
+  .legend i.ln { height: 3px; width: 18px; border-radius: 2px; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+  .pt { fill: var(--neutral); fill-opacity: .6; }
+  .pt.flag { fill: var(--bad); fill-opacity: .9; }
+  .pt.ca { fill: var(--accent); fill-opacity: .75; }
+  .pt.cb { fill: var(--warn); fill-opacity: .85; }
+  .pt.cc { fill: var(--ink); fill-opacity: .75; }
+  .ring { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+  .pc-line { stroke: var(--accent); stroke-width: 2; }
+  .err-line { stroke: var(--bad); stroke-width: 2.4; }
+  .probe { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .recon { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .bar-pc { fill: var(--accent); }
+  .bar-rest { fill: var(--neutral); fill-opacity: .7; }
+  .cv-cum { stroke: var(--ink); stroke-width: 2; fill: none; }
+  .cv-90 { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .panel-title { font-family: var(--font-display); font-size: 15px; font-weight: 600; margin: 4px 0 0; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F4 · Classical machine learning</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F4.7 · F4.8</span>
+        <span class="pill n">First 90 days</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Anomaly Detection and Dimensionality Reduction: Finding the Odd One Out</h1>
+      <p class="dek">How isolation forests and autoencoders find fraud nobody labelled, why both are really about "what does normal look like", and how PCA, t-SNE and UMAP compress many features, with a warning about what their pictures can and cannot tell you.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Anomaly detection learns what normal looks like and ranks everything by how badly it fits, which is different from finding fraud; PCA is the clean linear version of that idea (and of an autoencoder), while t-SNE and UMAP make useful pictures whose distances, sizes and gaps you must not read as facts.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A bank has five years of card transactions and only a few hundred confirmed frauds, most of them from tactics that have since changed. A new attack will not look like the old labelled ones. So how do you catch something you have never seen?</p>
+        <p>You flip the question. Instead of "what does fraud look like?" you ask <strong>"what does normal look like, and what does not fit?"</strong> A customer who usually spends AED 200 at supermarkets in Dubai Marina and suddenly makes ten AED 4,900 purchases in an hour from a device she has never used is odd, whether or not anyone has labelled that pattern. This is <em>anomaly detection</em>, also called outlier or novelty detection.</p>
+        <p>There are two ways to define "does not fit", and they give the two methods in the title.</p>
+        <ul>
+          <li><strong>Odd ones are easy to separate.</strong> Picture a crowd in a square. A stranger standing alone by the wall can be picked out with a couple of questions ("is it in the east half? the north quarter?"). Someone in the middle of the crowd takes many more. This is the <strong>isolation forest</strong>: count how few random cuts it takes to isolate a point.</li>
+          <li><strong>Odd ones are hard to describe.</strong> Learn a compact summary of normal data and use it to rebuild each record. Normal records rebuild well. Odd ones rebuild badly, because the summary has no room for what it never saw. This is the <strong>autoencoder</strong>, and its linear cousin is <strong>PCA</strong>.</li>
+        </ul>
+        <p>That second idea, compress then reconstruct, is also the entire story of <strong>dimensionality reduction</strong>, the second half of this lesson. If twenty correlated features really move together as two or three underlying factors, you can describe each customer with three numbers. PCA does that with a straight-line projection. t-SNE and UMAP do it differently, to draw a map of the data for a human. The maps are valuable and treacherous, for reasons Simulation 4 makes visible.</p>
+      </div>
+
+      <figure class="figure" id="fig-if">
+        <div class="fig-head"><span class="fig-title">Odd points are isolated in few random cuts</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> with scattered anomalies, flag the top 6 and see how many of the six ringed points (the injected anomalies) are found. Then switch to <b>clustered anomalies</b>: six fraudsters who look like each other. They shield one another and the score falls. Try lowering the subsample size to see whether they stand out again. Add trees to watch the ranking settle.</p>
+        <div class="btns" role="group" aria-label="Anomaly layout">
+          <button class="btn" type="button" id="b-clu" aria-pressed="false">Clustered anomalies</button>
+        </div>
+        <div class="chart-wrap" id="if-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--neutral);opacity:.6"></i>Not flagged</span>
+          <span><i style="background:var(--bad)"></i>Flagged (top scores)</span>
+          <span><i style="border:1.5px solid var(--ink);background:transparent"></i>Truly injected anomaly</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-trees">Number of trees <output for="s-trees"></output></label><input type="range" id="s-trees" min="1" max="200" step="1" value="100"></div>
+          <div class="ctl"><label for="s-psi">Rows each tree sees (subsample) <output for="s-psi"></output></label><input type="range" id="s-psi" min="3" max="8" step="1" value="8"></div>
+          <div class="ctl"><label for="s-top">Flag the top N points <output for="s-top"></output></label><input type="range" id="s-top" min="1" max="30" step="1" value="6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st1-hit-b"><div class="k">Injected anomalies found</div><div class="v" id="st1-hit"></div><div class="s">among the flagged points</div></div>
+          <div class="stat"><div class="k">False alarms</div><div class="v" id="st1-fa"></div><div class="s">flagged but normal</div></div>
+          <div class="stat"><div class="k">Average path: anomalies</div><div class="v" id="st1-pa"></div><div class="s">random cuts to isolate</div></div>
+          <div class="stat"><div class="k">Average path: normal</div><div class="v" id="st1-pn"></div><div class="s">random cuts to isolate</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: 400 normal customers with two correlated standardised features (amount and transactions in the last hour) plus 6 injected anomalies. The isolation forest here is the real algorithm (random feature, random split value, depth limit, path length normalised by c(n)), run in your browser with a fixed seed. Nothing is hard-coded.</p>
+      </figure>
+
+      <div class="callout key"><span class="k">Hold onto this</span>An unsupervised detector does not find fraud. It finds <em>unusual</em>, defined by its own idea of normal. Whether unusual means fraud is a separate question that only analysts, labels and outcomes can answer. Most failures in this topic come from forgetting that gap.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-iforest">Isolation forests: counting cuts</h3>
+      <div class="prose">
+        <p>Build a tree the lazy way. Take a small random sample of rows (typically 256). Pick a feature at random, pick a split value uniformly between that feature's minimum and maximum in the current group, and send rows left or right. Repeat inside each branch until every row is alone, or the tree reaches a depth limit of about log<sub>2</sub>(sample size). No labels, no distances, no loss function. Then build a hundred of these trees.</p>
+        <p>Isolating a point that sits far from the pack takes few cuts, because a random cut across the range is likely to fall between it and everyone else. A point in a dense region needs many cuts. So the <strong>average path length</strong> from root to the point's leaf, over all trees, is a measure of oddness. Short means odd.</p>
+        <p>Paths are converted to a score between 0 and 1 so that a threshold means roughly the same thing for any sample size:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>s</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><msup><mn>2</mn><mrow><mo>−</mo><mfrac><mrow><mi>E</mi><mo stretchy="false">[</mo><mi>h</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo></mrow><mrow><mi>c</mi><mo stretchy="false">(</mo><mi>ψ</mi><mo stretchy="false">)</mo></mrow></mfrac></mrow></msup></math>
+        <p class="where"><i>h</i>(<i>x</i>) is the path length for point <i>x</i>, averaged over trees. <i>c</i>(ψ) is the average path length you would expect for a typical point when each tree sees ψ rows; it is about 2(ln(ψ−1) + 0.577) − 2(ψ−1)/ψ. For ψ = 256, <i>c</i> ≈ 10.2. A point isolated after about 10 cuts scores 0.5 (unremarkable). One isolated after 3 cuts scores 2<sup>−3/10.2</sup> ≈ 0.82 (very odd). Scores near 1 are strongly anomalous; scores well below 0.5 are deeply inside the crowd.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Two design choices explain why it works so well in practice.</p>
+        <ul>
+          <li><strong>Subsampling is a feature, not a shortcut.</strong> If every tree saw all rows, anomalies would be hidden by their neighbours (<em>masking</em>) and normal points near them would look odd (<em>swamping</em>). Small subsamples thin out the crowd, so a tight group of six frauds becomes one or two per tree and is easier to isolate. Simulation 1 shows this.</li>
+          <li><strong>It is cheap and needs no scaling.</strong> Cost grows linearly with data, and because it only compares values within one feature at a time, units do not matter (AED against transaction count). That makes it a sensible first detector on tabular banking data.</li>
+        </ul>
+        <p>Its blind spots follow from the mechanism. Splits are axis-parallel, so a point that is unremarkable on each feature but odd in combination (high spend, very low income) is isolated no faster than its neighbours unless the trees happen to cut the right way. The <em>extended isolation forest</em> uses randomly tilted cuts to reduce this. It also has no notion of which features matter: add fifty noisy columns and the "odd" signal is diluted. <strong>The features you give it decide what "anomalous" means.</strong> Hand-built behavioural features (F3.4) such as "spend today divided by 30-day average" do most of the work.</p>
+        <p>The remaining decision is the threshold. The model gives a ranking, not a verdict. Like any rare-event detector (<a href="f3-imbalanced-data.html">F3.5</a>), you choose how many to flag from review capacity or costs, not from a score of 0.5. Some libraries expose a <code>contamination</code> setting; treat it as "how many do I want to see?", not as a belief about fraud prevalence.</p>
+      </div>
+<pre><code>from sklearn.ensemble import IsolationForest
+
+iso = IsolationForest(n_estimators=200, max_samples=256, random_state=0).fit(X_train)
+raw = iso.score_samples(X_new)      # higher = more normal (it is the negative of s above)
+order = (-raw).argsort()            # most anomalous first
+queue = order[:300]                 # review capacity decides the cut, not 0.5</code></pre>
+
+      <h3 class="sub" id="m-ae">Autoencoders: compress, rebuild, measure the miss</h3>
+      <div class="prose">
+        <p>An autoencoder is a neural network trained to output its own input, but forced through a narrow middle. The first half (<em>encoder</em>) squeezes the record into a short code, say 8 numbers from 60 features. The second half (<em>decoder</em>) rebuilds the 60 features from the code. Training minimises the <strong>reconstruction error</strong>, typically the mean squared difference between input and output. See <a href="f5-neurons-layers-and-backpropagation.html">F5.1</a> for the network machinery and <a href="f1-gradients-optimisation.html">F1.3</a> for how it trains.</p>
+        <p>Because the code is too short to memorise everything, the network keeps only the structure that is common across the training data: the way spend, frequency and merchant mix usually move together. Train it on mostly normal transactions and it gets good at rebuilding normal ones. A transaction with an unusual combination of features gets rebuilt as the nearest normal-looking one, and the gap between input and output is large. <strong>That gap is the anomaly score.</strong></p>
+        <p>The cleanest way to see this is to strip the network down to a single linear layer each way. That autoencoder learns exactly the same subspace as <strong>PCA</strong>, and the reconstruction error is the distance from the point to that subspace. Simulation 2 draws it in two dimensions.</p>
+      </div>
+
+      <figure class="figure" id="fig-ae">
+        <div class="fig-head"><span class="fig-title">Reconstruction error is distance from "normal"</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> press <b>Odd mix</b>: high card spend with low ATM cash. Neither number is extreme on its own (see the two z-scores), but the point is far from the line where normal customers live, so the error is large. Now press <b>Extreme but consistent</b>: a big spender who also uses lots of ATM cash is far out on both axes and almost on the line, so the error is small. Finally widen the bottleneck to 2 units and everything becomes "normal".</p>
+        <div class="btns" role="group" aria-label="Probe and bottleneck">
+          <button class="btn" type="button" id="b-odd">Odd mix</button>
+          <button class="btn" type="button" id="b-ext">Extreme but consistent</button>
+          <button class="btn" type="button" id="b-typ">Typical</button>
+          <button class="btn" type="button" id="b-bn1" aria-pressed="true">Bottleneck: 1 unit</button>
+          <button class="btn" type="button" id="b-bn2" aria-pressed="false">Bottleneck: 2 units</button>
+        </div>
+        <div class="chart-wrap" id="ae-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--neutral);opacity:.6"></i>Normal customers</span>
+          <span><i class="ln" style="background:var(--accent)"></i>What the autoencoder can express (1 unit)</span>
+          <span><i class="ln" style="background:var(--bad)"></i>Reconstruction error</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-px">Monthly card spend (standardised) <output for="s-px"></output></label><input type="range" id="s-px" min="-3.5" max="3.5" step="0.05" value="2"></div>
+          <div class="ctl"><label for="s-py">Monthly ATM cash (standardised) <output for="s-py"></output></label><input type="range" id="s-py" min="-3.5" max="3.5" step="0.05" value="-1.5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Distance from average, per feature</div><div class="v" id="st2-z"></div><div class="s">standard deviations: spend, ATM</div></div>
+          <div class="stat" id="st2-err-b"><div class="k">Reconstruction error</div><div class="v" id="st2-err"></div><div class="s" id="st2-err-s"></div></div>
+          <div class="stat"><div class="k">Error of the 99th-percentile customer</div><div class="v" id="st2-thr"></div><div class="s">the usual alert line</div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: 300 customers whose two standardised features have correlation 0.9. The "autoencoder" with a one-unit bottleneck is the best possible linear one, whose learned line is the first principal component (computed exactly from the sample covariance). Real autoencoders are non-linear and can bend this line into a curve.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Several things follow, and they are where practice goes wrong.</p>
+        <ul>
+          <li><strong>Capacity is the dial.</strong> With a bottleneck as wide as the input, the network can copy and the error is near zero for everything, including fraud. Too narrow and normal data rebuilds poorly too. The useful middle is found by watching validation error on held-out normal data. This is why people say autoencoders "generalise too well": a big one can reconstruct anomalies it never saw.</li>
+          <li><strong>Training data should be mostly clean.</strong> If fraud is 0.5% of training rows the network may partly learn to rebuild it. Remove known fraud and known odd cases first. <em>Robust</em> and <em>denoising</em> variants reduce the problem but do not remove it.</li>
+          <li><strong>Error is dominated by large-scale features.</strong> Standardise inputs (F3.4), or one feature measured in fils will define "odd". Also consider per-feature error: the pieces tell you <em>which</em> features did not fit, which is useful for an analyst's explanation (F8).</li>
+          <li><strong>Categoricals and text need embeddings first.</strong> Merchant category, country and device type become learned vectors or are one-hot encoded. For sequences of transactions, the same idea works with a sequence model instead of a feed-forward net.</li>
+        </ul>
+        <p>Other classical detectors fill gaps. <strong>Local outlier factor</strong> compares a point's local density with its neighbours' and handles clusters of different density. <strong>One-class SVM</strong> draws a boundary around the data, but scales poorly and is sensitive to settings. <strong>Mahalanobis distance</strong> uses the covariance to say how far a point is from the centre in a correlation-aware way, and is hard to beat for simple low-dimensional cases. Simulation 2's "odd mix" would be flagged by Mahalanobis for exactly the same reason it was flagged by the autoencoder.</p>
+      </div>
+
+      <h3 class="sub" id="m-eval">How to tell whether it works</h3>
+      <div class="prose">
+        <p>Without labels you cannot compute a recall. This is the hardest practical part, and the honest options are:</p>
+        <ul>
+          <li><strong>Inject known anomalies.</strong> Plant synthetic or historical fraud patterns in held-out data and measure what share rank in the top N. Optimistic, because injected cases are usually easier than real ones, but it catches broken pipelines.</li>
+          <li><strong>Back-test on confirmed cases.</strong> Where a few labelled frauds exist, check where they rank among everyone. A detector that places 60% of known frauds in the top 1% is useful even if it was never trained on them.</li>
+          <li><strong>Analyst review of the top N.</strong> Sample the top-ranked alerts and have investigators grade them as "fraud", "unusual but legitimate" or "data error". Track the share that is useful, and feed answers back as labels.</li>
+          <li><strong>Stability.</strong> Retrain with a different seed or month. If the top 100 changes completely, the ranking is mostly noise.</li>
+        </ul>
+        <p>And a plain truth: when you do have labels, a supervised model (F4.3) will usually beat an unsupervised one on the fraud you have seen. Anomaly detection earns its place for the <em>unseen</em>: new attack types, data-quality problems, early signs of drift, and cold-start portfolios with no labels yet. In production the two are combined, with the anomaly score as one feature of the supervised model, or as a separate queue for novelty.</p>
+      </div>
+
+      <h3 class="sub" id="m-pca">PCA: the cleanest way to compress correlated features</h3>
+      <div class="prose">
+        <p>Banking tables are full of features that move together: balance this month, last month and the month before; number of debit-card swipes and total debit-card spend. Twenty such columns often carry the information of three or four underlying factors. PCA finds them.</p>
+        <p>Geometrically (<a href="f1-vectors-matrices-geometry.html">F1.1–F1.2</a>): centre the data, then find the direction in which the cloud is most spread out. That is the first principal component. The second is the most-spread direction at right angles to it, and so on. Each point can now be described by its coordinates along these directions, and if you keep only the first <i>k</i> you have the best rank-<i>k</i> straight-line summary of the data, in the sense of least squared reconstruction error. That is the same quantity an autoencoder minimises.</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>share of variance in component </mtext><mi>j</mi><mo>=</mo><mfrac><msub><mi>λ</mi><mi>j</mi></msub><mrow><msub><mi>λ</mi><mn>1</mn></msub><mo>+</mo><mo>…</mo><mo>+</mo><msub><mi>λ</mi><mi>p</mi></msub></mrow></mfrac></math>
+        <p class="where">λ<sub>j</sub> are the eigenvalues of the covariance matrix: how much variance lies along each component. If the features are standardised, the total is the number of features <i>p</i>, so an eigenvalue of 5.5 among 10 features means that component carries 55% of everything. Plotting eigenvalues from largest to smallest is the <em>scree plot</em>; you keep components until the curve flattens or until a chosen share (often 90%) is reached.</p>
+      </div>
+
+      <figure class="figure" id="fig-pca">
+        <div class="fig-head"><span class="fig-title">How many components do correlated features need?</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> at correlation 0.6 with 12 features, the first component takes more than half the variance and 90% needs about 9 components out of 12, because the remaining noise is spread evenly. Push correlation to 0.9 and almost everything lives in one. Then look at the lower box: measure one feature in fils instead of AED and skip standardising, and PCA collapses onto that one feature.</p>
+        <div class="chart-wrap" id="pca-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>First component</span>
+          <span><i style="background:var(--neutral);opacity:.7"></i>Other components</span>
+          <span><i class="ln" style="background:var(--ink)"></i>Cumulative share of variance</span>
+          <span><i class="ln" style="background:var(--warn)"></i>90%</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-p">Number of features <output for="s-p"></output></label><input type="range" id="s-p" min="3" max="30" step="1" value="12"></div>
+          <div class="ctl"><label for="s-rho">Correlation between every pair of features <output for="s-rho"></output></label><input type="range" id="s-rho" min="0" max="0.95" step="0.05" value="0.6"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">First component carries</div><div class="v" id="st3-1"></div><div class="s">of total variance</div></div>
+          <div class="stat" id="st3-k-b"><div class="k">Components for 90%</div><div class="v" id="st3-k"></div><div class="s" id="st3-k-s"></div></div>
+          <div class="stat bad"><div class="k">Same data, not standardised, one feature in fils</div><div class="v" id="st3-raw"></div><div class="s" id="st3-raw-s"></div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: an equicorrelated covariance matrix (every pair of features has the same correlation), whose eigenvalues are exactly 1 + (p − 1)ρ once and 1 − ρ for the other p − 1 components. Real data is lumpier but follows the same logic. The "fils" box multiplies one feature by 100 (fils are one-hundredth of a dirham) and finds the top eigenpair by power iteration.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Practical rules for PCA:</p>
+        <ul>
+          <li><strong>Standardise first</strong> unless features share units and you want large ones to count more. Otherwise the biggest-variance feature wins by default, as the lower box shows.</li>
+          <li><strong>Components are mixtures, so they are hard to name.</strong> Component 1 may be "overall activity level" and component 2 "cash versus card". Loadings tell you the recipe, but a regulator will ask about your inputs, and "PC3" is a weak answer. If interpretability matters, use PCA for noise reduction or exploration and keep named features in the scorecard.</li>
+          <li><strong>Fit on training data only.</strong> PCA learns from data; fitting it on the full dataset before splitting leaks (<a href="f3-leakage-point-in-time.html">F3.1</a>). Same for scalers.</li>
+          <li><strong>Large variance is not the same as useful.</strong> The direction that matters for default may be a low-variance one. PCA never looks at the label.</li>
+          <li><strong>Used for anomalies,</strong> the residual after keeping <i>k</i> components is the reconstruction error of Simulation 2. The error in the discarded components can itself be monitored for drift (<a href="f7-drift-monitoring-psi-ks-and.html">F7.7</a>).</li>
+        </ul>
+      </div>
+<pre><code>from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import numpy as np
+
+pipe = make_pipeline(StandardScaler(), PCA(n_components=0.90)).fit(X_train)   # keep 90% of variance
+Z = pipe.transform(X_new)
+recon = pipe.named_steps["pca"].inverse_transform(Z)
+err = ((pipe.named_steps["standardscaler"].transform(X_new) - recon) ** 2).sum(axis=1)  # anomaly score</code></pre>
+
+      <h3 class="sub" id="m-tsne">t-SNE and UMAP: maps that look more certain than they are</h3>
+      <div class="prose">
+        <p>PCA is limited to straight lines. Customer segments, text embeddings or transaction sequences often lie on curved surfaces, and a 2-D PCA flattens them into a smear. <strong>t-SNE</strong> (van der Maaten and Hinton, 2008) and <strong>UMAP</strong> (McInnes et al., 2018) are built to draw such data in 2-D so neighbours stay neighbours.</p>
+        <p>t-SNE works in three steps. First it converts distances in the original space into <em>neighbour probabilities</em>: for each point, nearby points get high probability, with a bandwidth chosen so that the effective number of neighbours equals the <strong>perplexity</strong> you set (roughly "how many neighbours should each point care about", usually 5–50). Second it places the points at random in 2-D and defines similar probabilities there using a heavy-tailed curve. Third it moves the points to make the two sets of probabilities agree, by minimising the Kullback–Leibler divergence (<a href="f1-likelihood-entropy.html">F1.6–F1.7</a>), which punishes mapping close points far apart much more than the reverse. UMAP follows the same plan with a different neighbour graph (controlled by <code>n_neighbors</code>) and a different cost, and a <code>min_dist</code> setting for how tightly points may pack. It is faster and, with good initialisation, usually keeps broad layout better.</p>
+        <p>The crucial point is what is thrown away. Both methods preserve <strong>who is near whom</strong> and are indifferent to nearly everything else. This is where the pictures mislead:</p>
+        <ul>
+          <li><strong>Cluster size means nothing.</strong> A tight cluster and a diffuse one come out similar because each point's neighbourhood is rescaled to the same effective size.</li>
+          <li><strong>Gaps between clusters mean little.</strong> Two clusters drawn far apart may be nearly touching in the real space, or the other way around.</li>
+          <li><strong>Settings change the story.</strong> Low perplexity breaks one population into many small islands; the right number of clusters depends on a slider.</li>
+          <li><strong>Different runs differ.</strong> The start is random, so axes, rotation and sometimes the arrangement of clusters change from run to run.</li>
+          <li><strong>You can see structure that is not there.</strong> Random noise can be drawn as apparently meaningful blobs.</li>
+        </ul>
+      </div>
+
+      <figure class="figure" id="fig-tsne">
+        <div class="fig-head"><span class="fig-title">Same data, two maps: what t-SNE keeps and loses</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> three groups of customers in five dimensions: a wide group, a tight group close to it, and a distant group (see the legend). In the PCA map, sizes and gaps are honest. In the t-SNE map the wide and tight groups look about equally big although one is five times wider. Change perplexity, or press <b>New random start</b>, and watch the layout move while the "neighbours" survive.</p>
+        <div class="btns" role="group" aria-label="t-SNE controls">
+          <button class="btn" type="button" id="b-seed">New random start</button>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-perp">Perplexity <output for="s-perp"></output></label><input type="range" id="s-perp" min="2" max="80" step="1" value="30"></div>
+        </div>
+        <p class="panel-title">PCA map (first two components, a straight-line view)</p>
+        <div class="chart-wrap" id="pca2-chart"></div>
+        <p class="panel-title">t-SNE map <span id="tsne-state" style="font-weight:400;font-size:13px;color:var(--muted)"></span></p>
+        <div class="chart-wrap" id="tsne-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--warn)"></i>Wide group (60 customers)</span>
+          <span><i style="background:var(--accent)"></i>Tight group (60)</span>
+          <span><i style="background:var(--ink)"></i>Distant group (30)</span>
+        </div>
+        <div class="table-wrap"><div id="tsne-table"></div></div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: 150 points in 5 dimensions drawn from three Gaussian groups. The t-SNE is a compact but complete implementation (perplexity-calibrated neighbour probabilities, Student-t map kernel, early exaggeration, gradient descent with momentum) running in your browser; 500 iterations. "Radius" is the average distance of a group's points to its centre. Numbers will vary slightly with the random start, which is part of the point.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Use them as <strong>exploration tools</strong>: to inspect whether embeddings of Arabic and English complaints separate by topic, to check whether a model's learned customer representation has structure, to spot a cluster of mislabelled or duplicated records. Do not use them as evidence of how many segments exist, how different two segments are, or as inputs to a downstream model without checking. If you want clusters, cluster in the original or PCA space and then draw the result on a t-SNE map. If you must compare maps, initialise from PCA and fix seeds, as recommended by Kobak and colleagues.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Both halves are one idea, "learn a compact description of the data", pointed at different jobs. Here is where it meets the rest of the curriculum.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F4.3 · Trees and forests</span><span class="t"><a href="f4-decision-trees-random-forests-and.html">Same machinery, no labels</a></span><p>An isolation forest reuses the random-tree idea but splits at random and measures depth instead of purity.</p></div>
+        <div class="link-card"><span class="code">F1.1 – F1.2 · Vectors and geometry</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Projection and subspaces</a></span><p>PCA is a projection onto the best subspace. Reconstruction error is the length of what is left over.</p></div>
+        <div class="link-card"><span class="code">F5.1 · Neural networks</span><span class="t"><a href="f5-neurons-layers-and-backpropagation.html">Autoencoders are small networks</a></span><p>Encoder, decoder and a squared-error loss. Everything about training and overfitting applies.</p></div>
+        <div class="link-card"><span class="code">F5.7 · Self-supervised learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">The autoencoder's grown-up relatives</a></span><p>Predicting parts of the input from the rest is the engine behind modern pre-training. Anomaly scores from such models are an active area.</p></div>
+        <div class="link-card"><span class="code">F3.5 · Imbalanced data</span><span class="t"><a href="f3-imbalanced-data.html">Same thresholds, same traps</a></span><p>An anomaly score is a ranking. Choosing the cut, estimating precision and the cost of alerts follow the rules of that lesson.</p></div>
+        <div class="link-card"><span class="code">F3.4 · Feature engineering</span><span class="t"><a href="f3-feature-engineering.html">Features define "odd"</a></span><p>Behavioural ratios and scaling choices decide what both methods see. Scaling matters for PCA and autoencoders, not for trees.</p></div>
+        <div class="link-card"><span class="code">F7.7 · Drift monitoring</span><span class="t"><a href="f7-drift-monitoring-psi-ks-and.html">Anomaly scores as a drift alarm</a></span><p>A rising share of high-error records means the inputs have moved away from training data, whether by attack, new product or pipeline fault.</p></div>
+        <div class="link-card"><span class="code">F4.9 · Hyperparameters</span><span class="t"><a href="f4-hyperparameter-tuning-grid-random-and.html">Tuning without labels is hard</a></span><p>Bottleneck width, perplexity and subsample size cannot be tuned against recall you cannot measure. Use stability, injected cases and analyst feedback.</p></div>
+        <div class="link-card"><span class="code">G3 · Independent validation</span><span class="t"><a href="g3-independent-validation.html">What validators will ask</a></span><p>Unsupervised models have no ground truth to validate against, so expect questions about stability, sensitivity to settings and how alerts are judged.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Card and payment fraud.</strong> A novelty queue next to the supervised model, catching unfamiliar tactics. See <a href="b1-transaction-and-card-fraud-detection.html">B1</a> and <a href="b1-delayed-labels-and-feedback-loops.html">delayed labels</a>, which is why unsupervised signals matter while labels are still arriving.</li>
+          <li><strong>AML transaction monitoring.</strong> Peer-group outliers: an account whose behaviour differs from other accounts of the same type and size. Compare with rules in <a href="b2-transaction-monitoring-rules-versus-ml.html">B2</a>.</li>
+          <li><strong>KYC and customer risk.</strong> Unusual combinations in onboarding data, and PCA to compress many risk indicators for review; see <a href="b3-customer-due-diligence-and-risk.html">B3</a>.</li>
+          <li><strong>Synthetic identities and devices.</strong> Clusters of near-identical applications, or devices behaving unlike any normal user (<a href="a9-synthetic-identity-fraud.html">A9</a>, <a href="a9-behavioural-biometrics-and-device-intelligence.html">device intelligence</a>).</li>
+          <li><strong>Data quality and operations.</strong> The same machinery flags broken feeds, duplicate records and system faults, probably the highest-return use in many banks.</li>
+          <li><strong>Embeddings and text.</strong> Projecting document or complaint embeddings with t-SNE or UMAP to explore topics in Arabic and English; compression of high-dimensional embeddings (<a href="r10-matryoshka-embeddings.html">R10</a>).</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The classical methods are settled, and the research questions are now about evidence: which detectors actually win on real data, whether deep methods justify their cost, and how honestly dimension-reduction maps are read.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Compiled from the published literature as I know it; I did not re-run web searches for this lesson, so check recent items before quoting them in a formal document.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1901–33</span><div><div class="t">PCA</div><p>Pearson (1901) and Hotelling (1933) set out principal components. Still the default way to compress correlated features.</p><div class="src">Pearson, Phil. Mag., 1901; Hotelling, J. Educ. Psych., 1933</div></div></li>
+        <li><span class="yr">2006</span><div><div class="t">Deep autoencoders for dimensionality reduction</div><p>Hinton and Salakhutdinov showed that deep autoencoders, with careful initialisation, give much better low-dimensional codes than PCA on some data. Part of the revival of deep learning.</p><div class="src">Hinton &amp; Salakhutdinov, Science, 2006</div></div></li>
+        <li><span class="yr">2008</span><div><div class="t">Isolation forest and t-SNE</div><p>Liu, Ting and Zhou introduced isolation by random partitioning, with linear time and low memory. The same year van der Maaten and Hinton published t-SNE.</p><div class="src">Liu et al., ICDM, 2008 (journal version TKDD, 2012); van der Maaten &amp; Hinton, JMLR, 2008</div></div></li>
+        <li><span class="yr">2016</span><div><div class="t">How to read a t-SNE plot</div><p>Interactive demonstrations that cluster sizes, distances and even the number of clusters change with perplexity and that random data can look structured.</p><div class="src">Wattenberg, Viégas, Johnson, Distill, 2016</div></div></li>
+        <li><span class="yr">2018</span><div><div class="t">UMAP</div><p>A faster, graph-based alternative that scales to millions of points and became standard for embeddings and single-cell data.</p><div class="src">McInnes, Healy, Melville, arXiv 1802.03426, 2018</div></div></li>
+        <li><span class="yr">2019–21</span><div><div class="t">Initialisation and tilted cuts</div><p>Kobak and colleagues showed that much of UMAP's apparent advantage at preserving global layout comes from its default initialisation; t-SNE initialised from PCA with a suitable learning rate does similarly. Meanwhile the extended isolation forest replaced axis-parallel cuts with random hyperplanes to remove artefacts in the score map.</p><div class="src">Kobak &amp; Berens, Nat. Commun., 2019; Kobak &amp; Linderman, Nat. Biotechnol., 2021; Hariri et al., IEEE TKDE, 2021</div></div></li>
+        <li><span class="yr">2021</span><div><div class="t">Deep anomaly detection surveyed</div><p>A major review of deep methods (autoencoders, one-class networks, self-supervised approaches) and their open problems, notably that many are hard to tune without labels.</p><div class="src">Pang et al., ACM Computing Surveys, 2021</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">ADBench: a sober benchmark</div><p>A large comparison of dozens of detectors on many datasets found that no unsupervised method wins everywhere, that simple methods such as isolation forest stay competitive with deep ones, and that even a handful of labels (semi-supervised) helps a lot.</p><div class="src">Han et al., NeurIPS Datasets and Benchmarks, 2022</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">The case against over-reading embeddings</div><p>A widely discussed paper argued that t-SNE and UMAP plots routinely distort distances and local structure, and that conclusions drawn from them should be checked in the original space.</p><div class="src">Chari &amp; Pachter, PLoS Comput. Biol., 2023</div></div></li>
+        <li><span class="yr">2024–26</span><div><div class="t">Foundation models meet anomaly detection</div><p>Pre-trained tabular and time-series models, and LLMs reading transaction narratives, are being tested as anomaly scorers. Evidence is early; I have not seen it replace isolation forests in production at scale. Treat claims with the ADBench lesson in mind.</p><div class="src">Active research area; see <a href="a8-foundation-models-for-transaction-data.html">A8</a> and <a href="r9-time-series-foundation-models-chronos.html">R9</a></div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Isolation forest on engineered behavioural features</b></td><td>A novelty score or separate review queue alongside supervised models and rules; also data-quality monitoring.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>PCA for compression, noise reduction and exploration</b></td><td>Compressing correlated indicators before modelling or monitoring; usually not in the final scorecard.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>t-SNE or UMAP for exploring embeddings</b></td><td>Inspecting text or customer embeddings during development. Not used as evidence in decisions.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Autoencoder reconstruction error as a fraud or AML signal</b></td><td>Trained on normal behaviour, scores feed analysts or a supervised model as a feature.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Peer-group outlier scoring for AML</b></td><td>Compare each account with similar accounts; flag departures for investigation.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Deep one-class and self-supervised anomaly detectors</b></td><td>Research results on benchmarks; limited published bank deployments.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Clustering on a UMAP projection to define segments</b></td><td>Common in analyses, but segments depend on settings; validators prefer clustering in the original space.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Start with an isolation forest on good features as a baseline for the unlabelled problem, add an autoencoder only if you can show it beats it, use any labels you have, and treat t-SNE and UMAP as drawing tools whose pictures need confirmation in the original space.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in bank analyses and in AI-generated ones. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Equating "unusual" with "fraud"</div><p>The top alerts are VIP customers, month-end payroll, a new product launch, or a broken data feed. Analysts stop trusting the queue.</p><div class="spot"><b>Spot it</b>Have investigators grade a sample of the top 100 as fraud, unusual-but-legitimate or data error, and report the split.</div></li>
+        <li><div class="t">Claiming accuracy with no labels</div><p>"The model detects 95% of anomalies", on data where the anomalies were defined by the model.</p><div class="spot"><b>Spot it</b>Ask what the ground truth is and who produced it. If the answer is "the same algorithm", there is no evidence.</div></li>
+        <li><div class="t">Training on data that contains the fraud</div><p>The autoencoder or forest learns the rare pattern as normal, especially if it is recurring (a mule account active for months).</p><div class="spot"><b>Spot it</b>Check whether known confirmed cases score as normal. Remove them and old attack periods from training.</div></li>
+        <li><div class="t">An autoencoder with too much capacity</div><p>Reconstructs everything, so the error is flat and nothing stands out.</p><div class="spot"><b>Spot it</b>Compare reconstruction error on known anomalies with held-out normal data. If the distributions overlap, shrink the bottleneck.</div></li>
+        <li><div class="t">Unscaled features</div><p>Amount in fils dominates PCA, an autoencoder or a distance method; the "anomaly" is just the largest transaction.</p><div class="spot"><b>Spot it</b>Look at which features carry the error or the first loading. If it is one large-unit column, standardise or take logs.</div></li>
+        <li><div class="t">Drift read as anomaly, or anomaly as drift</div><p>Ramadan spending, salary days or a new merchant category pushes scores up for everyone. The alert queue floods.</p><div class="spot"><b>Spot it</b>Plot the share flagged by week. A smooth rise across all segments is drift or seasonality; a spike concentrated in a few accounts is an event. Build seasonality into features or baselines.</div></li>
+        <li><div class="t">Reading cluster size and gaps off a t-SNE or UMAP plot</div><p>"Segment A is much more diverse than segment B" or "these two groups are far apart".</p><div class="spot"><b>Spot it</b>Re-draw with another perplexity or seed. If the sizes, gaps or cluster count change, the original claim was an artefact. Measure in the original space.</div></li>
+        <li><div class="t">Fitting PCA or the scaler before the split</div><p>Test-set structure leaks into the learned directions; held-out results look better than they are.</p><div class="spot"><b>Spot it</b>Check that scaler and PCA are fitted inside the training fold, ideally as a single pipeline object.</div></li>
+        <li><div class="t">Naming a principal component as if it were a fact</div><p>"Component 2 is customer wealth." It is a weighted blend, rotated arbitrarily if eigenvalues are close.</p><div class="spot"><b>Spot it</b>Ask for the loadings and for stability across resamples. Unstable loadings mean the label is a story.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“Our fraud model knows the attacks we've already seen. An anomaly detector is a second line: it learns what normal customer behaviour looks like and flags what doesn't fit, so it can surface tactics we haven't labelled. It does not know what is fraud, so the alerts go to a separate queue and we judge it by how many an investigator finds useful. I'd start with one analyst reviewing the top fifty a day for a month.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd start with an isolation forest on standardised behavioural ratios, because it needs no scaling, is cheap, and ADBench shows it is hard to beat. I'd evaluate with injected anomalies, back-tested confirmed cases and analyst-graded top alerts, and test stability across seeds and months. An autoencoder only goes in if it beats that baseline; I'd keep the bottleneck narrow, train on cleaned data, and monitor error by segment. For visualisation I'd use PCA-initialised UMAP, and make claims about clusters in the original space.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“We have no fraud labels. Can we still build something?”</summary><div class="ans"><p>Yes, an anomaly detector, but be clear what it delivers: a ranking of unusual behaviour, not a fraud probability. Start with isolation forest on good features, have analysts grade the top alerts, and use their answers as the first labels for a supervised model. The unsupervised score then becomes one input to that model.</p></div></details>
+        <details class="reveal"><summary>“Why an isolation forest rather than an autoencoder?”</summary><div class="ans"><p>It is fast, needs no scaling, has few settings and performs competitively in benchmarks such as ADBench. An autoencoder adds tuning (architecture, bottleneck, regularisation) and a risk of reconstructing anomalies, and needs standardised inputs. It pays off with rich or sequential inputs and when you want per-feature error as an explanation. I'd try the forest first and justify the autoencoder against it.</p></div></details>
+        <details class="reveal"><summary>“How do you set the threshold without labels?”</summary><div class="ans"><p>From capacity and value rather than a score cut. If investigators can look at 200 a day, flag the top 200, and measure the share they find useful. Raise or lower N as that share and the review cost change. The score's numerical value has no business meaning on its own.</p></div></details>
+        <details class="reveal"><summary>“The t-SNE plot shows five clearly separate customer segments. Can we use them?”</summary><div class="ans"><p>As a hypothesis, not a finding. t-SNE preserves neighbours, not sizes or gaps, and the number of clusters depends on perplexity and the random start. I'd re-run with different settings, cluster in the original or PCA space, and check the segments differ on measurable business outcomes before using them.</p></div></details>
+        <details class="reveal"><summary>“Is PCA the same as an autoencoder?”</summary><div class="ans"><p>A linear autoencoder with one hidden layer learns the same subspace as PCA. Real autoencoders use non-linear activations and several layers, so they can capture curved structure PCA cannot, at the cost of tuning and instability. When the structure is mostly linear, PCA is cheaper and more reliable.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Why does a point far from the crowd get isolated after fewer random cuts?</summary><div class="ans"><p>A random cut value chosen between a feature's minimum and maximum is likely to fall in the empty gap between the outlier and everyone else, separating it immediately. A point in a dense region is surrounded, so most cuts keep it with many others and it needs many more.</p></div></details>
+        <details class="reveal"><summary>2. Each tree sees 256 rows, so c is about 10.2. A transaction has an average path length of 4. What is its score, and is it odd?</summary><div class="ans"><p>s = 2<sup>−4/10.2</sup> = 2<sup>−0.39</sup> ≈ 0.76. Well above 0.5 (an average point), so it is fairly anomalous; clear outliers tend to score above about 0.8, though the cut should come from review capacity, not from the number.</p></div></details>
+        <details class="reveal"><summary>3. Why might six near-identical fraud accounts score as normal in an isolation forest, and what could you change?</summary><div class="ans"><p>They shield each other (masking): a cut that separates one from the crowd leaves the other five with it, so each needs more cuts. Reduce the subsample size so each tree sees only one or two of them, add features that distinguish them, or look for clusters directly with a density or graph method.</p></div></details>
+        <details class="reveal"><summary>4. An autoencoder's bottleneck is as wide as its input. What happens to anomaly detection?</summary><div class="ans"><p>It can learn to copy its input, so reconstruction error is near zero for everyone, including fraud. The bottleneck must be narrow enough that only the common structure survives.</p></div></details>
+        <details class="reveal"><summary>5. A customer is 2 standard deviations above average on card spend and 1.5 below on ATM cash, in data where the two have correlation 0.9. Is she a univariate outlier? Is she an anomaly?</summary><div class="ans"><p>Not on either feature alone: 2 and 1.5 are unremarkable. But normal customers sit close to the line where the two move together, and she is far from it, so her reconstruction error (and Mahalanobis distance) is large. The combination is what is odd.</p></div></details>
+        <details class="reveal"><summary>6. You have 10 standardised features, all pairwise correlations 0.5. What share of variance does the first component carry, and how many components for 90%?</summary><div class="ans"><p>First eigenvalue = 1 + 9 × 0.5 = 5.5, out of a total of 10: 55%. The other nine are 0.5 each (5% each). To reach 9.0 you need 5.5 plus seven more at 0.5, so eight components in total.</p></div></details>
+        <details class="reveal"><summary>7. One feature is in fils and the rest in thousands of dirhams. You run PCA without standardising. What do you see?</summary><div class="ans"><p>The first component is almost entirely that one feature, because it has by far the largest variance, and it can explain over 99% of the total. The other features barely influence the result. Standardise, or choose units deliberately.</p></div></details>
+        <details class="reveal"><summary>8. Name three things you must not conclude from a t-SNE plot.</summary><div class="ans"><p>That a bigger cluster is a more diverse group; that two clusters far apart are more different than two closer ones; that the number of visible clusters is the real number of segments. Also that it will look the same next run. Keep to "these points are neighbours".</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>F. T. Liu, K. M. Ting, Z.-H. Zhou. <a href="https://doi.org/10.1109/ICDM.2008.17">Isolation Forest</a>. IEEE ICDM, 2008.</li>
+        <li>S. Hariri, M. Kind, R. Brunner. <a href="https://arxiv.org/abs/1811.02141">Extended Isolation Forest</a>. IEEE TKDE, 2021.</li>
+        <li>G. Hinton, R. Salakhutdinov. <a href="https://doi.org/10.1126/science.1127647">Reducing the Dimensionality of Data with Neural Networks</a>. Science, 2006.</li>
+        <li>G. Pang, C. Shen, L. Cao, A. van den Hengel. <a href="https://arxiv.org/abs/2007.02500">Deep Learning for Anomaly Detection: A Review</a>. ACM Computing Surveys, 2021.</li>
+        <li>S. Han et al. <a href="https://arxiv.org/abs/2206.09426">ADBench: Anomaly Detection Benchmark</a>. NeurIPS Datasets and Benchmarks, 2022.</li>
+        <li>L. van der Maaten, G. Hinton. <a href="https://jmlr.org/papers/v9/vandermaaten08a.html">Visualizing Data using t-SNE</a>. JMLR, 2008.</li>
+        <li>M. Wattenberg, F. Viégas, I. Johnson. <a href="https://distill.pub/2016/misread-tsne/">How to Use t-SNE Effectively</a>. Distill, 2016.</li>
+        <li>L. McInnes, J. Healy, J. Melville. <a href="https://arxiv.org/abs/1802.03426">UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction</a>. arXiv, 2018.</li>
+        <li>D. Kobak, G. Linderman. <a href="https://doi.org/10.1038/s41587-020-00809-z">Initialization is critical for preserving global data structure in both t-SNE and UMAP</a>. Nature Biotechnology, 2021.</li>
+        <li>T. Chari, L. Pachter. <a href="https://doi.org/10.1371/journal.pcbi.1011288">The specious art of single-cell genomics</a>. PLoS Computational Biology, 2023.</li>
+        <li>T. Hastie, R. Tibshirani, J. Friedman. <a href="https://hastie.su.domains/ElemStatLearn/">The Elements of Statistical Learning</a>, chapter 14 (unsupervised learning, including PCA). Springer.</li>
+        <li><a href="https://scikit-learn.org/stable/modules/outlier_detection.html">scikit-learn: Novelty and outlier detection</a> and <a href="https://scikit-learn.org/stable/modules/decomposition.html">Decomposing signals in components</a>. Practical reference.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F4: Hyperparameter tuning (F4.9)</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { return function () { let u = 0; while (!u) u = r(); const v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }; }
+
+  // =====================================================================
+  // Simulation 1: isolation forest
+  // =====================================================================
+  const cF = n => n > 2 ? 2 * (Math.log(n - 1) + 0.5772156649) - 2 * (n - 1) / n : (n === 2 ? 1 : 0);
+  function build(idx, P, depth, lim, r) {
+    if (depth >= lim || idx.length <= 1) return { size: idx.length };
+    const f = r() < 0.5 ? 0 : 1; let mn = Infinity, mx = -Infinity;
+    for (const i of idx) { const v = P[i][f]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    if (mn === mx) return { size: idx.length };
+    const s = mn + r() * (mx - mn), a = [], b = [];
+    for (const i of idx) (P[i][f] < s ? a : b).push(i);
+    return { f, s, l: build(a, P, depth + 1, lim, r), r: build(b, P, depth + 1, lim, r) };
+  }
+  function pathLen(t, p) { let d = 0; while (t.f !== undefined) { t = p[t.f] < t.s ? t.l : t.r; d++; } return d + cF(t.size); }
+  function iforest(P, T, psi, seed) {
+    const r = rng(seed), n = P.length, lim = Math.ceil(Math.log2(psi)), sum = new Float64Array(n);
+    for (let t = 0; t < T; t++) {
+      const ids = Array.from({ length: n }, (_, i) => i);
+      for (let i = 0; i < psi; i++) { const j = i + Math.floor(r() * (n - i)); const tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp; }
+      const tree = build(ids.slice(0, psi), P, 0, lim, r);
+      for (let i = 0; i < n; i++) sum[i] += pathLen(tree, P[i]);
+    }
+    const c = cF(psi);
+    return Array.from(sum, s => { const h = s / T; return { h, s: Math.pow(2, -h / c) }; });
+  }
+  const NN = 400, S1 = { clu: false, T: 100, k: 8, top: 6 };
+  const base = (function () { const g = gauss(rng(11)), a = []; for (let i = 0; i < NN; i++) { const x = g(), z = g(); a.push([x, 0.6 * x + 0.8 * z]); } return a; })();
+  const scat = [[3.4, -2.6], [-3.2, 2.8], [2.8, 3.2], [-2.9, -3.0], [0.3, -4.0], [-0.4, 4.1]];
+  const clust = (function () { const g = gauss(rng(5)); return Array.from({ length: 6 }, () => [3.4 + 0.25 * g(), -2.6 + 0.25 * g()]); })();
+  const ifBox = $("if-chart");
+  function renderIF() {
+    const anom = S1.clu ? clust : scat, P = base.concat(anom), psi = Math.pow(2, S1.k);
+    const sc = iforest(P, S1.T, Math.min(psi, P.length), 7);
+    const order = sc.map((o, i) => i).sort((a, b) => sc[b].s - sc[a].s), flagged = new Set(order.slice(0, S1.top));
+    const W = Math.max(300, ifBox.clientWidth), H = 330, m = { l: 34, r: 10, t: 10, b: 34 };
+    const svg = mk(ifBox, W, H, "Scatter of customers with isolation forest flags");
+    const x = L.scale(-5, 5, m.l, W - m.r), y = L.scale(-5, 5, H - m.b, m.t);
+    [-4, -2, 0, 2, 4].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, x(v), H - m.b + 15, String(v), { "text-anchor": "middle" });
+      tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" });
+    });
+    tx(svg, (m.l + W - m.r) / 2, H - 3, "Amount (standardised)", { "text-anchor": "middle" });
+    tx(svg, 10, (m.t + H - m.b) / 2, "Transactions in last hour", { "text-anchor": "middle", transform: `rotate(-90 10 ${(m.t + H - m.b) / 2})` });
+    P.forEach((p, i) => {
+      L.svg("circle", { cx: x(p[0]), cy: y(p[1]), r: flagged.has(i) ? 4.6 : 3, class: "pt" + (flagged.has(i) ? " flag" : "") }, svg);
+      if (i >= NN) L.svg("circle", { cx: x(p[0]), cy: y(p[1]), r: 8, class: "ring" }, svg);
+    });
+    let hit = 0; flagged.forEach(i => { if (i >= NN) hit++; });
+    const avg = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += sc[i].h; return s / (b - a); };
+    const pa = avg(NN, P.length), pn = avg(0, NN);
+    $("st1-hit").textContent = hit + " of 6"; cls($("st1-hit-b"), hit >= 5 ? "ok" : hit >= 3 ? "warn" : "bad");
+    $("st1-fa").textContent = String(S1.top - hit);
+    $("st1-pa").textContent = pa.toFixed(1); $("st1-pn").textContent = pn.toFixed(1);
+    const rank = anom.map((_, j) => order.indexOf(NN + j) + 1).sort((a, b) => a - b);
+    $("s1-verdict").innerHTML = "The six anomalies rank <b>" + rank.join(", ") + "</b> out of " + P.length + " (1 is most anomalous), using " + S1.T + " tree" + (S1.T > 1 ? "s" : "") + " that each see " + Math.min(psi, P.length) + " rows. " +
+      (S1.clu ? "Clustered anomalies need more cuts to separate, so they can shield one another; compare their average path with the scattered case, and try a smaller subsample." : "Scattered anomalies are alone in empty space, so a handful of cuts isolates them.") +
+      (S1.T < 15 ? " With so few trees the ranking is noisy: run it again with more." : "");
+  }
+  L.bind("s-trees", v => String(v), v => { S1.T = v; renderIF(); });
+  L.bind("s-psi", v => String(Math.pow(2, v)), v => { S1.k = v; renderIF(); });
+  L.bind("s-top", v => String(v), v => { S1.top = v; renderIF(); });
+  $("b-clu").addEventListener("click", e => { S1.clu = !S1.clu; e.currentTarget.setAttribute("aria-pressed", String(S1.clu)); renderIF(); });
+
+  // =====================================================================
+  // Simulation 2: reconstruction error with a linear autoencoder / PCA
+  // =====================================================================
+  const S2 = { px: 2, py: -1.5, bn: 1 };
+  const D2 = (function () {
+    const g = gauss(rng(23)), a = [], rho = 0.9;
+    for (let i = 0; i < 300; i++) { const x = g(), z = g(); a.push([x, rho * x + Math.sqrt(1 - rho * rho) * z]); }
+    let mx = 0, my = 0; a.forEach(p => { mx += p[0]; my += p[1]; }); mx /= a.length; my /= a.length;
+    let sxx = 0, syy = 0, sxy = 0; a.forEach(p => { sxx += (p[0] - mx) ** 2; syy += (p[1] - my) ** 2; sxy += (p[0] - mx) * (p[1] - my); });
+    sxx /= a.length - 1; syy /= a.length - 1; sxy /= a.length - 1;
+    const th = 0.5 * Math.atan2(2 * sxy, sxx - syy), u = [Math.cos(th), Math.sin(th)];
+    const sdx = Math.sqrt(sxx), sdy = Math.sqrt(syy);
+    const err = (px, py) => { const t = (px - mx) * u[0] + (py - my) * u[1]; return Math.hypot(px - mx - t * u[0], py - my - t * u[1]); };
+    const errs = a.map(p => err(p[0], p[1])).sort((p, q) => p - q);
+    return { a, mx, my, u, sdx, sdy, err, thr: errs[Math.floor(0.99 * (errs.length - 1))] };
+  })();
+  const aeBox = $("ae-chart");
+  function renderAE() {
+    const d = D2, W = Math.max(300, aeBox.clientWidth), H = 320, m = { l: 34, r: 10, t: 10, b: 34 };
+    const svg = mk(aeBox, W, H, "Customers, the principal line and the reconstruction error of one probe");
+    const x = L.scale(-4, 4, m.l, W - m.r), y = L.scale(-4, 4, H - m.b, m.t);
+    [-4, -2, 0, 2, 4].forEach(v => {
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      L.svg("line", { x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid" }, svg);
+      tx(svg, x(v), H - m.b + 15, String(v), { "text-anchor": "middle" });
+      tx(svg, m.l - 6, y(v) + 4, String(v), { "text-anchor": "end" });
+    });
+    tx(svg, (m.l + W - m.r) / 2, H - 3, "Card spend (standardised)", { "text-anchor": "middle" });
+    tx(svg, 10, (m.t + H - m.b) / 2, "ATM cash (standardised)", { "text-anchor": "middle", transform: `rotate(-90 10 ${(m.t + H - m.b) / 2})` });
+    d.a.forEach(p => L.svg("circle", { cx: x(p[0]), cy: y(p[1]), r: 2.8, class: "pt" }, svg));
+    const ext = 6;
+    if (S2.bn === 1) L.svg("line", { x1: x(d.mx - ext * d.u[0]), y1: y(d.my - ext * d.u[1]), x2: x(d.mx + ext * d.u[0]), y2: y(d.my + ext * d.u[1]), class: "pc-line" }, svg);
+    const t = (S2.px - d.mx) * d.u[0] + (S2.py - d.my) * d.u[1];
+    const rx = S2.bn === 1 ? d.mx + t * d.u[0] : S2.px, ry = S2.bn === 1 ? d.my + t * d.u[1] : S2.py;
+    L.svg("line", { x1: x(S2.px), y1: y(S2.py), x2: x(rx), y2: y(ry), class: "err-line" }, svg);
+    L.svg("circle", { cx: x(rx), cy: y(ry), r: 5, class: "recon" }, svg);
+    L.svg("circle", { cx: x(S2.px), cy: y(S2.py), r: 6.5, class: "probe" }, svg);
+    const e = S2.bn === 1 ? d.err(S2.px, S2.py) : 0;
+    const zx = (S2.px - d.mx) / d.sdx, zy = (S2.py - d.my) / d.sdy;
+    $("st2-z").textContent = Math.abs(zx).toFixed(1) + ", " + Math.abs(zy).toFixed(1);
+    $("st2-err").textContent = e.toFixed(2);
+    const thr = S2.bn === 1 ? d.thr : 0;
+    $("st2-thr").textContent = S2.bn === 1 ? d.thr.toFixed(2) : "0.00";
+    const flag = S2.bn === 1 && e > d.thr;
+    cls($("st2-err-b"), S2.bn === 1 ? (flag ? "bad" : "ok") : "warn");
+    $("st2-err-s").textContent = S2.bn === 1 ? (flag ? "above the line: flagged" : "below the line: looks normal") : "the network can copy anything";
+    const uni = Math.max(Math.abs(zx), Math.abs(zy));
+    $("s2-verdict").innerHTML = S2.bn === 2
+      ? "With a two-unit bottleneck for two inputs, nothing is compressed. The reconstruction is perfect for every point, so <b>nothing is anomalous</b>, including fraud. This is why bottleneck width matters."
+      : flag
+        ? "Reconstruction error <b>" + e.toFixed(2) + "</b> against a usual maximum of " + d.thr.toFixed(2) + ": flagged" + (uni < 2.6 ? ", even though neither feature alone is extreme (largest z-score " + uni.toFixed(1) + "). The unusual thing is the combination." : ".")
+        : "Reconstruction error <b>" + e.toFixed(2) + "</b>, under the usual maximum of " + d.thr.toFixed(2) + ". " + (uni > 2.6 ? "It is extreme on a single feature (z about " + uni.toFixed(1) + ") but consistent with the usual relationship, so the autoencoder is not surprised. A simple per-feature rule would have flagged it." : "It sits where normal customers sit.");
+  }
+  const cx = L.bind("s-px", v => v.toFixed(2), v => { S2.px = v; renderAE(); });
+  const cy = L.bind("s-py", v => v.toFixed(2), v => { S2.py = v; renderAE(); });
+  const setProbe = (a, b) => { S2.px = a; S2.py = b; cx.set(a); cy.set(b); renderAE(); };
+  $("b-odd").addEventListener("click", () => setProbe(2, -1.5));
+  $("b-ext").addEventListener("click", () => setProbe(3.4, 3.1));
+  $("b-typ").addEventListener("click", () => setProbe(0.8, 0.7));
+  [1, 2].forEach(k => $("b-bn" + k).addEventListener("click", () => { S2.bn = k; $("b-bn1").setAttribute("aria-pressed", String(k === 1)); $("b-bn2").setAttribute("aria-pressed", String(k === 2)); renderAE(); }));
+
+  // =====================================================================
+  // Simulation 3: PCA scree
+  // =====================================================================
+  const S3 = { p: 12, rho: 0.6 };
+  const pcaBox = $("pca-chart");
+  function rawPCA(p, rho, s) {
+    // covariance = D R D, D = diag(s,1,...,1); top eigenpair by power iteration
+    const C = []; for (let i = 0; i < p; i++) { C.push([]); for (let j = 0; j < p; j++) { const di = i === 0 ? s : 1, dj = j === 0 ? s : 1; C[i].push(di * dj * (i === j ? 1 : rho)); } }
+    let v = Array(p).fill(1 / Math.sqrt(p)), lam = 0;
+    for (let it = 0; it < 300; it++) { const w = C.map(row => row.reduce((a, c, j) => a + c * v[j], 0)); lam = Math.hypot(...w); v = w.map(z => z / lam); }
+    let tr = 0; for (let i = 0; i < p; i++) tr += C[i][i];
+    return { share: lam / tr, load: v[0] * v[0] };
+  }
+  function renderPCA() {
+    const p = S3.p, rho = S3.rho, l1 = 1 + (p - 1) * rho, lr = 1 - rho;
+    const ev = Array.from({ length: p }, (_, i) => i === 0 ? l1 : lr), cum = []; let c = 0; ev.forEach(v => { c += v / p; cum.push(c); });
+    const W = Math.max(300, pcaBox.clientWidth), H = 260, m = { l: 40, r: 40, t: 14, b: 34 };
+    const svg = mk(pcaBox, W, H, "Scree plot of component variance and cumulative share");
+    const emax = Math.max(l1, 1), x = L.scale(0, p, m.l, W - m.r), y = L.scale(0, emax, H - m.b, m.t), y2 = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y2(v), y2: y2(v), class: "grid" }, svg); tx(svg, W - m.r + 6, y2(v) + 4, Math.round(v * 100) + "%", {}); });
+    const ticks = [0, 0.5, 1].map(f => f * emax);
+    ticks.forEach(v => tx(svg, m.l - 6, y(v) + 4, v.toFixed(1), { "text-anchor": "end" }));
+    const bw = Math.max(2, (x(1) - x(0)) * 0.72);
+    ev.forEach((v, i) => L.svg("rect", { x: x(i) + ((x(1) - x(0)) - bw) / 2, y: y(v), width: bw, height: y(0) - y(v), rx: 2, class: i === 0 ? "bar-pc" : "bar-rest" }, svg));
+    const pts = cum.map((v, i) => [x(i + 0.5), y2(v)]);
+    L.svg("path", { d: L.path(pts), class: "cv-cum" }, svg);
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y2(0.9), y2: y2(0.9), class: "cv-90" }, svg);
+    const k = cum.findIndex(v => v >= 0.9 - 1e-9) + 1;
+    tx(svg, (m.l + W - m.r) / 2, H - 5, "Component (largest variance first)", { "text-anchor": "middle" });
+    tx(svg, 10, (m.t + H - m.b) / 2, "Variance (eigenvalue)", { "text-anchor": "middle", transform: `rotate(-90 10 ${(m.t + H - m.b) / 2})` });
+    $("st3-1").textContent = (100 * l1 / p).toFixed(0) + "%";
+    $("st3-k").textContent = String(k) + " of " + p; cls($("st3-k-b"), k <= 2 ? "ok" : k <= p / 2 ? "warn" : "bad");
+    $("st3-k-s").textContent = k <= 2 ? "strong compression" : k <= p / 2 ? "moderate compression" : "little compression";
+    const rw = rawPCA(p, rho, 100);
+    $("st3-raw").textContent = (100 * rw.share).toFixed(1) + "%"; $("st3-raw-s").textContent = "of variance in PC1, of which " + (100 * rw.load).toFixed(1) + "% is the fils feature";
+    $("s3-verdict").innerHTML = rho < 0.05
+      ? "Uncorrelated features: every component carries the same variance, so PCA has nothing to compress. Compression only exists where features move together."
+      : "With " + p + " features at correlation " + rho.toFixed(2) + ", one component carries " + (100 * l1 / p).toFixed(0) + "% and the other " + (p - 1) + " share " + (100 * (p - l1) / p).toFixed(0) + "% equally, at " + (100 * lr / p).toFixed(1) + "% each. Reaching 90% needs <b>" + k + "</b> components.";
+  }
+  L.bind("s-p", v => String(v), v => { S3.p = v; renderPCA(); });
+  L.bind("s-rho", v => v.toFixed(2), v => { S3.rho = v; renderPCA(); });
+
+  // =====================================================================
+  // Simulation 4: PCA map versus t-SNE map
+  // =====================================================================
+  const grp = [{ n: 60, c: [0, 0, 0, 0, 0], sd: 3.0, k: "cb" }, { n: 60, c: [10, 0, 0, 0, 0], sd: 0.6, k: "ca" }, { n: 30, c: [10, 25, 0, 0, 0], sd: 1.2, k: "cc" }];
+  const X4 = [], G4 = [];
+  (function () { const g = gauss(rng(41)); grp.forEach((gp, gi) => { for (let i = 0; i < gp.n; i++) { X4.push(gp.c.map(c => c + gp.sd * g())); G4.push(gi); } }); })();
+  function pca2(X) {
+    const n = X.length, d = X[0].length, mu = Array(d).fill(0);
+    X.forEach(r => r.forEach((v, j) => mu[j] += v / n));
+    const Xc = X.map(r => r.map((v, j) => v - mu[j]));
+    const C = Array.from({ length: d }, (_, i) => Array.from({ length: d }, (_, j) => Xc.reduce((a, r) => a + r[i] * r[j], 0) / (n - 1)));
+    const vecs = [];
+    for (let k = 0; k < 2; k++) {
+      let v = Array.from({ length: d }, (_, i) => 1 + 0.1 * i);
+      for (let it = 0; it < 300; it++) { let w = C.map(row => row.reduce((a, c, j) => a + c * v[j], 0)); vecs.forEach(u => { const dot = w.reduce((a, c, j) => a + c * u[j], 0); w = w.map((c, j) => c - dot * u[j]); }); const nr = Math.hypot(...w); v = w.map(z => z / nr); }
+      vecs.push(v);
+    }
+    return Xc.map(r => vecs.map(v => r.reduce((a, c, j) => a + c * v[j], 0)));
+  }
+  function tsne(X, perp, seed, iters) {
+    const n = X.length, r = rng(seed), g = gauss(r), D = new Float64Array(n * n), P = new Float64Array(n * n);
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { let s = 0; for (let k = 0; k < X[i].length; k++) { const t = X[i][k] - X[j][k]; s += t * t; } D[i * n + j] = s; }
+    const target = Math.log(perp);
+    for (let i = 0; i < n; i++) {
+      let dmin = Infinity, dsum = 0; for (let j = 0; j < n; j++) if (j !== i) { dmin = Math.min(dmin, D[i * n + j]); dsum += D[i * n + j]; }
+      let beta = 1 / (dsum / (n - 1)), lo = 0, hi = Infinity;
+      for (let it = 0; it < 60; it++) {
+        let sp = 0, sd = 0; for (let j = 0; j < n; j++) if (j !== i) { const e = Math.exp(-beta * (D[i * n + j] - dmin)); sp += e; sd += e * (D[i * n + j] - dmin); }
+        const H = Math.log(sp) + beta * sd / sp;
+        if (Math.abs(H - target) < 1e-5) break;
+        if (H > target) { lo = beta; beta = hi === Infinity ? beta * 2 : (beta + hi) / 2; } else { hi = beta; beta = (beta + lo) / 2; }
+      }
+      let sp = 0; for (let j = 0; j < n; j++) if (j !== i) { const e = Math.exp(-beta * (D[i * n + j] - dmin)); P[i * n + j] = e; sp += e; }
+      for (let j = 0; j < n; j++) P[i * n + j] /= sp;
+    }
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) { const v = Math.max((P[i * n + j] + P[j * n + i]) / (2 * n), 1e-12); P[i * n + j] = v; P[j * n + i] = v; }
+    const Y = Array.from({ length: n }, () => [1e-2 * g(), 1e-2 * g()]), dY = Y.map(() => [0, 0]), gain = Y.map(() => [1, 1]), num = new Float64Array(n * n);
+    for (let it = 0; it < iters; it++) {
+      const ex = it < 120 ? 12 : 1, mom = it < 120 ? 0.5 : 0.8; let Z = 0;
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) { const dx = Y[i][0] - Y[j][0], dy = Y[i][1] - Y[j][1], q = 1 / (1 + dx * dx + dy * dy); num[i * n + j] = q; num[j * n + i] = q; Z += 2 * q; }
+      for (let i = 0; i < n; i++) {
+        let gx = 0, gy = 0;
+        for (let j = 0; j < n; j++) if (j !== i) { const q = num[i * n + j], m = 4 * (ex * P[i * n + j] - q / Z) * q; gx += m * (Y[i][0] - Y[j][0]); gy += m * (Y[i][1] - Y[j][1]); }
+        [gx, gy].forEach((gr, k) => { gain[i][k] = (Math.sign(gr) !== Math.sign(dY[i][k])) ? gain[i][k] + 0.2 : gain[i][k] * 0.8; gain[i][k] = Math.max(gain[i][k], 0.01); dY[i][k] = mom * dY[i][k] - 100 * gain[i][k] * gr; });
+      }
+      let mx = 0, my = 0;
+      for (let i = 0; i < n; i++) { Y[i][0] += dY[i][0]; Y[i][1] += dY[i][1]; mx += Y[i][0] / n; my += Y[i][1] / n; }
+      for (let i = 0; i < n; i++) { Y[i][0] -= mx; Y[i][1] -= my; }
+    }
+    return Y;
+  }
+  function stats(E) {
+    const cen = grp.map((_, gi) => { const idx = G4.map((g, i) => g === gi ? i : -1).filter(i => i >= 0); const c = E[0].map((_, k) => idx.reduce((a, i) => a + E[i][k], 0) / idx.length); const rad = idx.reduce((a, i) => a + Math.hypot(...E[i].map((v, k) => v - c[k])), 0) / idx.length; return { c, rad }; });
+    const dist = (a, b) => Math.hypot(...cen[a].c.map((v, k) => v - cen[b].c[k]));
+    return { ratio: cen[0].rad / cen[1].rad, far: dist(1, 2) / dist(0, 1) };
+  }
+  function drawMap(box, E, label) {
+    const W = Math.max(300, box.clientWidth), H = 250, pad = 14, svg = mk(box, W, H, label);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; E.forEach(p => { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); });
+    const s = Math.min((W - 2 * pad) / (x1 - x0 || 1), (H - 2 * pad) / (y1 - y0 || 1)), ox = (W - s * (x1 - x0)) / 2, oy = (H - s * (y1 - y0)) / 2;
+    E.forEach((p, i) => L.svg("circle", { cx: ox + s * (p[0] - x0), cy: oy + s * (p[1] - y0), r: 3.4, class: "pt " + grp[G4[i]].k }, svg));
+  }
+  const S4 = { perp: 30, seed: 3 }, pcaE = pca2(X4), sP = stats(pcaE), sT0 = stats(X4);
+  let tE = null, tTimer = 0;
+  function renderMaps() {
+    drawMap($("pca2-chart"), pcaE, "PCA map of three groups");
+    if (tE) drawMap($("tsne-chart"), tE, "t-SNE map of three groups");
+  }
+  function runTsne() {
+    $("tsne-state").textContent = "(running)";
+    clearTimeout(tTimer);
+    tTimer = setTimeout(() => {
+      tE = tsne(X4, S4.perp, S4.seed, 500);
+      $("tsne-state").textContent = "(perplexity " + S4.perp + ", start " + S4.seed + ")";
+      const sT = stats(tE);
+      $("tsne-table").innerHTML = '<table class="data"><thead><tr><th>Measured on</th><th>Wide group radius ÷ tight group radius</th><th>Distance to distant group ÷ distance wide to tight</th></tr></thead><tbody>' +
+        '<tr><td><b>Original 5-D data (truth)</b></td><td>' + sT0.ratio.toFixed(1) + '</td><td>' + sT0.far.toFixed(1) + '</td></tr>' +
+        '<tr><td><b>PCA map</b></td><td>' + sP.ratio.toFixed(1) + '</td><td>' + sP.far.toFixed(1) + '</td></tr>' +
+        '<tr><td><b>t-SNE map</b></td><td>' + sT.ratio.toFixed(1) + '</td><td>' + sT.far.toFixed(1) + '</td></tr></tbody></table>';
+      $("s4-verdict").innerHTML = "Truth: the wide group is about <b>" + sT0.ratio.toFixed(1) + "</b> times the radius of the tight one; in the t-SNE map it is <b>" + sT.ratio.toFixed(1) + "</b>. The distant group is <b>" + sT0.far.toFixed(1) + "</b> times as far away as the wide-to-tight gap; the t-SNE map says <b>" + sT.far.toFixed(1) + "</b>. The three groups are still correctly separated, which is what t-SNE promises. Sizes are not preserved, and distances only loosely.";
+      renderMaps();
+    }, 20);
+  }
+  L.bind("s-perp", v => String(v), v => { S4.perp = v; runTsne(); });
+  $("b-seed").addEventListener("click", () => { S4.seed += 1; runTsne(); });
+
+  // initial render
+  renderIF(); renderAE(); renderPCA(); renderMaps(); runTsne();
+  let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { renderIF(); renderAE(); renderPCA(); renderMaps(); }, 120); });
+})();
+</script>
+</body>
+</html>

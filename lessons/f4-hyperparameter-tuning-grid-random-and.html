@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tuning Models Without Fooling Yourself: Search Strategies and the Classic Algorithms</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.sq { height: 10px; width: 10px; border-radius: 50%; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .pt-g { fill: var(--neutral); stroke: var(--surface); stroke-width: 1.5; }
+  .pt-r { fill: var(--warn); fill-opacity: .85; stroke: var(--surface); stroke-width: 1.5; }
+  .pt-b { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+  .pt-best { fill: none; stroke: var(--ink); stroke-width: 2; }
+  .cv-opt { stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .cv-true { stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 4 4; fill: none; }
+  .cv-mean { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .cv-ei { stroke: var(--warn); stroke-width: 2; fill: none; }
+  .cv-line { stroke: var(--ink); stroke-width: 2.2; fill: none; }
+  .cv-line.bad { stroke: var(--bad); }
+  .cv-line.soft { stroke: var(--accent); }
+  .band { fill: var(--accent); fill-opacity: .14; }
+  .c0 { fill: var(--accent); } .c1 { fill: var(--warn); }
+  .reg0 { fill: var(--accent); fill-opacity: .16; } .reg1 { fill: var(--warn); fill-opacity: .2; }
+  .dot0 { fill: var(--accent); stroke: var(--surface); stroke-width: 1.2; } .dot1 { fill: var(--warn); stroke: var(--surface); stroke-width: 1.2; }
+  pre { overflow-x: auto; max-width: 100%; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F4 · Classical machine learning</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F4.9 · F4.10</span>
+        <span class="pill d">Day one</span>
+        <span>About 40 minutes</span>
+      </div>
+      <h1>Tuning Models Without Fooling Yourself: Search Strategies and the Classic Algorithms</h1>
+      <p class="dek">Why random search beats a grid, what Bayesian search actually does, how tuning quietly overfits your validation data, and what k-NN, SVMs and naive Bayes assume, so you know when each one still wins.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Tuning is a search under a fixed compute budget where a few knobs matter and most do not, so spread your trials rather than lay them on a grid, spend them adaptively if each trial is costly, and remember that every trial you score on the same data makes the winning score a little more flattering.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A gradient-boosted model has a dozen settings you do not learn from data: how many trees, how deep, how fast to learn, how much to subsample. These are <strong>hyperparameters</strong>. The training algorithm cannot set them, so you do, by trying values and watching a validation score.</p>
+        <p>Each try costs a full training run. Say you can afford 30. How do you choose the 30 settings? The obvious answer is a grid: three values of each knob, laid out evenly. It feels systematic. It is also wasteful, because of one fact about nearly every model: <strong>a couple of knobs decide most of the result, and you do not know in advance which ones</strong>. A grid tries only three distinct values of the knob that matters. Thirty random draws try thirty.</p>
+        <p>The second idea is more uncomfortable. Every time you score a setting on your validation data and keep the best, you are selecting on noise as well as on quality. Try enough settings and the winner's score is partly luck. Tune on the <em>test</em> set and your final number is optimistic by construction; the test set was supposed to be the one thing you did not touch.</p>
+        <p>The second half of the lesson steps back from tuning to the three classic algorithms that interviewers still ask about. They are small, fast, easy to explain and, in the right place, hard to beat. Knowing what each one <em>assumes</em> tells you where it works and where it falls apart.</p>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Tuning is cheap to do badly and easy to over-trust. Decide the budget first, search in a way that explores the knobs that matter, keep a final test set that nothing touched, and report a score you could defend.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-grid">Grid versus random search: low effective dimension</h3>
+      <div class="prose">
+        <p>Write the validation error as a function of the hyperparameters. For most models this function has <strong>low effective dimension</strong>: it moves a lot along one or two directions and barely at all along the rest. Which directions matter changes from dataset to dataset (Bergstra and Bengio, 2012). A learning rate that is too high ruins a boosted model; the minimum leaf size shifts the score by a fraction of a point.</p>
+        <p>A grid with <i>k</i> values per knob and <i>d</i> knobs needs <i>k<sup>d</sup></i> runs, and projected onto the one knob that matters it explores only <i>k</i> distinct values. Random search draws each knob independently, so with <i>n</i> trials it explores <i>n</i> distinct values of every knob, including the important one. It also lets you stop at any point, add more trials later, and lose a few crashed jobs without leaving a hole in the design. Grid search is fine for one or two knobs where you care about a clean picture. Beyond that it is a habit, not a method.</p>
+        <p>Two practical rules go with random search. Sample scale-type knobs on a <strong>log scale</strong> (learning rate from 0.001 to 0.3, regularisation strength over several orders of magnitude), and sample integer or share knobs uniformly. And set the ranges from knowledge: if a depth of 40 is absurd for your data, do not spend trials there.</p>
+      </div>
+
+      <figure class="figure" id="fig-grid">
+        <div class="fig-head"><span class="fig-title">Same budget, different coverage</span><span class="fig-tag">Simulation 1 of 4</span></div>
+        <p class="try"><b>Try:</b> at 9 trials the grid tests only three learning rates and misses the best one; the random draw tests nine. Raise the budget and watch the average random best settle near the optimum while the grid improves in steps. Press <b>Draw another random set</b> to see how lucky or unlucky a single draw can be.</p>
+        <div class="btns" role="group" aria-label="Random draw">
+          <button class="btn" type="button" id="b-draw">Draw another random set</button>
+        </div>
+        <div class="chart-wrap" id="grid-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--neutral)"></i>Grid trial</span>
+          <span><i class="sq" style="background:var(--warn)"></i>Random trial</span>
+          <span><i style="background:var(--accent)"></i>Best learning rate (hidden)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-n">Number of trials <output for="s-n"></output></label><input type="range" id="s-n" min="4" max="64" step="1" value="9"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Distinct learning rates tried: grid</div><div class="v" id="st1-gk"></div><div class="s">of the important knob</div></div>
+          <div class="stat"><div class="k">Distinct learning rates tried: random</div><div class="v" id="st1-rk"></div><div class="s">every trial is new</div></div>
+          <div class="stat"><div class="k">Best validation error: grid</div><div class="v" id="st1-ge"></div><div class="s" id="st1-ge-s"></div></div>
+          <div class="stat"><div class="k">Best error: random (this draw)</div><div class="v" id="st1-re"></div><div class="s" id="st1-re-s"></div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: the validation error is 20% + 1.6 × (lr − 0.37)<sup>2</sup> + 0.05 × (second − 0.5)<sup>2</sup>, with both knobs scaled to 0–1. The first knob matters, the second hardly does. No noise. The grid uses ⌊√n⌋ values per knob, so leftover trials are unused. The average over random sets is exact Monte Carlo with 400 seeded draws.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The size of the effect depends on how peaked the important knob is. When the landscape is flat, grid and random are equal. When it is sharp, which is common for learning rates and regularisation, random wins clearly at small budgets. Both are only a floor. If a trial takes an hour, neither is how you want to spend 50 hours.</p>
+      </div>
+
+      <h3 class="sub" id="m-bayes">Bayesian search and early stopping</h3>
+      <div class="prose">
+        <p>If trials are costly, use what the earlier ones told you. <strong>Bayesian optimisation</strong> fits a cheap <em>surrogate model</em> to the (setting, score) pairs seen so far, then picks the next setting where an <strong>acquisition function</strong> says the payoff is best. The classic surrogate is a Gaussian process (GP): for any untried setting it gives a predicted score and an uncertainty that grows with distance from tried points. The classic acquisition is <strong>expected improvement</strong> (EI):</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>EI</mtext><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mo stretchy="false">(</mo><msup><mi>y</mi><mo>*</mo></msup><mo>−</mo><mi>μ</mi><mo stretchy="false">)</mo><mi>Φ</mi><mo stretchy="false">(</mo><mi>z</mi><mo stretchy="false">)</mo><mo>+</mo><mi>σ</mi><mi>φ</mi><mo stretchy="false">(</mo><mi>z</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"></mspace><mi>z</mi><mo>=</mo><mfrac><mrow><msup><mi>y</mi><mo>*</mo></msup><mo>−</mo><mi>μ</mi></mrow><mi>σ</mi></mfrac></math>
+        <p class="where">For minimising error. <i>y</i><sup>*</sup> is the best error so far, μ and σ the surrogate's prediction and uncertainty at <i>x</i>, Φ and φ the normal distribution and density. In words: EI is large where the predicted error is below the best (exploit) <em>or</em> where the surrogate is unsure (explore). Near a tried point σ is small, so EI is small there, which is why it does not keep resampling the same spot.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Gaussian processes get slow and awkward with many knobs or with categorical ones. The popular alternative, <strong>TPE</strong> (tree-structured Parzen estimator, the default in Hyperopt and Optuna), models the density of good settings against bad ones instead and handles mixed and conditional spaces naturally. SMAC uses random forests as the surrogate. Which is better is empirical; for tree boosting on tabular data, TPE and SMAC-style methods tend to do well and are easy to run.</p>
+      </div>
+
+      <figure class="figure" id="fig-bo">
+        <div class="fig-head"><span class="fig-title">A surrogate that learns where to look</span><span class="fig-tag">Simulation 2 of 4</span></div>
+        <p class="try"><b>Try:</b> press <b>Run one Bayesian trial</b> repeatedly. The first picks go where the surrogate is unsure; later ones cluster around the best dip. The orange curve at the bottom is expected improvement, which decides the next point. Compare the best error found with what the same number of random trials gets on average.</p>
+        <div class="btns" role="group" aria-label="Bayesian trials">
+          <button class="btn" type="button" id="b-bo">Run one Bayesian trial</button>
+          <button class="btn" type="button" id="b-bo5">Run five</button>
+          <button class="btn" type="button" id="b-bo-reset">Reset</button>
+        </div>
+        <div class="chart-wrap" id="bo-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--muted)"></i>True error curve (hidden from the search)</span>
+          <span><i style="background:var(--accent)"></i>Surrogate mean and uncertainty</span>
+          <span><i style="background:var(--warn)"></i>Expected improvement</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Trials so far</div><div class="v" id="st2-n"></div><div class="s">3 starting points included</div></div>
+          <div class="stat"><div class="k">Best error found</div><div class="v" id="st2-best"></div><div class="s" id="st2-best-s"></div></div>
+          <div class="stat"><div class="k">Random search, same trials</div><div class="v" id="st2-rand"></div><div class="s">average best of 400 runs</div></div>
+          <div class="stat" id="st2-gap-b"><div class="k">Gap to the true minimum</div><div class="v" id="st2-gap"></div><div class="s" id="st2-gap-s"></div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: a one-knob error curve I made up, with two dips, one wide and shallow and one narrow and deeper. Noise-free trials. The surrogate is a real Gaussian process with a squared-exponential kernel (length 0.1) fitted exactly in the page to standardised scores; EI is computed by the formula above on 160 candidate points. The random baseline is 400 seeded runs on the same curve.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Bayesian methods are not magic. They need a sensible search space, they spend time proposing trials, and with noisy evaluations (cross-validation scores wobble) the surrogate can chase noise. Their edge is largest when each trial is expensive and the number of knobs is small. For a model that trains in a minute, 200 random trials may beat a careful 30.</p>
+        <p>The second lever is <strong>not finishing bad trials</strong>. Successive halving gives many settings a small budget (a few trees, one epoch, a data sample), keeps the best half, doubles the budget, and repeats. <strong>Hyperband</strong> runs several such schedules to hedge against slow starters (Li et al., 2017). Boosting libraries have the same idea built in as <strong>early stopping</strong>: stop adding trees once validation error stops improving, which turns "number of trees" from a knob into an outcome. Combining the two (BOHB, and the pruners in Optuna) is the modern default for anything expensive.</p>
+        <p>What you actually write is short:</p>
+<pre><code>from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from scipy.stats import loguniform, randint
+
+search = RandomizedSearchCV(
+    model,                                   # a pipeline: scaling lives inside it
+    {"learning_rate": loguniform(1e-3, 0.3),
+     "max_depth": randint(2, 8),
+     "min_child_weight": randint(1, 50)},
+    n_iter=60, scoring="average_precision",
+    cv=TimeSeriesSplit(n_splits=4),          # forward in time, see F4.7
+    random_state=0, n_jobs=-1)
+search.fit(X_train, y_train)                 # X_test is not seen here</code></pre>
+      </div>
+
+      <h3 class="sub" id="m-honest">Tuning on the test set, and how to stop doing it</h3>
+      <div class="prose">
+        <p>Suppose twenty candidate models are all truly equal at 80% recall. Score each on 100 frauds and the scores scatter by about ±4 points through plain sampling noise. The best of twenty will show around 86 to 87%. That is the number you report, and it is wrong: the "winner" is the one with the luckiest sample. This is a <strong>selection effect</strong>, the winner's curse. It is the same arithmetic as the multiple-comparisons problem in F2.4.</p>
+        <p>The honest ingredients are three sets, used once each. <strong>Training data</strong> fits the parameters. <strong>Validation data</strong> (or cross-validation folds) is used as often as you like to choose hyperparameters, and its best score is understood to be optimistic. <strong>Test data</strong> is touched once, at the end, to report a number. If you look at the test score, change something, and look again, it has become validation data and you have no test set left.</p>
+        <p>If you also want to report the tuning procedure's expected performance with little data, use <strong>nested cross-validation</strong>: an inner loop does the search, an outer loop scores the whole procedure including the search on folds the search never saw (Cawley and Talbot, 2010). It costs <i>outer folds × inner folds × trials</i> fits, so it is for small data and for comparing methods, not for the nightly production job. For anything that lives in time, the outer split must run forward in time (F4.7), with an embargo for label delay if labels mature late (F3.5).</p>
+      </div>
+
+      <figure class="figure" id="fig-opt">
+        <div class="fig-head"><span class="fig-title">How flattering is the best of many?</span><span class="fig-tag">Simulation 3 of 4</span></div>
+        <p class="try"><b>Try:</b> start at 20 configurations and 100 test frauds: the reported recall of the winner sits many points above its true recall. Add more test frauds and the gap shrinks. Make the candidates genuinely different (raise the spread) and the winner becomes more deserving, so the same noise misleads less.</p>
+        <div class="chart-wrap" id="opt-chart"></div>
+        <div class="legend">
+          <span><i style="background:var(--bad)"></i>Winner's score on the data used to pick it</span>
+          <span><i style="background:var(--accent)"></i>Winner's expected score on fresh data</span>
+          <span><i style="background:var(--muted)"></i>Average configuration (80%)</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-k">Configurations tried <output for="s-k"></output></label><input type="range" id="s-k" min="0" max="3" step="0.05" value="1.3"></div>
+          <div class="ctl"><label for="s-nf">Frauds in the evaluation set <output for="s-nf"></output></label><input type="range" id="s-nf" min="1.5" max="3.5" step="0.05" value="2"></div>
+          <div class="ctl"><label for="s-sp">Real spread between configurations <output for="s-sp"></output></label><input type="range" id="s-sp" min="0" max="3" step="0.1" value="0.5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-rep-b"><div class="k">Reported recall of the winner</div><div class="v" id="st3-rep"></div><div class="s">on the tuning data</div></div>
+          <div class="stat"><div class="k">Expected true recall of the winner</div><div class="v" id="st3-true"></div><div class="s">what a fresh test set would show</div></div>
+          <div class="stat" id="st3-opt-b"><div class="k">Optimism</div><div class="v" id="st3-opt"></div><div class="s">points of recall</div></div>
+          <div class="stat"><div class="k">Noise on one score</div><div class="v" id="st3-se"></div><div class="s">one standard error</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated and exact in expectation: each configuration has a true recall drawn from a normal distribution around 80% with the chosen spread, and is scored on <i>n</i> frauds with standard error √(0.8 × 0.2 ÷ <i>n</i>). The expected maximum of <i>K</i> normal scores is integrated numerically; the winner's expected true recall follows from the shrinkage factor spread² ÷ (spread² + noise²). Normal approximation; real model scores are correlated, which lowers the effect.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The curve says something practical. The optimism comes from the <em>ratio</em> of noise to real differences. If your candidates differ by a point and the evaluation noise is four points, tuning 200 settings finds noise. In that regime stop early, pick a simple setting, and prefer the <strong>one-standard-error rule</strong>: choose the simplest model whose score is within one standard error of the best. Other habits that keep you honest: fix seeds and report the spread over several; tune with a metric that matches the decision (precision at review capacity, not accuracy, F7); cap the number of trials in advance; and log every trial, because an unlogged search cannot be audited (P2).</p>
+      </div>
+
+      <h3 class="sub" id="m-classic">k-NN, SVMs and naive Bayes: what each assumes</h3>
+      <div class="prose">
+        <p>Three older algorithms are still standard interview material and still sit in production, usually as baselines or components. Treat each as a clear assumption about the world.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Algorithm</th><th>Core idea</th><th>What it assumes</th><th>Hyperparameters that matter</th><th>Where it still wins</th></tr></thead>
+          <tbody>
+            <tr><td><b>k-nearest neighbours</b></td><td>To score a new case, find the <i>k</i> most similar training cases and take a vote. No training step; all the work is at prediction time.</td><td>Distance means similarity: nearby points share labels, and every feature is on a scale where distance is meaningful.</td><td><i>k</i> (small is flexible and noisy, large is smooth and biased), the distance, feature scaling, weighting by distance.</td><td>Small, low-dimensional data; entity matching and look-alike lookups; retrieval, where it is the core of vector search (with approximate indexes).</td></tr>
+            <tr><td><b>Support vector machine</b></td><td>Find the boundary with the widest margin between classes. Only the points near the boundary (support vectors) matter. A kernel lets the boundary curve by measuring similarity in a richer space.</td><td>A margin-maximising boundary generalises; the chosen kernel suits the shape of the data; features are scaled.</td><td><i>C</i> (how much to punish points on the wrong side), kernel and its width γ for the RBF kernel.</td><td>Small to medium data (up to tens of thousands of rows) with many features, such as text or genomics. Training time grows steeply with rows.</td></tr>
+            <tr><td><b>Naive Bayes</b></td><td>Apply Bayes' rule with the "naive" step that features are independent given the class, so the likelihood is a product of simple per-feature terms.</td><td>Features are conditionally independent given the class. Almost never true, but the ranking often survives.</td><td>Smoothing (how to treat unseen words), the feature distribution (counts, binary, Gaussian).</td><td>Text baselines, tiny training sets, streaming updates, and as a fast sanity check. Its probabilities are poorly calibrated.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>k-NN</strong> is where the scaling lesson is clearest. It measures distance, so a feature in AED (tens of thousands) swamps a feature in years (tens), and the model quietly becomes "nearest by income". Standardise first. The second lesson is the <strong>curse of dimensionality</strong>: as features multiply, points spread out and the nearest and farthest neighbours become almost equally far (Beyer et al., 1999), so "nearest" stops carrying information. This is why plain k-NN on 300 raw features misleads, while k-NN on a learned embedding of a few hundred dimensions works well. That is exactly what vector search does with approximate indexes such as HNSW (see F1.1 on the geometry and M3 on retrieval).</p>
+        <p><strong>SVMs</strong> reframe classification as geometry. With a linear kernel the boundary is a hyperplane; the margin is the gap to the nearest points on each side, and a larger <i>C</i> allows fewer violations at the cost of a narrower margin. The RBF kernel scores similarity as <i>e</i><sup>−γ‖<i>x</i>−<i>x′</i>‖²</sup>, so a large γ makes each point's influence tiny and the boundary wiggly (overfitting) and a small γ makes it smooth. <i>C</i> and γ interact, so they are tuned together, on a log grid or random search, which is Part 2's first topic in action. Cost is the limit: a kernel SVM needs a matrix of pairwise similarities, so beyond about a hundred thousand rows gradient-boosted trees or a linear model are the practical choice.</p>
+        <p><strong>Naive Bayes</strong> for a message with words <i>w</i><sub>1</sub>…<i>w</i><sub><i>m</i></sub> multiplies the class prior by each word's probability within the class, usually computed in logs so tiny numbers add instead of vanishing. Words never seen in a class would give zero, so you add a small count (<strong>Laplace smoothing</strong>). It is a generative model: it learns how each class writes. Its independence assumption is false, because "transfer" and "urgent" co-occur, so it counts the same evidence twice and its probabilities come out too extreme. The ranking is often still good (Domingos and Pazzani, 1997), which makes it a strong first baseline for classifying complaints in Arabic or English and a poor source of calibrated probabilities. In logistic-regression terms it is a restricted cousin of the model in F2.5; logistic regression usually wins with enough data, naive Bayes with very little.</p>
+      </div>
+
+      <figure class="figure" id="fig-knn">
+        <div class="fig-head"><span class="fig-title">k-NN on a loan sample: k and scaling</span><span class="fig-tag">Simulation 4 of 4</span></div>
+        <p class="try"><b>Try:</b> with scaling off, the regions are vertical bands: only income matters, because AED dwarfs years. Press <b>Standardise features</b> and the boundary tilts to use both. Then move k up from 1 (100% on training data, fragile) and watch the new-loan curve below: it rises as the boundary smooths, then flattens or falls when the model oversmooths.</p>
+        <div class="btns" role="group" aria-label="Scaling">
+          <button class="btn" type="button" id="b-scale" aria-pressed="false">Standardise features</button>
+        </div>
+        <div class="chart-wrap" id="knn-chart"></div>
+        <div class="legend">
+          <span><i class="sq" style="background:var(--accent)"></i>Repaid</span>
+          <span><i class="sq" style="background:var(--warn)"></i>Defaulted</span>
+          <span>Shaded area: what the model predicts there. Dots: the 120 training loans.</span>
+        </div>
+        <div class="chart-wrap" id="knn-curve"></div>
+        <div class="controls">
+          <div class="ctl"><label for="s-kk">k, neighbours that vote <output for="s-kk"></output></label><input type="range" id="s-kk" min="1" max="60" step="1" value="5"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Accuracy on training loans</div><div class="v" id="st4-tr"></div><div class="s">a neighbour can be itself</div></div>
+          <div class="stat" id="st4-te-b"><div class="k">Accuracy on 600 new loans</div><div class="v" id="st4-te"></div><div class="s">the number that counts</div></div>
+          <div class="stat"><div class="k">Best k on new loans</div><div class="v" id="st4-bk"></div><div class="s" id="st4-bk-s"></div></div>
+        </div>
+        <p class="verdict" id="s4-verdict"></p>
+        <p class="sim-note">Simulated: each applicant has an age (about 40 ± 10 years) and a monthly income (about AED 20,000 ± 8,000). Default risk rises with youth and with low income, with equal weight once both are standardised, plus noise, so even a perfect model cannot reach 100%. The same seeded generator makes the 120 training and 600 test loans; the k-NN and its accuracies are computed exactly in the page.</p>
+      </figure>
+
+      <div class="prose">
+        <p>The same chart is the bias-variance trade-off of F4.1 with <i>k</i> as the dial: <i>k</i> = 1 has high variance, huge <i>k</i> has high bias. Notice what else it shows: scaling is a modelling choice with a larger effect than most hyperparameters. Do it inside a pipeline, fitted on training folds only, or the scaler's mean and spread leak validation data (F3.1).</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Tuning is where several earlier ideas meet: noise, splits and selection.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F4.1 · Bias, variance, generalisation</span><span class="t"><a href="f4-bias-variance-and-generalisation.html">What the knobs trade off</a></span><p>Most hyperparameters are dials between bias and variance. Tuning is choosing the dial setting that minimises held-out error.</p></div>
+        <div class="link-card"><span class="code">F4.2 · F4.3 · Trees and boosting</span><span class="t"><a href="f4-decision-trees-random-forests-and.html">Where the knobs live</a></span><p>Depth, learning rate, number of trees, leaf size and subsampling are the usual targets. Early stopping removes one.</p></div>
+        <div class="link-card"><span class="code">F4.7 · Cross-validation</span><span class="t"><a href="f4-cross-validation-including-temporal-splits.html">The loop inside the search</a></span><p>Every tuning trial is scored by a cross-validation scheme. Pick one that respects time, groups and label delay.</p></div>
+        <div class="link-card"><span class="code">F3.1 · Leakage</span><span class="t"><a href="f3-leakage-point-in-time.html">Preprocessing belongs inside the loop</a></span><p>Scalers, encoders and imputers must be refitted on each training fold, or tuning rewards leakage.</p></div>
+        <div class="link-card"><span class="code">F3.5 · Imbalanced data</span><span class="t"><a href="f3-imbalanced-data.html">Few positives, wide noise</a></span><p>With 200 frauds, evaluation noise is large and tuning overfits quickly. Class weights and thresholds are themselves hyperparameters.</p></div>
+        <div class="link-card"><span class="code">F2.4 · F2.1 · Multiple comparisons, intervals</span><span class="t"><a href="f2-tests-pvalues-power.html">The winner's curse is a testing problem</a></span><p>Picking the best of many scores without adjustment is the same mistake as picking the best of many p-values.</p></div>
+        <div class="link-card"><span class="code">F7 · Metrics and thresholds</span><span class="t"><a href="f7-precision-recall-thresholds-calibration.html">Tune to the decision</a></span><p>Optimising accuracy gives a model that is great at the wrong thing. Use a metric that reflects review capacity and costs.</p></div>
+        <div class="link-card"><span class="code">F1.1 · M3 · Embeddings and retrieval</span><span class="t"><a href="f1-vectors-matrices-geometry.html">k-NN grew up into vector search</a></span><p>Finding nearest neighbours of an embedding is the heart of retrieval. The scale and dimensionality lessons carry over.</p></div>
+        <div class="link-card"><span class="code">P2 · Model lifecycle</span><span class="t"><a href="p2-the-model-lifecycle-from-experiment.html">Experiment tracking</a></span><p>Validators will ask what you tried and why you chose this. A logged search with its space, seeds and budget is the answer.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Model validation.</strong> An independent validator will ask whether the test set was touched during tuning and how many settings were tried. Be ready with the count and the log.</li>
+          <li><strong>Fraud and credit scorecards.</strong> Boosted trees tuned with random or TPE search under a forward-in-time split; a regularised logistic model as the transparent challenger.</li>
+          <li><strong>Complaint and KYC text.</strong> Naive Bayes or a linear SVM over word counts as a baseline against which any language-model approach must justify its cost, in Arabic and English alike.</li>
+          <li><strong>Matching and look-alikes.</strong> Nearest-neighbour logic underlies customer deduplication, name matching in sanctions screening (<a href="b2-sanctions-screening-and-name-matching.html">B2</a>) and similar-case retrieval for investigators.</li>
+          <li><strong>Cost.</strong> A tuning run on a bank's cloud or on-premises cluster uses real compute. A budget set in advance is both governance and economy.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>The fundamentals have been stable for over a decade. What changed is tooling, and the shift of effort from tuning small knobs towards choosing data, features and the model family.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Searches were light; items below are ones I could confirm, plus classic dates from memory.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">1967</span><div><div class="t">Nearest-neighbour classification</div><p>Cover and Hart showed the nearest-neighbour rule's error is at most twice the best possible (Bayes) error, given enough data. It is the oldest of the three algorithms.</p><div class="src">Cover &amp; Hart, IEEE Trans. Information Theory, 1967 (from memory)</div></div></li>
+        <li><span class="yr">1995</span><div><div class="t">Support vector networks</div><p>The soft-margin SVM with kernels, which dominated text and image classification for a decade.</p><div class="src">Cortes &amp; Vapnik, Machine Learning, 1995</div></div></li>
+        <li><span class="yr">2011–12</span><div><div class="t">Random search and practical Bayesian optimisation</div><p>Bergstra and Bengio showed random search beats grid search over the same budget because few knobs matter. Snoek et al. made Gaussian-process Bayesian optimisation practical for machine learning. Bergstra et al. introduced TPE.</p><div class="src">Bergstra &amp; Bengio, JMLR, 2012; Snoek et al., NeurIPS, 2012; Bergstra et al., NeurIPS, 2011</div></div></li>
+        <li><span class="yr">2017–19</span><div><div class="t">Multi-fidelity search and the Optuna era</div><p>Hyperband used early stopping across many configurations; BOHB combined it with Bayesian models; Optuna brought define-by-run search spaces and pruning to a widely used open-source library.</p><div class="src">Li et al., JMLR, 2018; Falkner et al., ICML, 2018; Akiba et al., KDD, 2019</div></div></li>
+        <li><span class="yr">2022</span><div><div class="t">Trees still beat deep nets on medium tabular data, even after tuning</div><p>With a large random-search budget given to every model, tree ensembles stayed ahead of deep networks on typical tabular datasets, partly because trees are robust to uninformative features.</p><div class="src">Grinsztajn, Oyallon &amp; Varoquaux, NeurIPS Datasets and Benchmarks, 2022 (from memory)</div></div></li>
+        <li><span class="yr">2023</span><div><div class="t">Tuning engines compared on tabular data</div><p>A systematic comparison of the engines in Ray Tune found that most beat random search, with a few (HEBO, AX, BlendSearch) clearly ahead, and the best accelerating search by roughly two to three times.</p><div class="src">Kégl, arXiv 2311.15854, 2023</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Optuna 5.0</div><p>Preferred Networks announced Optuna v5.0 on 7 September 2026, with multi-objective TPE as the default for multi-objective studies and a hyperparameter-importance method that supports dynamic search spaces, alongside an experimental Rust implementation. Earlier 2026 releases added parallel-friendly strategies for the Gaussian-process sampler. I read this from a press release summary, not the release notes.</p><div class="src">Preferred Networks press release, 7 Sep 2026; check the Optuna GitHub release page</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">A gradient-boosting tuning comparison</div><p>A recent paper compares random grid search, TPE, Gaussian-process Bayesian optimisation, Hyperband, SMAC, full grid search and default settings for boosted trees. I saw only its method list and related work, not its results, so I do not quote them.</p><div class="src">arXiv 2602.05786, 2026 (preprint; not read in full)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is in banking:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Random or TPE search with early stopping on boosted trees</b></td><td>A fixed trial budget, forward-in-time validation, pruning of weak trials, every trial logged.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Held-out final test, touched once</b></td><td>Required by most model-risk standards for the headline performance number.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Nested cross-validation</b></td><td>Used for small-data comparisons and research, rarely for nightly production tuning because of cost.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Grid search with a few knobs</b></td><td>Still common for logistic regression regularisation and scorecards where explainability fixes most of the structure.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Naive Bayes, linear SVM as text baselines</b></td><td>Quick baselines that a heavier model must beat. Production use is rarer, but common in prototypes.</td><td><span class="status inf">Reported</span></td></tr>
+            <tr><td><b>LLM agents proposing hyperparameters or code</b></td><td>AutoML-style assistants in notebooks. Useful for starting points; the validation protocol must still be fixed by a human.</td><td><span class="status prop">Proposed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Use random or TPE search with pruning on a fixed budget, evaluate forward in time on a metric that matches the decision, keep a test set nothing has seen, and spend your real effort on data and features, where the gains are bigger.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These appear in human and AI-generated notebooks alike. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Tuning on the test set</div><p>"I tried a few settings and kept the best test score." The test number is now a validation number and optimistic.</p><div class="spot"><b>Spot it</b>Ask how many times the test set was scored. More than once, or ever before the model was frozen, is a problem.</div></li>
+        <li><div class="t">Reporting the best validation score as performance</div><p>The search's best cross-validation score is quoted as the expected live result.</p><div class="spot"><b>Spot it</b>Ask for the score on a separate, later test period. A gap larger than the interval means selection effects.</div></li>
+        <li><div class="t">Grid search over many knobs</div><p>Five values on six knobs is 15,625 runs, and still only five learning rates.</p><div class="spot"><b>Spot it</b>Count the grid. If trials exceed a few hundred and only a handful of distinct values per knob, switch to random.</div></li>
+        <li><div class="t">Preprocessing fitted on all the data</div><p>Scaler, encoder or feature selection fitted before cross-validation. Tuning rewards the leak.</p><div class="spot"><b>Spot it</b>Look for a pipeline object. Fit calls outside the cross-validation loop are the giveaway.</div></li>
+        <li><div class="t">Random folds on temporal data</div><p>The tuned model looks great, then underperforms in its first live quarter.</p><div class="spot"><b>Spot it</b>Check the CV splitter. For time-dependent problems it should be forward-in-time or grouped.</div></li>
+        <li><div class="t">Chasing differences smaller than the noise</div><p>Two hundred trials to move validation AUC from 0.912 to 0.914.</p><div class="spot"><b>Spot it</b>Compare the gain with the fold-to-fold standard deviation. Inside it, stop and pick the simpler model.</div></li>
+        <li><div class="t">Unscaled features in k-NN or an SVM</div><p>Income in AED drowns out age, tenure and counts.</p><div class="spot"><b>Spot it</b>Print feature ranges. If they differ by orders of magnitude and no scaler is in the pipeline, the distance is meaningless.</div></li>
+        <li><div class="t">Trusting naive Bayes or SVM scores as probabilities</div><p>A score of 0.99 from naive Bayes is not a 99% chance. SVM margins are not probabilities at all.</p><div class="spot"><b>Spot it</b>Plot a calibration curve on held-out data (F7). If the curve is far from diagonal, recalibrate before using it as a number.</div></li>
+        <li><div class="t">An unlogged, unrepeatable search</div><p>"We tuned it" with no record of the space, the seed or the trial count.</p><div class="spot"><b>Spot it</b>Ask for the search space, the budget, the seed and the trial log. If they cannot be produced, the result cannot be reviewed.</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“We fix the amount of tuning in advance, say sixty trials, because beyond that we mostly find noise. The number we show you comes from a later period of data that the tuning never saw, so it is what you should expect in production, not the best of sixty tries. If a simpler setting is within the margin of error of the best one, we take the simpler one.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“Random or TPE search with a fixed budget and pruning, log-scaled ranges for rates and regularisation, scoring on precision at review capacity with a forward-in-time splitter, with all preprocessing inside the pipeline. The final test period is touched once, after freezing. Because the best validation score is biased upward, I report the test score, and where data is small I use nested cross-validation to estimate the whole procedure. All trials, seeds and the search space go into the experiment log.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“Why not just do a grid search? It's exhaustive.”</summary><div class="ans"><p>It is exhaustive over a design that wastes trials. Usually one or two knobs drive the score, and a grid tests few distinct values of them. With the same number of runs, random search tests every value anew, so it is more likely to land near the best of the important knob (Bergstra and Bengio, 2012). A grid is fine for one or two knobs where you want a clean picture.</p></div></details>
+        <details class="reveal"><summary>“When is Bayesian optimisation worth the trouble?”</summary><div class="ans"><p>When trials are expensive, such as hours per run, the space has a few continuous knobs, and the budget is tens of trials rather than hundreds. When training takes a minute, plenty of random trials with early stopping is simpler and often as good. With noisy scores it can chase noise, so I still check the gain against the fold spread.</p></div></details>
+        <details class="reveal"><summary>“Our tuned model scored 0.93 AUC in validation and 0.89 in the final test. Which is right?”</summary><div class="ans"><p>The test figure. The validation score was the maximum over many tries, so it carries selection bias, and the gap is typical of it. If the test period is also later in time, some of the drop may be drift. I would report 0.89 with an interval and use the gap as a measure of how much we over-tuned.</p></div></details>
+        <details class="reveal"><summary>“Does anybody still use k-NN, SVMs or naive Bayes?”</summary><div class="ans"><p>Yes, in specific places. k-NN is the idea behind retrieval and look-alike search, with approximate indexes. SVMs suit small to medium, high-dimensional data. Naive Bayes is a quick, strong text baseline when labels are scarce. For large tabular banking data, gradient-boosted trees are usually the better starting point, but these three show what each assumption buys.</p></div></details>
+        <details class="reveal"><summary>“Why is naive Bayes called naive, and why does it work?”</summary><div class="ans"><p>It assumes features are independent given the class, which is rarely true. The assumption makes the model simple, fast and robust with little data. It often ranks cases correctly even when its probabilities are overconfident, because the errors from double counting tend to push scores the same way. So use it to rank, and recalibrate if you need real probabilities.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. You have a budget of 25 trials and 3 hyperparameters. How many distinct values of the most important one does a grid test, and how many does random search?</summary><div class="ans"><p>A grid with an equal number per knob gets about the cube root of 25, so 2 values per knob (8 runs) or 3 (27 runs, over budget); say 2. Random search tests 25 distinct values.</p></div></details>
+        <details class="reveal"><summary>2. Why sample the learning rate on a log scale?</summary><div class="ans"><p>The effect of the rate depends on its order of magnitude: the difference between 0.001 and 0.01 matters as much as between 0.01 and 0.1. A uniform draw over 0.001–0.3 would put 90% of trials above 0.03 and almost none in the low range.</p></div></details>
+        <details class="reveal"><summary>3. Twenty identical models, each scored on 100 frauds with a true recall of 80%. About how high will the best score read?</summary><div class="ans"><p>Standard error is √(0.8×0.2/100) = 4 points. The expected maximum of 20 normal draws is about 1.87 standard errors, so the best reads about 87.5%, though every model is really at 80%.</p></div></details>
+        <details class="reveal"><summary>4. What does the expected-improvement acquisition do that "pick the point with the best predicted score" would not?</summary><div class="ans"><p>It also rewards uncertainty. A point with a mediocre prediction but a very uncertain surrogate might hide a big improvement; EI values that chance. Picking the best prediction only would keep sampling near known points and never explore.</p></div></details>
+        <details class="reveal"><summary>5. What is the difference between validation data and test data in a tuning workflow?</summary><div class="ans"><p>Validation data is used repeatedly to choose settings, so its best score is optimistic. Test data is used once, after the choices are frozen, to report an unbiased estimate. If you use test results to change anything, it becomes validation data.</p></div></details>
+        <details class="reveal"><summary>6. A k-NN model has 100% accuracy on its training data and 71% on new data at k = 1. What would raising k do, and why?</summary><div class="ans"><p>Training accuracy would drop, and new-data accuracy would typically rise at first. At k = 1 each training point is its own nearest neighbour, so the model memorises noise. Averaging over more neighbours smooths the boundary (less variance, more bias) until it oversmooths.</p></div></details>
+        <details class="reveal"><summary>7. You feed age (years) and income (AED) unscaled into an SVM with an RBF kernel. What goes wrong?</summary><div class="ans"><p>The kernel uses distance, which income dominates, so age is effectively ignored and γ is effectively set by the income scale. Standardise both inside a pipeline fitted on training folds only.</p></div></details>
+        <details class="reveal"><summary>8. When would you pick naive Bayes over logistic regression?</summary><div class="ans"><p>With very little labelled data, a need for a fast baseline or incremental updates, and text counts as features. With more data, logistic regression usually wins and gives better probabilities.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>J. Bergstra, Y. Bengio. <a href="https://jmlr.org/papers/v13/bergstra12a.html">Random Search for Hyper-Parameter Optimization</a>. JMLR, 2012.</li>
+        <li>J. Snoek, H. Larochelle, R. Adams. <a href="https://arxiv.org/abs/1206.2944">Practical Bayesian Optimization of Machine Learning Algorithms</a>. NeurIPS, 2012.</li>
+        <li>J. Bergstra, R. Bardenet, Y. Bengio, B. Kégl. Algorithms for Hyper-Parameter Optimization. NeurIPS, 2011 (TPE).</li>
+        <li>L. Li, K. Jamieson, G. DeSalvo, A. Rostamizadeh, A. Talwalkar. <a href="https://arxiv.org/abs/1603.06560">Hyperband: A Novel Bandit-Based Approach to Hyperparameter Optimization</a>. JMLR, 2018.</li>
+        <li>S. Falkner, A. Klein, F. Hutter. <a href="https://arxiv.org/abs/1807.01774">BOHB: Robust and Efficient Hyperparameter Optimization at Scale</a>. ICML, 2018.</li>
+        <li>T. Akiba et al. <a href="https://arxiv.org/abs/1907.10902">Optuna: A Next-generation Hyperparameter Optimization Framework</a>. KDD, 2019.</li>
+        <li>G. Cawley, N. Talbot. <a href="https://jmlr.org/papers/v11/cawley10a.html">On Over-fitting in Model Selection and Subsequent Selection Bias in Performance Evaluation</a>. JMLR, 2010.</li>
+        <li>L. Grinsztajn, E. Oyallon, G. Varoquaux. <a href="https://arxiv.org/abs/2207.08815">Why do tree-based models still outperform deep learning on tabular data?</a> NeurIPS Datasets and Benchmarks, 2022.</li>
+        <li>B. Kégl. <a href="https://arxiv.org/abs/2311.15854">A systematic study comparing hyperparameter optimization engines on tabular data</a>. arXiv, 2023.</li>
+        <li><a href="https://arxiv.org/abs/2602.05786">Hyperparameter optimisation for gradient boosting comparison</a>. arXiv 2602.05786, 2026 (preprint; not read in full).</li>
+        <li>Preferred Networks. <a href="https://www.preferred.jp/en/news/pr20260907">Rustuna and Optuna v5.0 announcement</a>. 7 September 2026.</li>
+        <li>C. Cortes, V. Vapnik. <a href="https://doi.org/10.1007/BF00994018">Support-vector networks</a>. Machine Learning, 1995.</li>
+        <li>P. Domingos, M. Pazzani. <a href="https://doi.org/10.1023/A:1007413511361">On the Optimality of the Simple Bayesian Classifier under Zero-One Loss</a>. Machine Learning, 1997.</li>
+        <li>K. Beyer, J. Goldstein, R. Ramakrishnan, U. Shaft. When Is "Nearest Neighbor" Meaningful? ICDT, 1999.</li>
+        <li>T. Hastie, R. Tibshirani, J. Friedman. <a href="https://hastie.su.domains/ElemStatLearn/">The Elements of Statistical Learning</a>, chapters 7, 12, 13. Free online.</li>
+        <li><a href="https://scikit-learn.org/stable/modules/grid_search.html">scikit-learn: Tuning the hyper-parameters of an estimator</a>, and <a href="https://optuna.org/">Optuna documentation</a>.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F4: continue with the module's remaining topics</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = 0, v = 0; while (u === 0) u = r(); v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+
+  // =====================================================================
+  // Simulation 1: grid versus random
+  // =====================================================================
+  const f1 = (x, y) => 0.20 + 1.6 * (x - 0.37) * (x - 0.37) + 0.05 * (y - 0.5) * (y - 0.5);
+  const S1 = { n: 9, seed: 1 };
+  const gridBox = $("grid-chart");
+  function randSet(n, seed) { const r = rng(seed * 7919 + 13); const a = []; for (let i = 0; i < n; i++) a.push([r(), r()]); return a; }
+  function gridSet(n) { const k = Math.floor(Math.sqrt(n)), a = []; for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) a.push([(i + .5) / k, (j + .5) / k]); return a; }
+  const bestOf = pts => Math.min(...pts.map(p => f1(p[0], p[1])));
+  function renderGrid() {
+    const n = S1.n, g = gridSet(n), r = randSet(n, S1.seed);
+    const W = Math.max(300, Math.min(gridBox.clientWidth, 560)), H = Math.min(300, W * 0.72), m = { l: 44, r: 12, t: 12, b: 38 };
+    const svg = mk(gridBox, W, H, "Grid and random trial positions");
+    const x = L.scale(0, 1, m.l, W - m.r), y = L.scale(0, 1, H - m.b, m.t);
+    [0, 0.5, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, v.toFixed(1), { "text-anchor": "end" }); tx(svg, x(v), H - m.b + 16, v.toFixed(1), { "text-anchor": "middle" }); });
+    L.svg("line", { x1: x(0.37), x2: x(0.37), y1: m.t, y2: H - m.b, class: "cv-opt" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Learning rate (matters a lot, scaled 0 to 1)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Second knob", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    g.forEach(p => L.svg("circle", { cx: x(p[0]), cy: y(p[1]) - 3, r: 5, class: "pt-g" }, svg));
+    r.forEach(p => L.svg("circle", { cx: x(p[0]), cy: y(p[1]) + 3, r: 4.5, class: "pt-r" }, svg));
+    const ge = bestOf(g), re = bestOf(r);
+    let sum = 0; for (let s = 1; s <= 400; s++) sum += bestOf(randSet(n, 1000 + s));
+    const avg = sum / 400, opt = 0.20;
+    $("st1-gk").textContent = Math.floor(Math.sqrt(n));
+    $("st1-rk").textContent = n;
+    $("st1-ge").textContent = pct(ge, 2); $("st1-ge-s").textContent = "+" + ((ge - opt) * 100).toFixed(2) + " points over best possible";
+    $("st1-re").textContent = pct(re, 2); $("st1-re-s").textContent = "+" + ((re - opt) * 100).toFixed(2) + " points; average draw " + pct(avg, 2);
+    cls($("st1-ge").parentNode, ge > avg + 0.002 ? "bad" : "ok");
+    $("s1-verdict").innerHTML = "With <b>" + n + "</b> trials the grid reaches <b>" + pct(ge, 2) + "</b> and random search averages <b>" + pct(avg, 2) + "</b> (best possible 20.00%). " + (ge > avg ? "Random is ahead by " + ((ge - avg) * 100).toFixed(2) + " points on average, because it tried " + n + " learning rates against " + Math.floor(Math.sqrt(n)) + "." : "At this budget the grid happens to land close to the optimum; change the budget and it will not.");
+  }
+  L.bind("s-n", v => String(v), v => { S1.n = v; renderGrid(); });
+  $("b-draw").addEventListener("click", () => { S1.seed++; renderGrid(); });
+
+  // =====================================================================
+  // Simulation 2: Bayesian optimisation
+  // =====================================================================
+  const f2 = x => 0.30 - 0.10 * Math.exp(-Math.pow((x - 0.25) / 0.12, 2)) - 0.16 * Math.exp(-Math.pow((x - 0.74) / 0.07, 2)) + 0.03 * Math.sin(12 * x);
+  const NG = 160, XS = []; for (let i = 0; i < NG; i++) XS.push(i / (NG - 1));
+  let fmin = Infinity; XS.forEach(x => { fmin = Math.min(fmin, f2(x)); });
+  const LEN = 0.1, kern = (a, b) => Math.exp(-0.5 * Math.pow((a - b) / LEN, 2));
+  let TR = [0.1, 0.5, 0.9];
+  const boBox = $("bo-chart");
+  function inv(M) {
+    const n = M.length, A = M.map((r, i) => r.concat(Array.from({ length: n }, (_, j) => (i === j ? 1 : 0))));
+    for (let c = 0; c < n; c++) {
+      let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+      [A[c], A[p]] = [A[p], A[c]];
+      const d = A[c][c]; for (let j = 0; j < 2 * n; j++) A[c][j] /= d;
+      for (let r = 0; r < n; r++) if (r !== c) { const f = A[r][c]; if (f) for (let j = 0; j < 2 * n; j++) A[r][j] -= f * A[c][j]; }
+    }
+    return A.map(r => r.slice(n));
+  }
+  function posterior() {
+    const ys = TR.map(f2), mean = ys.reduce((a, b) => a + b, 0) / ys.length;
+    const sd = Math.sqrt(ys.reduce((a, b) => a + (b - mean) * (b - mean), 0) / ys.length) || 1;
+    const z = ys.map(v => (v - mean) / sd), n = TR.length;
+    const K = TR.map((a, i) => TR.map((b, j) => kern(a, b) + (i === j ? 1e-6 : 0)));
+    const Ki = inv(K), Kz = Ki.map(r => r.reduce((s, v, j) => s + v * z[j], 0));
+    const mu = [], sg = [];
+    XS.forEach(x => {
+      const k = TR.map(t => kern(x, t));
+      const m = k.reduce((s, v, i) => s + v * Kz[i], 0);
+      let q = 0; for (let i = 0; i < n; i++) { let t = 0; for (let j = 0; j < n; j++) t += Ki[i][j] * k[j]; q += k[i] * t; }
+      mu.push(m * sd + mean); sg.push(Math.sqrt(Math.max(1e-10, 1 - q)) * sd);
+    });
+    return { mu, sg };
+  }
+  function eiAt(mu, sg, best) { return mu.map((m, i) => { const z = (best - m) / sg[i]; return (best - m) * L.normCdf(z) + sg[i] * L.normPdf(z); }); }
+  const randBest = (() => { const cache = {}; return n => { if (cache[n] !== undefined) return cache[n]; let s = 0; for (let k = 1; k <= 400; k++) { const r = rng(5000 + k); let b = Infinity; for (let i = 0; i < n; i++) b = Math.min(b, f2(r())); s += b; } return (cache[n] = s / 400); }; })();
+  function boStep() {
+    const { mu, sg } = posterior(), best = Math.min(...TR.map(f2)), ei = eiAt(mu, sg, best);
+    let bi = 0; ei.forEach((v, i) => { if (v > ei[bi]) bi = i; });
+    const nx = XS[bi]; if (TR.some(t => Math.abs(t - nx) < 1e-3)) { TR.push(Math.min(1, Math.max(0, nx + 0.012))); } else TR.push(nx);
+  }
+  function renderBo() {
+    const { mu, sg } = posterior(), best = Math.min(...TR.map(f2)), ei = eiAt(mu, sg, best), eiMax = Math.max(...ei, 1e-9);
+    const W = Math.max(300, boBox.clientWidth), H = 320, m = { l: 44, r: 12, t: 12, b: 34 }, split = 220;
+    const svg = mk(boBox, W, H, "Gaussian process surrogate and expected improvement");
+    const x = L.scale(0, 1, m.l, W - m.r), y = L.scale(0.05, 0.40, split, m.t), ye = L.scale(0, 1, H - m.b, split + 18);
+    [0.1, 0.2, 0.3, 0.4].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100).toFixed(0) + "%", { "text-anchor": "end" }); });
+    const up = XS.map((xx, i) => [x(xx), y(Math.min(0.4, mu[i] + 2 * sg[i]))]), dn = XS.map((xx, i) => [x(xx), y(Math.max(0.05, mu[i] - 2 * sg[i]))]).reverse();
+    L.svg("path", { d: L.path(up.concat(dn)) + " Z", class: "band" }, svg);
+    L.svg("path", { d: L.path(XS.map(xx => [x(xx), y(f2(xx))])), class: "cv-true" }, svg);
+    L.svg("path", { d: L.path(XS.map((xx, i) => [x(xx), y(Math.min(0.4, Math.max(0.05, mu[i])))])), class: "cv-mean" }, svg);
+    TR.forEach((t, i) => L.svg("circle", { cx: x(t), cy: y(f2(t)), r: i < 3 ? 4.5 : 5.5, class: i < 3 ? "pt-g" : "pt-b" }, svg));
+    const bt = TR.reduce((a, b) => (f2(b) < f2(a) ? b : a));
+    L.svg("circle", { cx: x(bt), cy: y(f2(bt)), r: 9, class: "pt-best" }, svg);
+    tx(svg, 12, (m.t + split) / 2, "Validation error", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + split) / 2})` });
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: ye(0), y2: ye(0), class: "grid" }, svg);
+    L.svg("path", { d: L.path(XS.map((xx, i) => [x(xx), ye(ei[i] / eiMax)])), class: "cv-ei" }, svg);
+    tx(svg, m.l, split + 14, "Expected improvement (relative)", { class: "lbl-warn" });
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Hyperparameter value (scaled 0 to 1)", { "text-anchor": "middle" });
+    const n = TR.length, rb = randBest(n), bb = f2(bt), gap = bb - fmin;
+    $("st2-n").textContent = n; $("st2-best").textContent = pct(bb, 2); $("st2-best-s").textContent = "at " + bt.toFixed(2);
+    $("st2-rand").textContent = pct(rb, 2);
+    $("st2-gap").textContent = (gap * 100).toFixed(2) + " pts"; $("st2-gap-s").textContent = "true minimum " + pct(fmin, 2);
+    cls($("st2-gap-b"), gap < 0.004 ? "ok" : "warn");
+    $("s2-verdict").innerHTML = n <= 3 ? "Three starting points. The surrogate is wide open, so expected improvement is spread out. Run a trial." :
+      "After <b>" + n + "</b> trials the search has <b>" + pct(bb, 2) + "</b>, " + (bb < rb - 1e-4 ? "<b>" + ((rb - bb) * 100).toFixed(2) + " points better</b> than the average random search with the same budget." : (bb > rb + 1e-4 ? "<b>" + ((bb - rb) * 100).toFixed(2) + " points worse</b> than the average random search so far: Bayesian search can be unlucky early, especially with narrow dips." : "about level with random search.")) + " Gap to the true minimum: " + (gap * 100).toFixed(2) + " points.";
+  }
+  $("b-bo").addEventListener("click", () => { boStep(); renderBo(); });
+  $("b-bo5").addEventListener("click", () => { for (let i = 0; i < 5; i++) boStep(); renderBo(); });
+  $("b-bo-reset").addEventListener("click", () => { TR = [0.1, 0.5, 0.9]; renderBo(); });
+
+  // =====================================================================
+  // Simulation 3: optimism of the winner
+  // =====================================================================
+  const S3 = { k: 1.3, nf: 2, sp: 0.5 };
+  const optBox = $("opt-chart");
+  const EM = (() => { const cache = {}; return K => { const key = K.toFixed(3); if (cache[key] !== undefined) return cache[key]; let s = 0; const h = 0.02; for (let z = -7; z <= 9; z += h) { const ph = L.normCdf(z); if (ph <= 0) continue; s += z * K * L.normPdf(z) * Math.exp((K - 1) * Math.log(ph)) * h; } return (cache[key] = K <= 1.0001 ? 0 : s); }; })();
+  function winner(K, n, spPts) {
+    const se = Math.sqrt(0.8 * 0.2 / n), s = spPts / 100, sdt = Math.sqrt(s * s + se * se), m = EM(K);
+    return { se, rep: 0.8 + sdt * m, tru: 0.8 + (s * s / sdt) * m };
+  }
+  function renderOpt() {
+    const K = Math.max(1, Math.round(Math.pow(10, S3.k))), n = Math.round(Math.pow(10, S3.nf)), w = winner(K, n, S3.sp);
+    const W = Math.max(300, optBox.clientWidth), H = 250, m = { l: 46, r: 12, t: 14, b: 40 };
+    const svg = mk(optBox, W, H, "Reported and true recall of the winner against number of configurations");
+    const x = L.scale(0, 3, m.l, W - m.r), y = L.scale(0.78, 1.0, H - m.b, m.t);
+    [0.8, 0.85, 0.9, 0.95, 1].forEach(v => { L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg); tx(svg, m.l - 6, y(v) + 4, (v * 100).toFixed(0) + "%", { "text-anchor": "end" }); });
+    [[0, "1"], [1, "10"], [2, "100"], [3, "1,000"]].forEach(([v, s]) => tx(svg, x(v), H - m.b + 16, s, { "text-anchor": "middle" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Configurations tried", { "text-anchor": "middle" });
+    const cl = v => Math.min(1, v), ra = [], ta = [];
+    for (let e = 0; e <= 3.0001; e += 0.1) { const ww = winner(Math.max(1, Math.pow(10, e)), n, S3.sp); ra.push([x(e), y(cl(ww.rep))]); ta.push([x(e), y(cl(ww.tru))]); }
+    L.svg("line", { x1: m.l, x2: W - m.r, y1: y(0.8), y2: y(0.8), class: "cv-true" }, svg);
+    L.svg("path", { d: L.path(ra), class: "cv-line bad" }, svg);
+    L.svg("path", { d: L.path(ta), class: "cv-line soft" }, svg);
+    L.svg("circle", { cx: x(Math.log10(K)), cy: y(cl(w.rep)), r: 6, class: "cv-now", style: "fill:var(--bad);stroke:var(--surface);stroke-width:2" }, svg);
+    L.svg("circle", { cx: x(Math.log10(K)), cy: y(cl(w.tru)), r: 6, style: "fill:var(--accent);stroke:var(--surface);stroke-width:2" }, svg);
+    $("st3-rep").textContent = pct(Math.min(1, w.rep), 1); cls($("st3-rep-b"), w.rep - w.tru > 0.03 ? "bad" : "warn");
+    $("st3-true").textContent = pct(w.tru, 1);
+    $("st3-opt").textContent = ((w.rep - w.tru) * 100).toFixed(1); cls($("st3-opt-b"), w.rep - w.tru > 0.03 ? "bad" : "ok");
+    $("st3-se").textContent = (w.se * 100).toFixed(1) + " pts";
+    $("s3-verdict").innerHTML = K === 1 ? "One configuration: nothing was selected, so the score is an honest (if noisy, ±" + (2 * w.se * 100).toFixed(1) + " points) estimate." :
+      "Of <b>" + L.fmtInt(K) + "</b> configurations, the best reads <b>" + pct(Math.min(1, w.rep), 1) + "</b> on the tuning data but should score about <b>" + pct(w.tru, 1) + "</b> on fresh data: <b>" + ((w.rep - w.tru) * 100).toFixed(1) + " points</b> of luck. " + (S3.sp < 0.15 ? "The configurations are truly identical, so the whole gain above 80% is noise." : "Noise is " + (w.se * 100 / S3.sp).toFixed(1) + " times the real spread.");
+  }
+  L.bind("s-k", v => L.fmtInt(Math.max(1, Math.round(Math.pow(10, v)))), v => { S3.k = v; renderOpt(); });
+  L.bind("s-nf", v => L.fmtInt(Math.round(Math.pow(10, v))), v => { S3.nf = v; renderOpt(); });
+  L.bind("s-sp", v => v.toFixed(1) + " pts", v => { S3.sp = v; renderOpt(); });
+
+  // =====================================================================
+  // Simulation 4: k-NN
+  // =====================================================================
+  const NT = 120, NE = 600;
+  function makeData(n, seed) { const r = rng(seed), a = []; for (let i = 0; i < n; i++) { const age = L.clamp(40 + 10 * gauss(r), 21, 65), inc = L.clamp(20000 + 8000 * gauss(r), 4000, 46000); const z = -(age - 40) / 10 - (inc - 20000) / 8000 + 0.9 * gauss(r); a.push({ a: age, i: inc, y: z > 0.6 ? 1 : 0 }); } return a; }
+  const TRN = makeData(NT, 11), TST = makeData(NE, 12);
+  const AMIN = 21, AMAX = 65, IMIN = 4000, IMAX = 46000;
+  const mA = TRN.reduce((s, p) => s + p.a, 0) / NT, mI = TRN.reduce((s, p) => s + p.i, 0) / NT;
+  const sA = Math.sqrt(TRN.reduce((s, p) => s + (p.a - mA) * (p.a - mA), 0) / NT), sI = Math.sqrt(TRN.reduce((s, p) => s + (p.i - mI) * (p.i - mI), 0) / NT);
+  const KMAX = 60;
+  function neigh(qa, qi, scaled, self) {
+    const d = TRN.map((p, j) => { const da = scaled ? (p.a - qa) / sA : p.a - qa, di = scaled ? (p.i - qi) / sI : p.i - qi; return [da * da + di * di, j]; });
+    d.sort((u, v) => u[0] - v[0]);
+    const cum = new Int16Array(KMAX + 1); let c = 0; for (let k = 1; k <= KMAX; k++) { c += TRN[d[k - 1][1]].y; cum[k] = c; } return cum;
+  }
+  const NC = 44, NR = 30, CACHE = {};
+  function build(scaled) {
+    if (CACHE[scaled]) return CACHE[scaled];
+    const tr = TRN.map(p => neigh(p.a, p.i, scaled)), te = TST.map(p => neigh(p.a, p.i, scaled)), cells = [];
+    for (let r = 0; r < NR; r++) for (let c = 0; c < NC; c++) cells.push(neigh(AMIN + (AMAX - AMIN) * (c + 0.5) / NC, IMIN + (IMAX - IMIN) * (r + 0.5) / NR, scaled));
+    const acc = (set, pts, k) => { let ok = 0; set.forEach((cum, i) => { if ((cum[k] * 2 > k ? 1 : 0) === pts[i].y) ok++; }); return ok / pts.length; };
+    const trA = [], teA = []; for (let k = 1; k <= KMAX; k++) { trA[k] = acc(tr, TRN, k); teA[k] = acc(te, TST, k); }
+    return (CACHE[scaled] = { cells, trA, teA });
+  }
+  const S4 = { k: 5, sc: false };
+  const knnBox = $("knn-chart"), crvBox = $("knn-curve");
+  function renderKnn() {
+    const D = build(S4.sc), k = S4.k;
+    const W = Math.max(300, knnBox.clientWidth), H = 280, m = { l: 56, r: 10, t: 10, b: 38 };
+    const svg = mk(knnBox, W, H, "k-NN decision regions on age and income");
+    const x = L.scale(AMIN, AMAX, m.l, W - m.r), y = L.scale(IMIN, IMAX, H - m.b, m.t);
+    const cw = (W - m.r - m.l) / NC, ch = (H - m.b - m.t) / NR;
+    D.cells.forEach((cum, i) => { const r = Math.floor(i / NC), c = i % NC, cl = cum[k] * 2 > k ? 1 : 0; L.svg("rect", { x: m.l + c * cw, y: H - m.b - (r + 1) * ch, width: cw + 0.5, height: ch + 0.5, class: "reg" + cl }, svg); });
+    TRN.forEach(p => L.svg("circle", { cx: x(p.a), cy: y(p.i), r: 3.6, class: "dot" + p.y }, svg));
+    [25, 40, 55].forEach(v => tx(svg, x(v), H - m.b + 16, String(v), { "text-anchor": "middle" }));
+    [10000, 20000, 30000, 40000].forEach(v => tx(svg, m.l - 6, y(v) + 4, (v / 1000) + "k", { "text-anchor": "end" }));
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Age (years)", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Monthly income (AED)", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    // curve
+    const W2 = W, H2 = 170, m2 = { l: 56, r: 10, t: 10, b: 30 };
+    const s2 = mk(crvBox, W2, H2, "Training and new-loan accuracy against k");
+    const xk = L.scale(1, KMAX, m2.l, W2 - m2.r), ya = L.scale(0.5, 1, H2 - m2.b, m2.t);
+    [0.5, 0.6, 0.7, 0.8, 0.9, 1].forEach(v => { L.svg("line", { x1: m2.l, x2: W2 - m2.r, y1: ya(v), y2: ya(v), class: "grid" }, s2); tx(s2, m2.l - 6, ya(v) + 4, (v * 100).toFixed(0) + "%", { "text-anchor": "end" }); });
+    [1, 10, 20, 30, 40, 50, 60].forEach(v => tx(s2, xk(v), H2 - m2.b + 15, String(v), { "text-anchor": "middle" }));
+    tx(s2, (m2.l + W2 - m2.r) / 2, H2 - 3, "k", { "text-anchor": "middle" });
+    const pp = a => L.path(Array.from({ length: KMAX }, (_, i) => [xk(i + 1), ya(Math.max(0.5, a[i + 1]))]));
+    L.svg("path", { d: pp(D.trA), class: "cv-true" }, s2);
+    L.svg("path", { d: pp(D.teA), class: "cv-line soft" }, s2);
+    L.svg("circle", { cx: xk(k), cy: ya(D.teA[k]), r: 5.5, style: "fill:var(--accent);stroke:var(--surface);stroke-width:2" }, s2);
+    tx(s2, W2 - m2.r - 2, m2.t + 10, "solid: new loans · dashed: training", { "text-anchor": "end", class: "lbl-ink" });
+    let bk = 1; for (let i = 1; i <= KMAX; i++) if (D.teA[i] > D.teA[bk] + 1e-9) bk = i;
+    $("st4-tr").textContent = pct(D.trA[k], 0); $("st4-te").textContent = pct(D.teA[k], 1);
+    cls($("st4-te-b"), D.teA[k] > D.teA[bk] - 0.012 ? "ok" : "warn");
+    $("st4-bk").textContent = bk; $("st4-bk-s").textContent = "gives " + pct(D.teA[bk], 1);
+    $("s4-verdict").innerHTML = (S4.sc ? "Features standardised: both age and income shape the distance. " : "<b>Not scaled</b>: income varies by thousands, age by tens, so distance is almost all income and the regions are vertical bands. ") +
+      "At k = " + k + ", training accuracy is <b>" + pct(D.trA[k], 0) + "</b> and new-loan accuracy <b>" + pct(D.teA[k], 1) + "</b>" + (k === 1 ? ": every training loan is its own neighbour, so training accuracy says nothing." : (D.trA[k] - D.teA[k] > 0.1 ? ": a wide gap, the model is fitting noise." : ".")) + " Best k on new loans for this setting: " + bk + ". (Choosing k by the new loans is itself tuning on the test set; in real work you choose on validation data.)";
+  }
+  L.bind("s-kk", v => String(v), v => { S4.k = v; renderKnn(); });
+  $("b-scale").addEventListener("click", e => { S4.sc = !S4.sc; e.currentTarget.setAttribute("aria-pressed", String(S4.sc)); renderKnn(); });
+
+  function renderAll() { renderGrid(); renderBo(); renderOpt(); renderKnn(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 150); });
+})();
+</script>
+</body>
+</html>

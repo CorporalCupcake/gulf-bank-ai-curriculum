@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Learning Without Labels, and Generating the Data That Isn't There</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..800;1,400..800&family=Atkinson+Hyperlegible+Mono:wght@400..600&display=swap">
+<script src="../assets/catalog.js"></script>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .lbl-ink { fill: var(--ink) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-strong { fill: var(--ink) !important; font-family: var(--font-display) !important; font-size: 14px !important; font-weight: 600; }
+  .lbl-acc { fill: var(--accent) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .lbl-warn { fill: var(--warn) !important; font-family: var(--font-body) !important; font-size: 12px !important; font-weight: 500; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.dot { height: 10px; width: 10px; border-radius: 50%; }
+  .verdict { font-size: 15px; max-width: var(--measure); padding: 12px 14px; border-radius: 8px; background: var(--sunk); }
+  .verdict b { font-weight: 600; }
+  .verdict ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+  .pt-u { fill: var(--neutral); fill-opacity: .45; }
+  .pt-a { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+  .pt-b { fill: var(--warn); stroke: var(--surface); stroke-width: 1.5; }
+  .ln-sup { stroke: var(--bad); stroke-width: 2.4; fill: none; }
+  .ln-ssl { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  .bar-n { fill: var(--neutral); fill-opacity: .7; }
+  .bar-f { fill: var(--bad); }
+  .bar-p { fill: var(--accent); }
+  .gp { fill: var(--ink); fill-opacity: .55; }
+  .gp.far { fill: var(--bad); fill-opacity: .6; }
+  .gc { fill: none; stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  @media (max-width: 480px) { .formula { padding: 14px 12px; } .formula math { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="crumbs">
+    <a href="../index.html">← Gulf Bank AI Curriculum</a>
+    <span>Track F · Foundations</span>
+    <span>Module F5 · Deep learning</span>
+  </div>
+
+  <nav class="rail" aria-label="Contents">
+    <div class="label">Contents</div>
+    <ol></ol>
+  </nav>
+
+  <main>
+    <header class="lesson-head">
+      <div class="meta">
+        <span>F5.7 · F5.8</span>
+        <span class="pill n">90 days</span>
+        <span>About 45 minutes</span>
+      </div>
+      <h1>Learning Without Labels, and Generating the Data That Isn't There</h1>
+      <p class="dek">How a model learns what "normal" looks like from data nobody has labelled, why contrastive learning works and where it quietly misleads, and how VAEs, GANs and diffusion models create images, text-like data and synthetic records, with a clear view of what each is good for in a bank.</p>
+    </header>
+
+    <div class="mobile-toc">
+      <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
+    </div>
+
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Labels are scarce and expensive but the data itself is abundant, so you invent a task whose answer is hidden inside the data (fill in the gap, tell two views of the same thing from different things) and the representation learned along the way does most of the work for the real task; generative models go one step further and learn the whole distribution well enough to sample from it, which is useful for synthetic data and dangerous for identity.</p>
+
+    <!-- ============================== 1. INTUITION ============================== -->
+    <section class="part" id="intuition">
+      <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
+      <div class="prose">
+        <p>A Gulf bank holds eight years of card transactions for several million customers: billions of rows. It holds a few thousand <em>confirmed</em> fraud cases, a few hundred confirmed money-laundering cases, and a few tens of thousands of complaints a human has tagged by topic. The data is huge. The labels are tiny, slow and expensive, because a person with a fraud-investigator's salary had to look at each one.</p>
+        <p>Self-supervised learning starts from one observation: <strong>the raw data already contains a lot of supervision, if you hide part of it</strong>. Cover a word in a sentence and ask the model to guess it. Hide the amount of a transaction and ask for it back from the merchant, time and the customer's last twenty purchases. Show a model two crops of one cheque image and ask it to say they came from the same cheque. Nobody labelled anything, yet to do these tasks well the model must learn what spending looks like, what Arabic grammar looks like, what a cheque looks like. That knowledge is the <strong>representation</strong>, and it is what you keep. The made-up task (the <em>pretext task</em>) is scaffolding you throw away.</p>
+        <p>Then you attach the real, label-hungry task (this is fraud, this is a salary credit) to the representation. It now needs only a handful of labels, because most of the learning is already done. The simulation shows the effect in the smallest possible setting.</p>
+      </div>
+
+      <figure class="figure" id="fig-ssl">
+        <div class="fig-head"><span class="fig-title">Few labels, lots of unlabelled data</span><span class="fig-tag">Simulation 1 of 3</span></div>
+        <p class="try"><b>Try:</b> start with 2 labelled customers. The red line (a rule learned from the labels alone) is badly tilted; the blue line (found by letting the 400 unlabelled points reveal two groups, then using the labels only to name them) sits in the gap. Add labels and the red catches up. Now push the groups together (low separation) and see the blue line stop helping: the structure in the unlabelled data must line up with the task.</p>
+        <div class="chart-wrap" id="ssl-chart"></div>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--neutral);opacity:.6"></i>Unlabelled customers</span>
+          <span><i class="dot" style="background:var(--accent)"></i>Labelled: type A</span>
+          <span><i class="dot" style="background:var(--warn)"></i>Labelled: type B</span>
+          <span><i style="background:var(--bad)"></i>Rule from labels only</span>
+          <span><i style="background:var(--accent)"></i>Rule using unlabelled structure</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-nl">Labelled examples (in total) <output for="s-nl"></output></label><input type="range" id="s-nl" min="2" max="40" step="2" value="2"></div>
+          <div class="ctl"><label for="s-sep">Separation between the two groups <output for="s-sep"></output></label><input type="range" id="s-sep" min="1" max="5" step="0.1" value="3"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st1-sup-b"><div class="k">Accuracy, labels only</div><div class="v" id="st1-sup"></div><div class="s">average of 120 repeats</div></div>
+          <div class="stat" id="st1-ssl-b"><div class="k">Accuracy, using unlabelled structure</div><div class="v" id="st1-ssl"></div><div class="s">same labels, plus 400 unlabelled</div></div>
+          <div class="stat"><div class="k">Best any rule could do</div><div class="v" id="st1-cap"></div><div class="s">if the group centres were known</div></div>
+        </div>
+        <p class="verdict" id="s1-verdict"></p>
+        <p class="sim-note">Simulated: two round groups of customers (standard deviation 1 on both axes) whose centres are the chosen distance apart. "Labels only" classifies by the nearer of the two labelled-group averages. "Unlabelled structure" runs 2-means clustering on all 400 unlabelled points, then uses the labelled points only to decide which cluster is which. Accuracy is measured on 400 fresh points, averaged over 120 repeats with the same random numbers at every slider position. The ceiling is the exact Bayes accuracy Φ(separation ÷ 2). This is clustering, the simplest cousin of self-supervised learning; deep methods learn a far richer structure than two blobs.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Three ideas to hold, then we turn to the second half of the lesson.</p>
+        <ul>
+          <li><strong>The representation is the product.</strong> A good one puts similar things close together and lets a simple model on top do the final job. This is the vector geometry of F1.1, learned instead of designed.</li>
+          <li><strong>The pretext task decides what the representation ignores.</strong> If the task is "same cheque, different crop", the model learns to ignore crop position and keep ink and layout. If the task is "same customer, different month", it learns habits and ignores which month it is. Choosing the task is choosing the invariances.</li>
+          <li><strong>Generative models are the ambitious version.</strong> Instead of learning features that separate things, they learn the distribution well enough to produce new samples: new images, new synthetic customers, new noise-free versions of a corrupted input. That brings power (data that does not exist yet) and risk (data that looks real and isn't, or that leaks something real).</li>
+        </ul>
+      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Self-supervised learning moves the cost from labelling to <em>designing the pretext task and checking the representation</em>. You still need some labels, to name things and to evaluate. And a representation can only be as good as the structure that the unlabelled data actually carries about your task, which Simulation 1 shows going wrong when the groups overlap.</div>
+    </section>
+
+    <!-- ============================== 2. MECHANICS ============================== -->
+    <section class="part" id="mechanics">
+      <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
+
+      <h3 class="sub" id="m-pretext">Pretext tasks: predict the hidden part</h3>
+      <div class="prose">
+        <p>There are three families of pretext task, and nearly everything in the field is a variation on one of them.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Family</th><th>The hidden answer</th><th>Examples</th><th>Banking version</th></tr></thead>
+          <tbody>
+            <tr><td><b>Predict the next item</b></td><td>The next token, step or frame.</td><td>GPT-style language models, next-token training (M1.2).</td><td>Predict a customer's next transaction (merchant category, amount band, time gap) from the last few hundred.</td></tr>
+            <tr><td><b>Fill in the masked part</b></td><td>Words or patches that were blanked out.</td><td>BERT (15% of tokens masked); masked autoencoders for images (75% of patches masked).</td><td>Mask a few fields of a transaction or a whole week and reconstruct them. Mask words of a complaint in Arabic or English.</td></tr>
+            <tr><td><b>Tell views apart</b></td><td>Which pieces came from the same source.</td><td>SimCLR, MoCo, CLIP (image with its caption), DINO.</td><td>Two windows of the same customer's behaviour; a scanned invoice and its extracted text; a call recording and its transcript.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The first two are <strong>generative</strong> pretext tasks: the model has to reproduce the missing data itself, pixel for pixel or token for token. The third is <strong>discriminative</strong>: the model only has to decide, never to reproduce. That difference is the subject of the next section, and it comes back in the generative half of the lesson.</p>
+        <p>Why does predicting a masked word teach anything useful? Because to guess a missing word well you need grammar, facts and context. To guess a missing transaction amount you need to know that this customer pays rent on the 1st, that Thursday evenings mean groceries, and that a 5,000 AED electronics purchase abroad is out of character. The cheapest way for a network to get the answer right across billions of examples is to build an internal model of the world in which the data lives. Deep networks (F5.1) have the capacity to do so; the pretext task supplies the pressure.</p>
+        <p>The practical recipe has two stages:</p>
+        <ul>
+          <li><strong>Pretrain</strong> on all the unlabelled data you can get. This is the expensive step and is done once.</li>
+          <li><strong>Adapt</strong> to the real task. Either freeze the representation and train a small model on top with your labels (a <em>linear probe</em>: the cheapest honest test of representation quality), or fine-tune the whole thing at a low learning rate. With a good representation, a few hundred labels can match what thousands used to need.</li>
+        </ul>
+        <p>This is exactly the "pretraining then post-training" pattern of large language models (<a href="m1-pretraining-then-post-training.html">M1.2</a>), seen from the angle of why it works. The label-efficiency curve (accuracy against number of labels, with and without pretraining) is the chart to ask for whenever anyone claims a self-supervised win.</p>
+      </div>
+
+      <h3 class="sub" id="m-contrastive">Contrastive learning and the InfoNCE loss</h3>
+      <div class="prose">
+        <p>Take an <strong>anchor</strong> (one view of something), a <strong>positive</strong> (another view of the same thing) and many <strong>negatives</strong> (views of other things). Train the encoder so that anchor and positive land close together in embedding space and the negatives land far away. "Close" is measured by cosine similarity (F1.1). The standard loss, called InfoNCE or the NT-Xent loss in SimCLR, is a softmax over similarities:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mi>ℒ</mi><mo>=</mo><mo>−</mo><mi>log</mi><mfrac><mrow><mi>exp</mi><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">(</mo><mi>a</mi><mo>,</mo><mi>p</mi><mo stretchy="false">)</mo><mo>/</mo><mi>τ</mi><mo stretchy="false">)</mo></mrow><mrow><mi>exp</mi><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">(</mo><mi>a</mi><mo>,</mo><mi>p</mi><mo stretchy="false">)</mo><mo>/</mo><mi>τ</mi><mo stretchy="false">)</mo><mo>+</mo><munder><mo>∑</mo><mi>j</mi></munder><mi>exp</mi><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">(</mo><mi>a</mi><mo>,</mo><msub><mi>n</mi><mi>j</mi></msub><mo stretchy="false">)</mo><mo>/</mo><mi>τ</mi><mo stretchy="false">)</mo></mrow></mfrac></math>
+        <p class="where"><i>s</i> is the cosine similarity between two embeddings, <i>τ</i> (tau) the temperature, <i>n</i><sub>j</sub> the negatives. Read it as a classification problem: "out of the positive and all the negatives, which one is the true partner of the anchor?", scored with cross-entropy (F1.6). The loss is small when the positive's similarity towers over every negative's. If the model knows nothing, all similarities are equal and the loss is ln(<i>N</i> + 1) for <i>N</i> negatives.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>Two knobs shape everything, and the simulation lets you turn both.</p>
+        <ul>
+          <li><strong>Temperature τ.</strong> Dividing similarities by a small τ sharpens the softmax. With a small τ, a negative that sits almost as close as the positive gets nearly all the repulsive push; easy negatives are ignored. With a large τ the push is spread across all negatives equally. Small τ means a harder, more discriminating, but also more fragile objective.</li>
+          <li><strong>Number of negatives <i>N</i>.</strong> More negatives make the task harder and the representation finer. This is why SimCLR used very large batches, and why MoCo kept a queue of past embeddings as a cheap way to have thousands of negatives. The cost is memory.</li>
+        </ul>
+        <p>A third element is silent but decisive: <strong>augmentation</strong>. The positive pair is made by transforming one input twice (crop, colour jitter, blur for images; token dropping or paraphrase for text; two different time windows for a customer). Whatever the augmentations leave unchanged is what the model learns to keep; whatever they change is what it learns to ignore (F6.2 covers augmentation in general). Choose augmentations that destroy irrelevant information and preserve what the downstream task needs.</p>
+      </div>
+
+      <figure class="figure" id="fig-nce">
+        <div class="fig-head"><span class="fig-title">Who gets pushed away? Temperature and negatives in InfoNCE</span><span class="fig-tag">Simulation 2 of 3</span></div>
+        <p class="try"><b>Try:</b> at τ = 0.5 the push is spread widely; lower τ to 0.05 and nearly all of it lands on the few hardest negatives on the right. Then press the false-negative button: the hardest "negative" is really the same customer's second account, and at low τ the loss pushes it away harder than anything else, damaging the representation. Raise the number of negatives and watch the chance-level loss rise.</p>
+        <div class="btns" role="group" aria-label="False negative">
+          <button class="btn" type="button" id="b-fn" aria-pressed="false">Hardest negative is secretly the same customer</button>
+        </div>
+        <div class="chart-wrap" id="nce-chart"></div>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--neutral);opacity:.8"></i>A negative (height: share of the total push)</span>
+          <span><i class="dot" style="background:var(--bad)"></i>The false negative</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-tau">Temperature τ <output for="s-tau"></output></label><input type="range" id="s-tau" min="-1.3" max="0" step="0.05" value="-1"></div>
+          <div class="ctl"><label for="s-neg">Number of negatives <output for="s-neg"></output></label><input type="range" id="s-neg" min="0.6" max="2.7" step="0.05" value="1.8"></div>
+          <div class="ctl"><label for="s-pos">Similarity of the true partner <output for="s-pos"></output></label><input type="range" id="s-pos" min="0" max="1" step="0.01" value="0.6"></div>
+          <div class="ctl"><label for="s-mneg">Typical similarity of a negative <output for="s-mneg"></output></label><input type="range" id="s-mneg" min="-0.2" max="0.6" step="0.01" value="0.1"></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">Loss</div><div class="v" id="st2-loss"></div><div class="s" id="st2-loss-s"></div></div>
+          <div class="stat"><div class="k">Chance the partner is picked</div><div class="v" id="st2-pp"></div><div class="s">softmax probability of the positive</div></div>
+          <div class="stat" id="st2-top-b"><div class="k">Push taken by hardest 10%</div><div class="v" id="st2-top"></div><div class="s">of all negatives</div></div>
+          <div class="stat" id="st2-fn-b"><div class="k">Push on the false negative</div><div class="v" id="st2-fn"></div><div class="s" id="st2-fn-s"></div></div>
+        </div>
+        <p class="verdict" id="s2-verdict"></p>
+        <p class="sim-note">Simulated: negatives' similarities to the anchor are spread as a normal distribution (standard deviation 0.2) around the chosen typical value, placed at evenly spaced quantiles and capped at 1. The loss and each negative's share of the repulsive gradient are exact: the gradient on a negative's similarity is its softmax probability divided by τ. No network is trained here. In the false-negative case the single hardest negative is given the similarity 0.9.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Notice the hidden issue. The loss assumes everything in the batch except the positive is a true negative. In banking data, that is often false: two accounts of one customer, two complaints about the same incident, two transactions at the same merchant branch, a mule account's near-identical siblings. The loss pushes them apart anyway, and the harder they look the harder it pushes. This is the <strong>false-negative problem</strong>, and the standard fixes are to construct batches so that known relatives never appear as negatives, to use a larger τ, or to use methods with no negatives at all (next section).</p>
+      </div>
+
+      <h3 class="sub" id="m-noncontrastive">Without negatives: collapse, and the tricks that avoid it</h3>
+      <div class="prose">
+        <p>Why do we need negatives? Because without them there is a trivial solution: output the same vector for every input. Then every positive pair is perfectly "close" and the loss is zero. This is <strong>collapse</strong>, and preventing it is the central design problem of the field. Different methods prevent it in different ways:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Method</th><th>How it avoids collapse</th></tr></thead>
+          <tbody>
+            <tr><td><b>SimCLR, MoCo, CLIP</b></td><td>Negatives in the loss. Everything else must be different.</td></tr>
+            <tr><td><b>BYOL, DINO, DINOv2/v3</b></td><td>A student network predicts the output of a slowly updated teacher copy of itself (an exponential moving average). Stop-gradients, centring and sharpening keep the outputs from becoming constant. No explicit negatives.</td></tr>
+            <tr><td><b>Barlow Twins, VICReg</b></td><td>An explicit penalty: keep each embedding dimension's variance above a floor, and decorrelate dimensions, so the vector cannot be constant or redundant.</td></tr>
+            <tr><td><b>Masked autoencoders, BERT</b></td><td>Reconstruction. The target is the data itself, so there is nothing to collapse to.</td></tr>
+            <tr><td><b>JEPA family (I-JEPA, V-JEPA)</b></td><td>Predict the <em>embedding</em> of the hidden region rather than its pixels, with a teacher copy to supply the target. The aim is to predict what matters about the hidden part and skip unpredictable detail.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>The JEPA idea is worth a sentence of intuition, because it is the live debate. If you ask a model to reproduce missing pixels, it spends effort on detail that is unpredictable (the exact texture of a carpet). If you ask it to predict an abstract embedding of the missing region, it can keep what is predictable and drop the rest. Advocates (notably Yann LeCun) argue this is the route to models that understand rather than reproduce. Sceptics point out that reconstruction methods scale well and are simple. As of late 2026, both camps ship strong models (Part 4).</p>
+        <p>Monitoring for collapse is not academic. If you train an embedding model on your own transactions and it quietly collapses to a small subspace, the loss may look fine while every customer looks alike. Check the <strong>effective rank</strong> or the spread of embeddings, and a linear-probe score on a few labels, during training, not only at the end.</p>
+      </div>
+
+      <h3 class="sub" id="m-bank-ssl">What it looks like on bank data</h3>
+      <div class="prose">
+        <p>Most of the published progress is on images and text, but the pattern transfers to the data a bank actually has.</p>
+        <ul>
+          <li><strong>Transaction sequences.</strong> Treat each customer's history as a sentence whose tokens are (merchant category, amount band, time gap, channel). Pretrain with masking or next-event prediction, then fine-tune for fraud, churn or credit. The idea is simple; whether it beats a well-engineered gradient-boosted model with hand-built features (F3.4) is an empirical question, and the answer is "sometimes, mainly when labels are scarce or you have many tasks to serve with one model". The topic has its own lesson: <a href="a8-foundation-models-for-transaction-data.html">foundation models for transaction data</a>.</li>
+          <li><strong>Text, in two languages.</strong> Masked-language-model encoders and contrastive sentence embedders power search over policies, complaint triage and screening. Arabic adds dialects, morphology and transliteration, and a representation trained mostly on English underperforms there (see <a href="a14-arabic-llms-jais-allam-falcon.html">Arabic LLMs</a>).</li>
+          <li><strong>Documents and images.</strong> Image-text contrastive models (CLIP-style) let you search scans by description and cluster document types with no labels, the base of <a href="b7-document-ai-for-trade-finance.html">trade-finance document AI</a>.</li>
+          <li><strong>Behavioural signals.</strong> Two sessions by the same user form a positive pair; sessions by different users, negatives. The embedding then represents "how this person types and swipes", the base of <a href="a9-behavioural-biometrics-and-device-intelligence.html">behavioural biometrics</a>.</li>
+        </ul>
+        <p>Three cautions specific to a bank:</p>
+        <ul>
+          <li><strong>Leakage hides in the pretext task.</strong> If you pretrain on all of 2018–2026 and test fraud on 2025, the representation has already seen 2025's patterns. Pretraining data obeys the same point-in-time rule as features (<a href="f3-leakage-point-in-time.html">F3.1</a>): only data available before the evaluation period.</li>
+          <li><strong>The representation inherits the data's population.</strong> If pretraining mostly contains salaried residents, customers with different patterns (expatriate workers sending remittances, small merchants, new-to-bank customers) are represented worse. Check the probe's performance by segment, not only overall (<a href="g2-fairness-definitions-and-their-trade.html">G2</a>).</li>
+          <li><strong>Embeddings can leak.</strong> A representation trained on customer data may let someone infer facts about individuals. Treat the embedding store with the same controls as the source data (<a href="g2-privacy-basics-minimisation-consent-anonymisation.html">G2.4</a>).</li>
+        </ul>
+      </div>
+
+      <h3 class="sub" id="m-gen-map">Generative models: one question, four answers</h3>
+      <div class="prose">
+        <p>A generative model learns the distribution <i>p</i>(<i>x</i>) of the data, so that you can draw new samples from it. The difficulty is that real data (an image, a transaction history) lives in a space of thousands of dimensions and the distribution is intricate. Each family makes a different bet on how to represent it. Language models are already generative (they model the distribution of the next token); this half of the lesson is about images, tabular records and other continuous data, and about the three ideas that got there: the VAE, the GAN and diffusion.</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Family</th><th>The idea</th><th>Strength</th><th>Weakness</th></tr></thead>
+          <tbody>
+            <tr><td><b>VAE</b> (variational autoencoder)</td><td>Compress to a small, well-behaved latent code, then decode. Sample the code to generate.</td><td>Stable to train; a smooth latent space; gives a likelihood bound; good for anomaly scoring.</td><td>Samples tend to be blurry or generic; the latent code can be ignored by a strong decoder.</td></tr>
+            <tr><td><b>GAN</b> (generative adversarial network)</td><td>A generator forges, a discriminator catches forgeries. They improve each other.</td><td>Sharp samples in one forward pass; fast to generate.</td><td>Unstable training; mode collapse (producing only a few kinds of sample); no likelihood.</td></tr>
+            <tr><td><b>Diffusion</b> / flow matching</td><td>Learn to remove a little noise at a time; generate by starting from pure noise and denoising repeatedly.</td><td>Stable training; wide coverage of the data; the current best for images, audio, video.</td><td>Slow sampling (many steps), though much reduced by distillation and better solvers.</td></tr>
+            <tr><td><b>Autoregressive</b></td><td>Predict one piece at a time given the previous ones.</td><td>Exact likelihood; the engine of language models.</td><td>Sequential and slow for long outputs; awkward for continuous data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub" id="m-vae">VAEs: compress, regularise, decode</h3>
+      <div class="prose">
+        <p>An ordinary autoencoder squeezes an input into a small code and reconstructs it (F4.4 uses this for anomaly detection). The trouble for generation: the codes land wherever the network likes, with gaps between them. Pick a random code and the decoder produces garbage.</p>
+        <p>A <strong>variational</strong> autoencoder fixes this by making the encoder output a <em>distribution</em>, a mean and a spread, for each input, and by adding a penalty that pulls all those distributions towards a standard bell curve. The training objective, the evidence lower bound (ELBO), has two terms:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><mtext>ELBO</mtext><mo>=</mo><msub><mi>𝔼</mi><mrow><mi>q</mi><mo stretchy="false">(</mo><mi>z</mi><mo>|</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></msub><mo stretchy="false">[</mo><mi>log</mi><mi>p</mi><mo stretchy="false">(</mo><mi>x</mi><mo>|</mo><mi>z</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo><mo>−</mo><mi>KL</mi><mo stretchy="false">(</mo><mi>q</mi><mo stretchy="false">(</mo><mi>z</mi><mo>|</mo><mi>x</mi><mo stretchy="false">)</mo><mo>‖</mo><mi>p</mi><mo stretchy="false">(</mo><mi>z</mi><mo stretchy="false">)</mo><mo stretchy="false">)</mo></math>
+        <p class="where">The first term rewards faithful reconstruction. The second (KL divergence, F1.7) penalises the code distribution for straying from a standard bell curve <i>p</i>(<i>z</i>), which is what makes random codes decodable. The two pull against each other. Too much weight on the KL term and the codes carry no information (the decoder ignores them and produces an average sample); too little and you have a plain autoencoder with gaps. Training works because of the <em>reparameterisation trick</em>: write the sampled code as mean + spread × noise, so gradients (F1.3) can flow through the sampling.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>VAEs get blurry samples because the reconstruction term averages over everything the code could mean. Ask for "a face" and you get the average face. That averaging property is not a defect when you want a <em>score</em>: the reconstruction error and the KL term together say how typical an input is, which is why VAEs remain a fixture for anomaly detection (<a href="f4-anomaly-detection-isolation-forests-autoencoders.html">F4.4</a>). Their second life is as a compressor inside larger systems: Stable Diffusion runs its diffusion in the compact latent space of an autoencoder, not on raw pixels.</p>
+      </div>
+
+      <h3 class="sub" id="m-gan">GANs: the forger and the inspector</h3>
+      <div class="prose">
+        <p>Two networks play a game. The <strong>generator</strong> turns random noise into a candidate sample. The <strong>discriminator</strong> receives real and generated samples and tries to tell them apart. Each improves by beating the other: the discriminator gets better at spotting fakes, which forces the generator to produce fakes with fewer tells. If it works, the generator ends up producing samples the discriminator cannot distinguish from real data, and the generator has implicitly learned the distribution.</p>
+        <p>The mathematics is a minimax game, and the practical story is a catalogue of difficulties. Training can oscillate rather than converge. The generator can find a few outputs that fool the discriminator and produce only those (<strong>mode collapse</strong>): a fraud-data GAN that produces ten kinds of fraud when there are two hundred. And there is no likelihood to monitor, so you cannot tell from a loss curve whether it is working.</p>
+        <p>GANs dominated image generation from 2014 to about 2020 and still matter in two places a bank cares about. They are fast, so they suit real-time uses such as face synthesis and super-resolution; and they underlie the deepfakes that attack eKYC and voice authentication (<a href="a3-deepfakes-against-ekyc-and-call.html">A3.5</a>). Tabular variants (CTGAN) were the first widely used synthetic-data generators for spreadsheets of mixed numbers and categories.</p>
+      </div>
+
+      <h3 class="sub" id="m-diffusion">Diffusion: learn to remove noise, then run it backwards</h3>
+      <div class="prose">
+        <p>Diffusion rests on an asymmetry. Destroying structure is easy: add a little random noise to an image, again and again, and after enough steps nothing but static remains. Rebuilding structure is hard, but each small step is nearly trivial: given a slightly noisy image, guess the slightly less noisy one. Train one network to do <em>that</em>, for every noise level, and you can generate: start from pure noise and apply the network repeatedly, and out comes a plausible sample.</p>
+        <p>The forward (noising) step has a closed form, which makes training cheap. You can jump to any noise level directly:</p>
+      </div>
+      <div class="formula">
+        <math display="block"><msub><mi>x</mi><mi>t</mi></msub><mo>=</mo><msqrt><msub><mover><mi>α</mi><mo>¯</mo></mover><mi>t</mi></msub></msqrt><mspace width="0.2em"></mspace><msub><mi>x</mi><mn>0</mn></msub><mo>+</mo><msqrt><mrow><mn>1</mn><mo>−</mo><msub><mover><mi>α</mi><mo>¯</mo></mover><mi>t</mi></msub></mrow></msqrt><mspace width="0.2em"></mspace><mi>ε</mi></math>
+        <p class="where"><i>x</i><sub>0</sub> is a clean example, <i>ε</i> standard random noise, and ᾱ<sub>t</sub> a number that falls from 1 (no noise) to nearly 0 (all noise) as <i>t</i> grows. At ᾱ = 0.25 the signal keeps half its amplitude (√0.25) and the noise has standard deviation √0.75 ≈ 0.87. Training: pick a random clean example, a random <i>t</i> and noise, form <i>x</i><sub>t</sub>, and ask the network to predict the noise <i>ε</i> (or equivalently the clean <i>x</i><sub>0</sub>). The loss is an ordinary squared error (F6.1). That's it.</p>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>What the network learns, by predicting the noise, is the <strong>score</strong>: the direction in which the data becomes more probable. Sampling then follows that direction downhill in noise, a little at a time. This unifies diffusion with score-based models (Song et al., 2021), and the deterministic sampler, DDIM, lets you take far fewer steps. In the simulation the denoiser is not learned; because the "customers" are drawn from a known mixture of three groups, its optimal denoiser has a closed form, which lets you see the mechanism without a trained network.</p>
+      </div>
+
+      <figure class="figure" id="fig-diff">
+        <div class="fig-head"><span class="fig-title">Noise a customer population into static, then bring it back</span><span class="fig-tag">Simulation 3 of 3</span></div>
+        <p class="try"><b>Try:</b> in <b>Add noise</b> mode, drag right and watch three customer types dissolve into one round cloud. Switch to <b>Remove noise</b>, drag from 0 to 100% and watch the three types re-emerge from static. Then reduce the steps to 3 and see the rougher result. Finally switch the denoiser to <b>Blurry</b> (which knows only the average and spread of the data) and see everything land in one blob in the middle: the "average customer" that VAEs and badly trained generators produce.</p>
+        <div class="btns" role="group" aria-label="Mode">
+          <button class="btn" type="button" id="b-m1" aria-pressed="false">Add noise</button>
+          <button class="btn" type="button" id="b-m2" aria-pressed="true">Remove noise</button>
+          <button class="btn" type="button" id="b-den" aria-pressed="false">Denoiser: exact</button>
+          <button class="btn" type="button" id="b-play">Play</button>
+        </div>
+        <div class="chart-wrap" id="diff-chart"></div>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--ink);opacity:.55"></i>A synthetic customer (400 of them)</span>
+          <span><i class="dot" style="background:var(--bad);opacity:.6"></i>Far from every real customer type</span>
+          <span><i style="background:var(--accent)"></i>Circle: within 2 standard deviations of a type's centre</span>
+        </div>
+        <div class="controls">
+          <div class="ctl"><label for="s-pos3"><span id="l-pos3">Progress</span> <output for="s-pos3"></output></label><input type="range" id="s-pos3" min="0" max="100" step="1" value="0"></div>
+          <div class="ctl"><label for="s-steps">Denoising steps <output for="s-steps"></output></label><input type="range" id="s-steps" min="2" max="60" step="1" value="30"></div>
+        </div>
+        <div class="stats">
+          <div class="stat" id="st3-on-b"><div class="k">Points on a real customer type</div><div class="v" id="st3-on"></div><div class="s">real data scores 86% by this test</div></div>
+          <div class="stat" id="st3-types-b"><div class="k">Customer types visible</div><div class="v" id="st3-types"></div><div class="s">of 3 (each holds 12%+ of points)</div></div>
+          <div class="stat"><div class="k">Noise level now</div><div class="v" id="st3-ab"></div><div class="s">share of the signal's strength left</div></div>
+        </div>
+        <p class="verdict" id="s3-verdict"></p>
+        <p class="sim-note">Simulated: customers have two standardised features (say log monthly spend and weekly transaction count) and fall into three types with weights 40/35/25% and spread 0.35 around fixed centres. Noising uses the formula above with the schedule ᾱ(u) = exp(−0.1u − 4.95u²). Denoising uses the DDIM update with the <em>exact</em> score of this mixture, not a trained network, and the same starting noise each time. The "blurry" denoiser uses the score of a single bell curve with the data's overall mean and spread. A real model learns an approximation to the exact score from data. "On a type" means within 2 standard deviations (0.7) of a centre: for true data 1 − e<sup>−2</sup> = 86%.</p>
+      </figure>
+
+      <div class="prose">
+        <p>Four developments turned this idea into the engine behind modern image and video generators.</p>
+        <ul>
+          <li><strong>Latent diffusion.</strong> Run the process in the compact latent space of an autoencoder rather than on pixels (Rombach et al., 2022). Far cheaper, hence Stable Diffusion.</li>
+          <li><strong>Conditioning and guidance.</strong> Feed the network a text prompt or a class label. <em>Classifier-free guidance</em> pushes samples harder towards the condition by extrapolating between the conditioned and unconditioned predictions, trading variety for fidelity.</li>
+          <li><strong>Transformers as the denoiser.</strong> Replacing the original U-Net with a transformer (<a href="f5-attention.html">F5.3</a>) in DiT, and in Stable Diffusion 3, made diffusion scale the way language models do.</li>
+          <li><strong>Flow matching and rectified flow.</strong> Instead of the noise-prediction recipe, learn a velocity field that carries noise straight to data along near-straight paths. Same family, simpler training, fewer sampling steps; now the default recipe in many leading image models.</li>
+        </ul>
+        <p>The same denoising idea has been applied to discrete text, replacing left-to-right generation with iterative refinement of all tokens at once. See <a href="r1-diffusion-language-models-llada-gemini.html">diffusion language models</a>.</p>
+      </div>
+
+      <h3 class="sub" id="m-eval-synth">Using generated data in a bank: fidelity, utility, privacy</h3>
+      <div class="prose">
+        <p>The most direct use of generative models in banking is <strong>synthetic data</strong>: records that look statistically like customers or transactions but are not any real customer. Common motives: to give developers and vendors a realistic test environment without exposing real data; to share data across teams or borders where policy forbids moving real rows; to augment a rare class. (On the last, the evidence is in <a href="f3-imbalanced-data.html">F3.5</a>: gains for strong models are weak and calibration is damaged.)</p>
+        <p>Judge synthetic data on three axes, and demand all three:</p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Axis</th><th>Question</th><th>Typical check</th></tr></thead>
+          <tbody>
+            <tr><td><b>Fidelity</b></td><td>Does it look like the real data?</td><td>Marginal distributions, correlations, a classifier trained to tell real from synthetic (accuracy near 50% is good).</td></tr>
+            <tr><td><b>Utility</b></td><td>Does it support the task?</td><td>"Train on synthetic, test on real" (TSTR): a model trained on the synthetic data should perform close to one trained on real data, when both are tested on real held-out data.</td></tr>
+            <tr><td><b>Privacy</b></td><td>Does it leak real records or reveal who was in the training set?</td><td>Distance of each synthetic row to its nearest real row; membership-inference attacks; formal guarantees through differentially private training.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p>These axes conflict. A generator that reproduces the training rows exactly has perfect fidelity and utility and no privacy. One that adds a lot of noise is private and useless. Large generative models are known to memorise rare training examples, and outliers are exactly the unusual customers whom a bank is most obliged to protect (<a href="r11-memorisation-membership-inference-private-training.html">R11</a>, <a href="a11-differential-privacy-clean-rooms-homomorphic.html">A11.2</a>). "Synthetic" is not a legal synonym for "anonymous". I am not aware of a rule that makes synthetic data automatically outside data-protection scope, and the position depends on the jurisdiction and on how it was generated; take it to your privacy and legal teams and keep the evidence of the privacy tests.</p>
+      </div>
+    </section>
+
+    <!-- ============================== 3. CONNECTS ============================== -->
+    <section class="part" id="connects">
+      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
+      <div class="prose"><p>Self-supervision and generation connect the whole deep-learning module to the rest of the curriculum.</p></div>
+      <div class="links">
+        <div class="link-card"><span class="code">F5.1 – F5.3 · Networks, convolutions, attention</span><span class="t"><a href="f5-neurons-layers-and-backpropagation.html">The machinery being trained</a></span><p>Everything here is an architecture from earlier in the module trained with a different objective. Masking and next-token prediction both lean on <a href="f5-attention.html">attention</a>; image encoders on <a href="f5-convolutions.html">convolutions</a> or vision transformers.</p></div>
+        <div class="link-card"><span class="code">F1.1 · Vectors and geometry</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Cosine similarity is the loss</a></span><p>Contrastive learning shapes a vector space so that distance means similarity. Retrieval, search and clustering then become geometry.</p></div>
+        <div class="link-card"><span class="code">F1.6 · F1.7 · Likelihood, entropy, KL</span><span class="t"><a href="f1-likelihood-entropy.html">The language of the objectives</a></span><p>InfoNCE is a cross-entropy; the VAE objective has a KL term; diffusion's squared error is a likelihood bound in disguise.</p></div>
+        <div class="link-card"><span class="code">F4.4 · Anomaly detection</span><span class="t"><a href="f4-anomaly-detection-isolation-forests-autoencoders.html">The unlabelled use case</a></span><p>Autoencoders and VAEs are the oldest self-supervised tool for fraud and AML: learn "normal", flag what reconstructs badly.</p></div>
+        <div class="link-card"><span class="code">F6 · Loss functions and augmentation</span><span class="t"><a href="f6-loss-functions-and-what-they.html">Objectives and invariances</a></span><p>The pretext loss and the augmentations <a href="f6-overfitting-dropout-and-data-augmentation.html">(F6.2)</a> define what the representation keeps and ignores.</p></div>
+        <div class="link-card"><span class="code">M1 · Pretraining then post-training</span><span class="t"><a href="m1-pretraining-then-post-training.html">Same recipe, text edition</a></span><p>Self-supervised next-token pretraining is the first stage of every large language model. <a href="m1-tokenisation.html">Tokenisation</a> decides the units it predicts.</p></div>
+        <div class="link-card"><span class="code">R10 · Embeddings</span><span class="t"><a href="r10-matryoshka-embeddings.html">Making embeddings flexible</a></span><p>Matryoshka training is a contrastive objective arranged so a shortened vector stays useful, which cuts storage and search cost.</p></div>
+        <div class="link-card"><span class="code">A8 · R9 · Foundation models for bank data</span><span class="t"><a href="a8-foundation-models-for-transaction-data.html">Pretraining on transactions</a></span><p>The same story for transactions, tables and <a href="r9-time-series-foundation-models-chronos.html">time series</a>. These lessons ask whether the label-efficiency promise holds on bank data.</p></div>
+        <div class="link-card"><span class="code">R2 · Synthetic data and collapse</span><span class="t"><a href="r2-synthetic-data-and-model-collapse.html">Training on generated data</a></span><p>What happens when generated data feeds the next model. Repeated rounds can lose the tails of the distribution.</p></div>
+        <div class="link-card"><span class="code">A3 · Deepfakes</span><span class="t"><a href="a3-deepfakes-against-ekyc-and-call.html">The attacker's toolkit</a></span><p>GANs and diffusion produce the faces and voices used against eKYC and call-centre authentication. Defenders use the same families as detectors.</p></div>
+      </div>
+      <div class="prose" style="margin-top:22px">
+        <p>Where it shows up at the bank:</p>
+        <ul>
+          <li><strong>Fraud and AML with few labels.</strong> Pretrain on all transactions, probe with the few confirmed cases. Also, a bridge between supervised models and pure anomaly detection.</li>
+          <li><strong>Customer, merchant and device embeddings.</strong> A learned vector per entity, used for similarity search, segmentation (<a href="b6-segmentation-and-lifetime-value.html">B6</a>), and as features for credit, churn and propensity models.</li>
+          <li><strong>Document, voice and chat.</strong> Pretrained encoders are the starting point of nearly every text and document system a bank buys or builds, in Arabic and English.</li>
+          <li><strong>Test and sandbox data.</strong> Synthetic customers for development, vendor evaluation and cross-entity sharing, subject to the privacy tests above.</li>
+          <li><strong>Defence against synthetic attackers.</strong> Face, voice and document forgery created with generative models, and the detectors built to catch them.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== 4. FIELD ============================== -->
+    <section class="part" id="field">
+      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
+      <div class="prose">
+        <p>Self-supervised pretraining won: it is how nearly every strong text, image and speech model starts. The live arguments are about which objective scales best, whether to predict pixels or abstract embeddings, and how well the recipe carries over to structured data like transactions.</p>
+      </div>
+      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026. Searches were light; the 2025 and 2026 items below were confirmed in search results, older items are cited from memory of the literature.</p>
+      <ol class="timeline" style="margin-top:14px">
+        <li><span class="yr">2013–14</span><div><div class="t">VAE and GAN</div><p>Kingma and Welling introduced the variational autoencoder and the reparameterisation trick; Goodfellow and colleagues introduced adversarial training. Two answers to "how do I sample from a complicated distribution?".</p><div class="src">Kingma &amp; Welling, ICLR 2014; Goodfellow et al., NeurIPS 2014</div></div></li>
+        <li><span class="yr">2018–20</span><div><div class="t">Masked language models, then contrastive vision</div><p>BERT showed masked prediction gives general-purpose text representations. SimCLR and MoCo showed that contrastive learning on images, with strong augmentation and many negatives, closes much of the gap to supervised pretraining. BYOL showed negatives are not essential.</p><div class="src">Devlin et al., 2018; Chen et al., ICML 2020; He et al., CVPR 2020; Grill et al., NeurIPS 2020</div></div></li>
+        <li><span class="yr">2020–21</span><div><div class="t">Diffusion becomes practical; CLIP links images and text</div><p>DDPM made denoising diffusion train stably and produce high-quality images. The score-based view unified it with SDE sampling. CLIP trained on hundreds of millions of image-caption pairs contrastively and became the standard way to connect pictures and language.</p><div class="src">Ho et al., NeurIPS 2020; Song et al., ICLR 2021; Radford et al., ICML 2021</div></div></li>
+        <li><span class="yr">2021–23</span><div><div class="t">Self-distillation and masked images at scale</div><p>DINO and DINOv2 produced frozen features that work across many vision tasks without fine-tuning. Masked autoencoders (75% of patches hidden) made image pretraining efficient. VICReg avoided collapse with explicit variance terms. I-JEPA predicted embeddings of masked regions rather than pixels.</p><div class="src">Caron et al., ICCV 2021; He et al., CVPR 2022; Bardes et al., ICLR 2022; Oquab et al., 2023; Assran et al., CVPR 2023</div></div></li>
+        <li><span class="yr">2022–24</span><div><div class="t">Latent diffusion, transformers and flow matching</div><p>Latent diffusion made image generation affordable; DiT put a transformer inside; flow matching and rectified flow simplified the training objective and cut the number of steps. Stable Diffusion 3 combined these. For tables, diffusion-based generators such as TabDDPM and TabSyn reported better fidelity than earlier GAN-based generators.</p><div class="src">Rombach et al., CVPR 2022; Peebles &amp; Xie, ICCV 2023; Lipman et al., ICLR 2023; Esser et al., ICML 2024; Kotelnikov et al., ICML 2023; Zhang et al., ICLR 2024</div></div></li>
+        <li><span class="yr">2025</span><div><div class="t">Self-supervision at 7 billion parameters</div><p>DINOv3 trained a 7-billion-parameter vision model on about 1.7 billion images without labels. Its authors report that frozen backbones reach state-of-the-art results on a range of tasks, and introduce "Gram anchoring" to stop dense, per-patch features degrading late in training. V-JEPA 2 pretrained a joint-embedding predictive model on over a million hours of internet video without actions, then added a small amount of robot data for prediction and planning.</p><div class="src">Meta AI et al., arXiv 2508.10104 (DINOv3); Assran et al., arXiv 2506.09985 (V-JEPA 2)</div></div></li>
+        <li><span class="yr">2026</span><div><div class="t">Flow matching alongside diffusion as the default recipe</div><p>MIT's 2026 course notes on generative AI describe flow matching and denoising diffusion as the core of leading image, audio and video generators. Current work is incremental: for example, a CVPR 2026 paper adds frequency-aware conditioning to flow matching and reports an FID of 1.38 on ImageNet-256. That is one paper's benchmark claim, not an independent ranking; sampling speed remains the open trade-off.</p><div class="src">MIT 6.S184 notes, 2026; Ren et al., CVPR 2026 (FreqFlow)</div></div></li>
+      </ol>
+      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
+      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
+      <div class="table-wrap" style="margin-top:10px">
+        <table class="data">
+          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><b>Pretrained text and image encoders as the starting point</b></td><td>Masked or contrastive encoders for search, triage, document classification, then a small head on bank labels.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Autoencoder and VAE anomaly scores</b></td><td>Reconstruction error as an unsupervised alert score, alongside rules and supervised models.</td><td><span class="status live">Live</span></td></tr>
+            <tr><td><b>Self-supervised pretraining on a bank's own transactions</b></td><td>Masked or next-event models for customer embeddings; published results are mostly from large fintechs, results on bank-specific tasks vary.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Synthetic tabular data for test environments and sharing</b></td><td>GAN- or diffusion-based generators with fidelity, TSTR and privacy tests; formal privacy guarantees remain uncommon.</td><td><span class="status pilot">Pilot</span></td></tr>
+            <tr><td><b>Diffusion-generated minority-class augmentation</b></td><td>Research on synthetic fraud and default cases; calibration and leakage testing rarely reported.</td><td><span class="status prop">Proposed</span></td></tr>
+            <tr><td><b>Generative forgery against eKYC and voice authentication</b></td><td>Deepfake faces, cloned voices and synthetic documents used by fraudsters; vendors report rising attempts, with figures varying by source.</td><td><span class="status inf">Reported</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Pretrain on unlabelled data, then adapt with few labels; test the representation with a probe by segment and period; treat generated data as a model's opinion of the data, and check its fidelity, utility and privacy before it goes anywhere near a decision.</div>
+    </section>
+
+    <!-- ============================== 5. FAILS ============================== -->
+    <section class="part" id="fails">
+      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>These show up in vendor claims, project proposals and AI-generated analyses. Each comes with the quickest check.</p></div>
+      <ul class="fails" style="margin-top:18px">
+        <li><div class="t">Pretraining that sees the test period</div><p>Embeddings pretrained on all history, then evaluated on a "held-out" later month. The pretext task has already seen it.</p><div class="spot"><b>Spot it</b>Ask for the date range of the pretraining data against the evaluation period. Pretraining must end before the first evaluation date.</div></li>
+        <li><div class="t">Collapse that the loss hides</div><p>The loss falls, every customer maps to nearly the same vector, and the downstream model gains nothing.</p><div class="spot"><b>Spot it</b>Look at the spread (effective rank) of the embeddings and a linear-probe score on a few hundred labels at every checkpoint.</div></li>
+        <li><div class="t">False negatives repelling real neighbours</div><p>Accounts of the same customer, duplicated complaints, or near-identical merchants are treated as different and pushed apart.</p><div class="spot"><b>Spot it</b>Ask how batches are built and whether known relatives can appear as negatives. Check nearest neighbours of a few embeddings by eye.</div></li>
+        <li><div class="t">Augmentations that erase the signal</div><p>Cropping away the stamp that distinguishes a forged cheque; shuffling the time order that carries the fraud pattern.</p><div class="spot"><b>Spot it</b>Ask what each augmentation preserves and whether the downstream task depends on it. Compare a probe with and without it.</div></li>
+        <li><div class="t">"Pretrained, therefore good" with no label-efficiency curve</div><p>A claim of success on the full labelled set says nothing about the benefit of pretraining.</p><div class="spot"><b>Spot it</b>Ask for accuracy against number of labels, with and without pretraining, against a tuned gradient-boosted baseline.</div></li>
+        <li><div class="t">Blurry or collapsed generators judged by eye</div><p>A sample of ten synthetic records looks fine. The generator has covered only the common customers.</p><div class="spot"><b>Spot it</b>Compare rare segments and tails, not only averages. Check the share of each category in synthetic against real, and run train-on-synthetic, test-on-real.</div></li>
+        <li><div class="t">Synthetic data that memorises</div><p>Some synthetic rows are near copies of real ones, so releasing the data releases customers.</p><div class="spot"><b>Spot it</b>Compute each synthetic row's distance to the nearest training row against the typical real-to-real distance; run a membership-inference test.</div></li>
+        <li><div class="t">Mode collapse and fashionable fidelity metrics</div><p>A GAN gives sharp, plausible samples of a few kinds. A single average score hides it.</p><div class="spot"><b>Spot it</b>Ask for coverage (how much of the real data's variety is represented), not only realism. Count distinct clusters in samples against real data.</div></li>
+        <li><div class="t">Retraining on one's own generated output</div><p>Synthetic data feeds the next model, and the tails thin generation by generation.</p><div class="spot"><b>Spot it</b>Track the share of generated data in each training set and keep a fresh slice of real data as the anchor (<a href="r2-synthetic-data-and-model-collapse.html">R2</a>).</div></li>
+      </ul>
+    </section>
+
+    <!-- ============================== 6. ROOM ============================== -->
+    <section class="part" id="room">
+      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
+      <div class="room">
+        <div class="room-card">
+          <span class="k">To an executive · 30 seconds</span>
+          <blockquote>“We have billions of transactions but only a few hundred confirmed cases of the thing we want to catch. Self-supervised learning lets a model study all the unlabelled history first, learning what normal customer behaviour looks like, and then learn from the confirmed cases much faster. The test is simple: does it match our current model with far fewer labels, and does it hold up on next quarter's data? Synthetic data is a separate, useful tool for test environments, but we treat it as sensitive until the privacy checks pass.”</blockquote>
+        </div>
+        <div class="room-card">
+          <span class="k">To a technical interviewer or validator</span>
+          <blockquote>“I'd pretrain with masked or next-event prediction on transaction sequences ending before the evaluation window, check for collapse using embedding spread and a linear probe at each checkpoint, then compare label-efficiency curves against a tuned gradient-boosted baseline, by segment. For contrastive objectives I'd care about how negatives are sampled, because relatives of an anchor become false negatives. For synthetic data I'd report fidelity, train-on-synthetic-test-on-real utility and nearest-neighbour and membership-inference privacy tests, and I would not call it anonymous without legal review.”</blockquote>
+        </div>
+      </div>
+      <div class="qa">
+        <details class="reveal"><summary>“What is the difference between contrastive learning and masked prediction?”</summary><div class="ans"><p>Masked prediction is generative: the model has to reproduce the hidden part, so the target is the data itself and nothing can collapse. Contrastive learning is discriminative: the model decides which views belong together, so it needs negatives (or another trick) to prevent the trivial answer of mapping everything to one point. Contrastive representations tend to be good for similarity and retrieval; masked ones often need fine-tuning to shine but scale easily.</p></div></details>
+        <details class="reveal"><summary>“Why does a small temperature help, and what is the catch?”</summary><div class="ans"><p>A small temperature makes the loss focus on the hardest negatives, which sharpens the embedding. The catch is that hard negatives are exactly where false negatives live: the near-duplicate that is really the same customer. The more you focus on them, the more damage mislabelled negatives do.</p></div></details>
+        <details class="reveal"><summary>“Is a GAN or a diffusion model better for generating synthetic transactions?”</summary><div class="ans"><p>Neither wins by default. GANs are fast but unstable and prone to mode collapse, which means missing the rare customers. Diffusion-based tabular generators have reported better fidelity but need more compute at generation time. I'd run both on our data and compare fidelity, utility on real hold-out data and privacy distances, since all three matter and they trade off.</p></div></details>
+        <details class="reveal"><summary>“Can we treat synthetic data as non-personal and share it freely?”</summary><div class="ans"><p>Not on the strength of the word "synthetic". A generator can memorise or reveal real records, particularly unusual ones. We would run nearest-neighbour and membership-inference tests, consider differentially private training if sharing externally, and get privacy and legal sign-off on the specific use. I'd not assert a regulatory position without them.</p></div></details>
+        <details class="reveal"><summary>“We have 8 years of data. Should we build our own foundation model?”</summary><div class="ans"><p>First prove the value on a small version: pretrain a modest sequence model, and test the label-efficiency curve against our best feature-engineered model on one task. If the gain is real for several tasks, a shared representation pays for itself; if only one task benefits, better features may be cheaper. Also consider a vendor or open model for text and document work, where our data adds little at pretraining scale.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== 7. CHECK ============================== -->
+    <section class="part" id="check">
+      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="qa">
+        <details class="reveal"><summary>1. Why does masking part of a transaction history and asking the model to restore it teach anything useful for fraud detection, when it never saw a fraud label?</summary><div class="ans"><p>To restore the missing part, the model has to learn regularities of normal behaviour: habits, timing, typical amounts, merchant patterns. That knowledge is what a fraud model needs as background, since fraud is a departure from it. Fraud labels then only need to teach the last step: which departures matter.</p></div></details>
+        <details class="reveal"><summary>2. An anchor has a positive with cosine similarity 0.8, and three negatives each with 0.2. With τ = 0.1, what is the InfoNCE loss, and what would it be if the model knew nothing (all similarities equal)?</summary><div class="ans"><p>Logits are 8 and 2, 2, 2. The positive's softmax probability is e<sup>8</sup> ÷ (e<sup>8</sup> + 3e<sup>2</sup>) = 2981 ÷ 3003 ≈ 0.993, so the loss is −ln(0.993) ≈ <strong>0.0074</strong>. With no knowledge, every one of the four candidates has probability 1/4, so the loss is ln 4 ≈ <strong>1.39</strong>.</p></div></details>
+        <details class="reveal"><summary>3. You halve the temperature. What changes in how the loss treats easy and hard negatives?</summary><div class="ans"><p>Dividing by a smaller τ stretches the differences between logits, so the softmax is sharper. The hardest negatives take an even larger share of the gradient, while easy negatives are effectively ignored. You get a finer embedding and more sensitivity to false negatives and noisy pairs.</p></div></details>
+        <details class="reveal"><summary>4. What is collapse, and name two different ways methods prevent it.</summary><div class="ans"><p>Collapse is the model outputting the same (or nearly the same) embedding for every input, which makes any positive-pair loss zero. Prevented by: negatives in the loss (SimCLR, MoCo, CLIP); a teacher-student pair with stop-gradient and centring (BYOL, DINO); explicit variance and decorrelation penalties (VICReg, Barlow Twins); reconstruction targets (masked autoencoders).</p></div></details>
+        <details class="reveal"><summary>5. In diffusion with ᾱ = 0.64, a clean value x<sub>0</sub> = 1.5 is noised. What is the mean and standard deviation of the noised value?</summary><div class="ans"><p>The mean is √0.64 × 1.5 = 0.8 × 1.5 = <strong>1.2</strong>. The standard deviation of the added noise is √(1 − 0.64) = √0.36 = <strong>0.6</strong>.</p></div></details>
+        <details class="reveal"><summary>6. Why are VAE samples blurry, and why is the same property useful for anomaly detection?</summary><div class="ans"><p>The VAE decoder is trained to give the best average reconstruction over everything that the code could stand for, so its output is a smoothed, typical version. For anomaly detection, a smoothed typical version is the point: inputs that depart from the typical pattern reconstruct badly, and the error is the score.</p></div></details>
+        <details class="reveal"><summary>7. A synthetic transaction table passes every distribution test, and a model trained on it scores AUC 0.91 on real hold-out data against 0.92 for one trained on real data. Is it safe to release outside the bank?</summary><div class="ans"><p>Not yet. Fidelity and utility are shown; privacy is not. Check nearest real record distances, membership inference, and the treatment of outliers and rare customers, then get privacy and legal approval for the specific use.</p></div></details>
+        <details class="reveal"><summary>8. In Simulation 1, why does the benefit of unlabelled data vanish when the two groups are close together?</summary><div class="ans"><p>The unlabelled data reveals clusters only if there is a gap between them. When the groups overlap, clustering splits the data somewhere that does not follow the real class boundary, so it gives no help (or misleads). The lesson: structure in unlabelled data only helps if it lines up with the label you care about.</p></div></details>
+      </div>
+    </section>
+
+    <!-- ============================== SOURCES ============================== -->
+    <section class="part" id="sources">
+      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
+      <ol class="sources">
+        <li>J. Devlin, M.-W. Chang, K. Lee, K. Toutanova. <a href="https://arxiv.org/abs/1810.04805">BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding</a>. 2018.</li>
+        <li>T. Chen, S. Kornblith, M. Norouzi, G. Hinton. <a href="https://arxiv.org/abs/2002.05709">A Simple Framework for Contrastive Learning of Visual Representations (SimCLR)</a>. ICML, 2020.</li>
+        <li>K. He, H. Fan, Y. Wu, S. Xie, R. Girshick. <a href="https://arxiv.org/abs/1911.05722">Momentum Contrast for Unsupervised Visual Representation Learning (MoCo)</a>. CVPR, 2020.</li>
+        <li>J.-B. Grill et al. <a href="https://arxiv.org/abs/2006.07733">Bootstrap Your Own Latent (BYOL)</a>. NeurIPS, 2020.</li>
+        <li>A. Radford et al. <a href="https://arxiv.org/abs/2103.00020">Learning Transferable Visual Models From Natural Language Supervision (CLIP)</a>. ICML, 2021.</li>
+        <li>M. Caron et al. <a href="https://arxiv.org/abs/2104.14294">Emerging Properties in Self-Supervised Vision Transformers (DINO)</a>. ICCV, 2021.</li>
+        <li>K. He et al. <a href="https://arxiv.org/abs/2111.06377">Masked Autoencoders Are Scalable Vision Learners</a>. CVPR, 2022.</li>
+        <li>A. Bardes, J. Ponce, Y. LeCun. <a href="https://arxiv.org/abs/2105.04906">VICReg: Variance-Invariance-Covariance Regularization</a>. ICLR, 2022.</li>
+        <li>O. Siméoni et al. (Meta AI, WRI, Inria). <a href="https://arxiv.org/abs/2508.10104">DINOv3</a>. arXiv 2508.10104, 2025.</li>
+        <li>M. Assran et al. <a href="https://arxiv.org/abs/2506.09985">V-JEPA 2: Self-Supervised Video Models Enable Understanding, Prediction and Planning</a>. arXiv 2506.09985, 2025.</li>
+        <li>D. Kingma, M. Welling. <a href="https://arxiv.org/abs/1312.6114">Auto-Encoding Variational Bayes</a>. ICLR, 2014.</li>
+        <li>I. Goodfellow et al. <a href="https://arxiv.org/abs/1406.2661">Generative Adversarial Nets</a>. NeurIPS, 2014.</li>
+        <li>J. Ho, A. Jain, P. Abbeel. <a href="https://arxiv.org/abs/2006.11239">Denoising Diffusion Probabilistic Models</a>. NeurIPS, 2020.</li>
+        <li>Y. Song et al. <a href="https://arxiv.org/abs/2011.13456">Score-Based Generative Modeling through Stochastic Differential Equations</a>. ICLR, 2021.</li>
+        <li>R. Rombach et al. <a href="https://arxiv.org/abs/2112.10752">High-Resolution Image Synthesis with Latent Diffusion Models</a>. CVPR, 2022.</li>
+        <li>Y. Lipman et al. <a href="https://arxiv.org/abs/2210.02747">Flow Matching for Generative Modeling</a>. ICLR, 2023.</li>
+        <li>P. Esser et al. <a href="https://arxiv.org/abs/2403.03206">Scaling Rectified Flow Transformers for High-Resolution Image Synthesis</a>. ICML, 2024.</li>
+        <li>A. Kotelnikov et al. <a href="https://arxiv.org/abs/2209.15421">TabDDPM: Modelling Tabular Data with Diffusion Models</a>. ICML, 2023.</li>
+        <li><a href="https://diffusion.csail.mit.edu/docs/lecture-notes.pdf">MIT 6.S184: Generative AI with Stochastic Differential Equations, lecture notes</a>. 2026.</li>
+        <li>S. Ren et al. <a href="https://openaccess.thecvf.com/content/CVPR2026/papers/Ren_Frequency-Aware_Flow_Matching_for_High-Quality_Image_Generation_CVPR_2026_paper.pdf">Frequency-Aware Flow Matching for High-Quality Image Generation</a>. CVPR, 2026.</li>
+        <li>I. Goodfellow, Y. Bengio, A. Courville. <a href="https://www.deeplearningbook.org/">Deep Learning</a>. MIT Press, 2016. Chapters on autoencoders, representation learning and deep generative models.</li>
+      </ol>
+      <div class="lesson-foot">
+        <a href="../index.html">← Back to the curriculum</a>
+        <span>Next in F5: see the contents page for the following module</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="../assets/lesson.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const SIG = L.sigmoid;
+  const pct = (v, d = 1) => (100 * v).toFixed(d) + "%";
+  function mk(box, W, H, label) {
+    box.innerHTML = "";
+    return L.svg("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": label }, box);
+  }
+  function tx(svg, x, y, s, attrs) { const t = L.svg("text", Object.assign({ x, y }, attrs || {}), svg); t.textContent = s; return t; }
+  function cls(el, c) { el.className = "stat" + (c ? " " + c : ""); }
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = 0; while (u < 1e-12) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+
+  // =====================================================================
+  // Simulation 1: few labels, much unlabelled data
+  // =====================================================================
+  const NU = 400, NT = 400, TR = 120;
+  const S1 = { n: 2, d: 3 };
+  const base = [];
+  (function () {
+    const r = rng(20261106);
+    for (let t = 0; t < TR; t++) {
+      const b = { ux: new Float64Array(NU), uy: new Float64Array(NU), tx: new Float64Array(NT), ty: new Float64Array(NT) };
+      for (let i = 0; i < NU; i++) { b.ux[i] = gauss(r); b.uy[i] = gauss(r); }
+      for (let i = 0; i < NT; i++) { b.tx[i] = gauss(r); b.ty[i] = gauss(r); }
+      base.push(b);
+    }
+  })();
+  const cl = i => (i % 2 ? 1 : -1);
+  function runTrial(b, n, d) {
+    const X = new Float64Array(NU), Y = b.uy;
+    for (let i = 0; i < NU; i++) X[i] = b.ux[i] + cl(i) * d / 2;
+    // labels-only centroids
+    let ax = 0, ay = 0, bx = 0, by = 0, na = 0, nb = 0;
+    for (let i = 0; i < n; i++) { if (cl(i) < 0) { ax += X[i]; ay += Y[i]; na++; } else { bx += X[i]; by += Y[i]; nb++; } }
+    ax /= na; ay /= na; bx /= nb; by /= nb;
+    // 2-means on unlabelled points; init by a farthest-pair heuristic (no labels used)
+    let f1 = 0, md = -1;
+    for (let i = 0; i < NU; i++) { const q = (X[i] - X[0]) ** 2 + (Y[i] - Y[0]) ** 2; if (q > md) { md = q; f1 = i; } }
+    let f2 = 0; md = -1;
+    for (let i = 0; i < NU; i++) { const q = (X[i] - X[f1]) ** 2 + (Y[i] - Y[f1]) ** 2; if (q > md) { md = q; f2 = i; } }
+    let c0x = X[f1], c0y = Y[f1], c1x = X[f2], c1y = Y[f2];
+    for (let it = 0; it < 12; it++) {
+      let sx0 = 0, sy0 = 0, n0 = 0, sx1 = 0, sy1 = 0, n1 = 0;
+      for (let i = 0; i < NU; i++) {
+        const q0 = (X[i] - c0x) ** 2 + (Y[i] - c0y) ** 2, q1 = (X[i] - c1x) ** 2 + (Y[i] - c1y) ** 2;
+        if (q0 <= q1) { sx0 += X[i]; sy0 += Y[i]; n0++; } else { sx1 += X[i]; sy1 += Y[i]; n1++; }
+      }
+      if (n0) { c0x = sx0 / n0; c0y = sy0 / n0; }
+      if (n1) { c1x = sx1 / n1; c1y = sy1 / n1; }
+    }
+    // name clusters: cluster 0 is class B (+1) if it prefers B's labelled centroid more than cluster 1 does
+    const pref = (cx, cy) => Math.hypot(cx - ax, cy - ay) - Math.hypot(cx - bx, cy - by); // >0 prefers B
+    const c0IsB = pref(c0x, c0y) > pref(c1x, c1y);
+    let okSup = 0, okSsl = 0;
+    for (let i = 0; i < NT; i++) {
+      const y = cl(i), px = b.tx[i] + y * d / 2, py = b.ty[i];
+      const predSup = Math.hypot(px - bx, py - by) < Math.hypot(px - ax, py - ay) ? 1 : -1;
+      const in0 = Math.hypot(px - c0x, py - c0y) <= Math.hypot(px - c1x, py - c1y);
+      const predSsl = (in0 === c0IsB) ? 1 : -1;
+      if (predSup === y) okSup++;
+      if (predSsl === y) okSsl++;
+    }
+    return { sup: okSup / NT, ssl: okSsl / NT, ax, ay, bx, by, c0x, c0y, c1x, c1y, c0IsB, X };
+  }
+  const sslBox = $("ssl-chart");
+  function renderSsl() {
+    const n = S1.n, d = S1.d;
+    let sup = 0, ssl = 0, ex = null;
+    for (let t = 0; t < TR; t++) { const r = runTrial(base[t], n, d); sup += r.sup; ssl += r.ssl; if (t === 0) ex = r; }
+    sup /= TR; ssl /= TR;
+    const cap = L.normCdf(d / 2);
+    const W = Math.max(300, Math.min(sslBox.clientWidth, 640)), H = Math.round(W * 0.56), m = 10;
+    const svg = mk(sslBox, W, H, "Customers in two features with the two decision lines");
+    const x = L.scale(-5, 5, m, W - m), y = L.scale(-2.8, 2.8, H - m, m);
+    L.svg("line", { x1: x(0), x2: x(0), y1: m, y2: H - m, class: "grid" }, svg);
+    L.svg("line", { x1: m, x2: W - m, y1: y(0), y2: y(0), class: "grid" }, svg);
+    for (let i = 0; i < NU; i++) L.svg("circle", { cx: x(ex.X[i]), cy: y(base[0].uy[i]), r: 2.6, class: "pt-u" }, svg);
+    const bis = (px, py, qx, qy, c) => { // perpendicular bisector between p and q
+      const mx = (px + qx) / 2, my = (py + qy) / 2, nx = qx - px, ny = qy - py, tx_ = -ny, ty_ = nx, L2 = Math.hypot(tx_, ty_) || 1;
+      const k = 20 / L2;
+      L.svg("line", { x1: x(mx - tx_ * k), y1: y(my - ty_ * k), x2: x(mx + tx_ * k), y2: y(my + ty_ * k), class: c }, svg);
+    };
+    bis(ex.ax, ex.ay, ex.bx, ex.by, "ln-sup");
+    bis(ex.c0x, ex.c0y, ex.c1x, ex.c1y, "ln-ssl");
+    for (let i = 0; i < n; i++) L.svg("circle", { cx: x(ex.X[i]), cy: y(base[0].uy[i]), r: 6, class: cl(i) < 0 ? "pt-a" : "pt-b" }, svg);
+    $("st1-sup").textContent = pct(sup, 1); cls($("st1-sup-b"), sup < ssl - 0.02 ? "warn" : "ok");
+    $("st1-ssl").textContent = pct(ssl, 1); cls($("st1-ssl-b"), ssl > sup + 0.02 ? "ok" : (ssl < sup - 0.02 ? "bad" : ""));
+    $("st1-cap").textContent = pct(cap, 1);
+    const gain = ssl - sup;
+    $("s1-verdict").innerHTML = gain > 0.02
+      ? "With " + n + " labels, using the unlabelled structure adds <b>" + (100 * gain).toFixed(1) + " points</b> of accuracy and gets within " + (100 * (cap - ssl)).toFixed(1) + " points of the ceiling. The labels did only the naming."
+      : gain < -0.02
+        ? "Here the unlabelled structure <b>hurts</b> by " + (100 * -gain).toFixed(1) + " points: the groups overlap so much that clustering finds a split that is not the class boundary. Self-supervision needs structure that matches the task."
+        : "At this setting the two approaches are about equal. Either you have enough labels already, or the groups are too close for the unlabelled data to add anything.";
+  }
+  L.bind("s-nl", v => v + " labels", v => { S1.n = v; renderSsl(); });
+  L.bind("s-sep", v => v.toFixed(1) + " σ", v => { S1.d = v; renderSsl(); });
+
+  // =====================================================================
+  // Simulation 2: InfoNCE
+  // =====================================================================
+  const S2 = { tau: 0.1, n: 63, sp: 0.6, sm: 0.1, fn: false };
+  const nceBox = $("nce-chart");
+  function qnorm(p) { let lo = -8, hi = 8; for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (L.normCdf(mid) < p) lo = mid; else hi = mid; } return (lo + hi) / 2; }
+  function renderNce() {
+    const N = S2.n, tau = S2.tau;
+    const sims = [];
+    for (let j = 0; j < N; j++) sims.push(Math.min(1, S2.sm + 0.2 * qnorm((j + 0.5) / N)));
+    if (S2.fn) sims[N - 1] = 0.9; // hardest negative becomes the false negative
+    const lp = S2.sp / tau, ln = sims.map(s => s / tau);
+    const mx = Math.max(lp, ...ln);
+    const ep = Math.exp(lp - mx), en = ln.map(v => Math.exp(v - mx));
+    const Z = ep + en.reduce((a, b) => a + b, 0);
+    const pp = ep / Z, loss = -Math.log(pp);
+    const sumN = en.reduce((a, b) => a + b, 0), share = en.map(v => v / sumN);
+    const k10 = Math.max(1, Math.round(N * 0.1));
+    let top = 0; for (let j = N - k10; j < N; j++) top += share[j];
+    const W = Math.max(300, nceBox.clientWidth), H = 220, m = { l: 44, r: 10, t: 14, b: 38 };
+    const svg = mk(nceBox, W, H, "Share of the repulsive push on each negative");
+    const maxS = Math.max(...share), ymax = Math.max(maxS * 1.1, 1e-6);
+    const x = L.scale(0, N, m.l, W - m.r), y = L.scale(0, ymax, H - m.b, m.t);
+    [0, 0.5, 1].forEach(f => {
+      const v = ymax * f;
+      L.svg("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid" }, svg);
+      tx(svg, m.l - 6, y(v) + 4, (v * 100).toFixed(v * 100 < 10 ? 1 : 0) + "%", { "text-anchor": "end" });
+    });
+    const bw = Math.max(1, (W - m.l - m.r) / N - (N > 120 ? 0 : 1));
+    for (let j = 0; j < N; j++) L.svg("rect", { x: x(j), y: y(share[j]), width: bw, height: Math.max(0, H - m.b - y(share[j])), class: (S2.fn && j === N - 1) ? "bar-f" : "bar-n" }, svg);
+    tx(svg, (m.l + W - m.r) / 2, H - 6, "Negatives, easiest on the left, hardest on the right", { "text-anchor": "middle" });
+    tx(svg, 12, (m.t + H - m.b) / 2, "Share of push", { "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` });
+    $("st2-loss").textContent = loss.toFixed(loss < 0.1 ? 3 : 2);
+    $("st2-loss-s").textContent = "no-knowledge loss: " + Math.log(N + 1).toFixed(2);
+    $("st2-pp").textContent = pct(pp, pp > 0.99 ? 2 : 0);
+    $("st2-top").textContent = pct(top, 0); cls($("st2-top-b"), top > 0.5 ? "warn" : "");
+    const fnShare = share[N - 1];
+    $("st2-fn").textContent = S2.fn ? pct(fnShare, 0) : "n/a"; cls($("st2-fn-b"), S2.fn && fnShare > 0.3 ? "bad" : "");
+    $("st2-fn-s").textContent = S2.fn ? "even split would be " + pct(1 / N, 1) : "button above switches it on";
+    $("s2-verdict").innerHTML = S2.fn
+      ? "The one false negative takes <b>" + pct(fnShare, 0) + "</b> of all the repulsive push (an even split would give it " + pct(1 / N, 1) + "). " + (fnShare > 0.3 ? "The loss is working hard to separate two things that are really the same customer." : "At this temperature the damage is spread thin; lower τ to see it grow.")
+      : "The hardest " + k10 + " of " + N + " negatives take <b>" + pct(top, 0) + "</b> of the push" + (top > 0.5 ? ": the loss is effectively ignoring the easy negatives." : ". A larger temperature spreads the effort more evenly.");
+  }
+  L.bind("s-tau", v => Math.pow(10, v).toFixed(2), v => { S2.tau = Math.pow(10, v); renderNce(); });
+  L.bind("s-neg", v => String(Math.round(Math.pow(10, v))), v => { S2.n = Math.round(Math.pow(10, v)); renderNce(); });
+  L.bind("s-pos", v => v.toFixed(2), v => { S2.sp = v; renderNce(); });
+  L.bind("s-mneg", v => v.toFixed(2), v => { S2.sm = v; renderNce(); });
+  S2.tau = Math.pow(10, -1); S2.n = Math.round(Math.pow(10, 1.8));
+  $("b-fn").addEventListener("click", e => { S2.fn = !S2.fn; e.currentTarget.setAttribute("aria-pressed", String(S2.fn)); renderNce(); });
+
+  // =====================================================================
+  // Simulation 3: noising and denoising a 3-type population
+  // =====================================================================
+  const CEN = [[-1.2, -0.8], [1.3, -0.6], [0, 1.3]], WT = [0.4, 0.35, 0.25], SD = 0.35, NP = 400;
+  const S3 = { mode: 2, pct: 0, steps: 30, blurry: false, playing: false };
+  const abOf = u => Math.exp(-(0.1 * u + 4.95 * u * u));
+  const X0 = [], EPS = [], Z0 = [];
+  (function () {
+    const r = rng(777);
+    for (let i = 0; i < NP; i++) {
+      const u = r(); let k = 0, c = WT[0]; while (u > c && k < 2) { k++; c += WT[k]; }
+      X0.push([CEN[k][0] + SD * gauss(r), CEN[k][1] + SD * gauss(r)]);
+      EPS.push([gauss(r), gauss(r)]);
+      Z0.push([gauss(r), gauss(r)]);
+    }
+  })();
+  const MEAN = [0, 1].map(a => CEN.reduce((s, c, k) => s + WT[k] * c[a], 0));
+  const V0 = ([0, 1].reduce((s, a) => s + CEN.reduce((q, c, k) => q + WT[k] * (SD * SD + c[a] * c[a]), 0) - MEAN[a] * MEAN[a], 0)) / 2;
+  function score(px, py, ab, blurry) {
+    const sa = Math.sqrt(ab);
+    if (blurry) { const v = ab * V0 + 1 - ab; return [-(px - sa * MEAN[0]) / v, -(py - sa * MEAN[1]) / v]; }
+    const v = ab * SD * SD + 1 - ab;
+    const lw = CEN.map((c, k) => Math.log(WT[k]) - ((px - sa * c[0]) ** 2 + (py - sa * c[1]) ** 2) / (2 * v));
+    const mx = Math.max(...lw), e = lw.map(q => Math.exp(q - mx)), Z = e[0] + e[1] + e[2];
+    let gx = 0, gy = 0;
+    for (let k = 0; k < 3; k++) { const rk = e[k] / Z; gx += rk * (-(px - sa * CEN[k][0]) / v); gy += rk * (-(py - sa * CEN[k][1]) / v); }
+    return [gx, gy];
+  }
+  function trajectory(S, blurry) {
+    const out = [Z0.map(p => p.slice())];
+    let cur = Z0.map(p => p.slice());
+    for (let k = 0; k < S; k++) {
+      const ua = 1 - k / S, ub = 1 - (k + 1) / S, aa = abOf(ua), ab_ = abOf(ub);
+      cur = cur.map(p => {
+        const sc = score(p[0], p[1], aa, blurry);
+        const x0h = [(p[0] + (1 - aa) * sc[0]) / Math.sqrt(aa), (p[1] + (1 - aa) * sc[1]) / Math.sqrt(aa)];
+        const eh = [-Math.sqrt(1 - aa) * sc[0], -Math.sqrt(1 - aa) * sc[1]];
+        return [Math.sqrt(ab_) * x0h[0] + Math.sqrt(1 - ab_) * eh[0], Math.sqrt(ab_) * x0h[1] + Math.sqrt(1 - ab_) * eh[1]];
+      });
+      out.push(cur);
+    }
+    return out;
+  }
+  let traj = null, trajKey = "";
+  const diffBox = $("diff-chart");
+  function renderDiff() {
+    const key = S3.steps + "|" + S3.blurry;
+    if (key !== trajKey) { traj = trajectory(S3.steps, S3.blurry); trajKey = key; }
+    let pts, ab;
+    if (S3.mode === 1) {
+      const u = S3.pct / 100; ab = abOf(u);
+      pts = X0.map((p, i) => [Math.sqrt(ab) * p[0] + Math.sqrt(1 - ab) * EPS[i][0], Math.sqrt(ab) * p[1] + Math.sqrt(1 - ab) * EPS[i][1]]);
+    } else {
+      const k = Math.round(S3.pct / 100 * S3.steps); pts = traj[k]; ab = abOf(1 - k / S3.steps);
+    }
+    const W = Math.max(300, Math.min(diffBox.clientWidth, 460)), H = Math.round(W * 0.88), m = 8;
+    const svg = mk(diffBox, W, H, "Synthetic customers in two features");
+    const x = L.scale(-3.2, 3.2, m, W - m), y = L.scale(-3.2, 3.2, H - m, m);
+    L.svg("line", { x1: x(0), x2: x(0), y1: m, y2: H - m, class: "grid" }, svg);
+    L.svg("line", { x1: m, x2: W - m, y1: y(0), y2: y(0), class: "grid" }, svg);
+    CEN.forEach(c => L.svg("circle", { cx: x(c[0]), cy: y(c[1]), r: Math.abs(x(2 * SD) - x(0)), class: "gc" }, svg));
+    const near = CEN.map(() => 0); let on = 0;
+    pts.forEach(p => {
+      let best = 1e9, bk = 0;
+      CEN.forEach((c, k) => { const dd = Math.hypot(p[0] - c[0], p[1] - c[1]); if (dd < best) { best = dd; bk = k; } });
+      const isOn = best < 2 * SD; if (isOn) { on++; near[bk]++; }
+      L.svg("circle", { cx: x(p[0]), cy: y(p[1]), r: 2.8, class: "gp" + (best > 4 * SD ? " far" : "") }, svg);
+    });
+    const types = near.filter(c => c >= 0.12 * NP).length;
+    $("st3-on").textContent = pct(on / NP, 0); cls($("st3-on-b"), on / NP > 0.7 ? "ok" : (on / NP < 0.35 ? "bad" : "warn"));
+    $("st3-types").textContent = types + " of 3"; cls($("st3-types-b"), types === 3 ? "ok" : "bad");
+    $("st3-ab").textContent = pct(Math.sqrt(ab), 0);
+    const done = S3.mode === 2 && S3.pct >= 100;
+    $("s3-verdict").innerHTML = S3.mode === 1
+      ? "Noise " + (S3.pct < 5 ? "has barely started" : S3.pct > 95 ? "has erased the structure: this is a round cloud of static, which is easy to sample from" : "is blurring the three types together") + ". The signal keeps <b>" + pct(Math.sqrt(ab), 0) + "</b> of its strength."
+      : S3.pct === 0 ? "This is pure noise, drawn from a bell curve. Drag right, or press Play, to remove noise step by step."
+      : done ? (S3.blurry ? "Finished with the blurry denoiser: <b>" + types + " type(s)</b> visible, " + pct(on / NP, 0) + " on a real type. It knew the average customer, not the shape of the population, so it produced mostly the middle." : "Finished in " + S3.steps + " steps: <b>" + types + " of 3</b> types recovered and " + pct(on / NP, 0) + " of points on a real type" + (on / NP < 0.8 ? ", slightly short of the 86% of true data because few steps leave a rougher result." : ", close to the 86% of true data."))
+      : "Part-way through: the denoiser is already pulling points towards where customers really are.";
+  }
+  const bind3 = L.bind("s-pos3", v => v + "%", v => { S3.pct = v; renderDiff(); });
+  L.bind("s-steps", v => String(v), v => { S3.steps = v; renderDiff(); });
+  function setMode(m) {
+    S3.mode = m; $("b-m1").setAttribute("aria-pressed", String(m === 1)); $("b-m2").setAttribute("aria-pressed", String(m === 2));
+    $("l-pos3").textContent = m === 1 ? "Noise added" : "Progress through denoising";
+    bind3.set(0); S3.pct = 0; renderDiff();
+  }
+  $("b-m1").addEventListener("click", () => { stop(); setMode(1); });
+  $("b-m2").addEventListener("click", () => { stop(); setMode(2); });
+  $("b-den").addEventListener("click", e => { S3.blurry = !S3.blurry; e.currentTarget.setAttribute("aria-pressed", String(S3.blurry)); e.currentTarget.textContent = "Denoiser: " + (S3.blurry ? "blurry" : "exact"); renderDiff(); });
+  let raf = 0;
+  function stop() { S3.playing = false; cancelAnimationFrame(raf); $("b-play").textContent = "Play"; }
+  $("b-play").addEventListener("click", () => {
+    if (S3.playing) { stop(); return; }
+    const start = S3.pct >= 100 ? 0 : S3.pct;
+    if (L.reduced) { bind3.set(100); S3.pct = 100; renderDiff(); return; }
+    S3.playing = true; $("b-play").textContent = "Pause";
+    const t0 = performance.now(), dur = 3500 * (100 - start) / 100 + 1;
+    const step = now => {
+      if (!S3.playing) return;
+      const f = Math.min(1, (now - t0) / dur), v = Math.round(start + (100 - start) * f);
+      bind3.set(v); S3.pct = v; renderDiff();
+      if (f < 1) raf = requestAnimationFrame(step); else stop();
+    };
+    raf = requestAnimationFrame(step);
+  });
+  $("l-pos3").textContent = "Progress through denoising";
+
+  function renderAll() { renderSsl(); renderNce(); renderDiff(); }
+  renderAll();
+  let rz;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderAll, 120); });
+})();
+</script>
+</body>
+</html>
