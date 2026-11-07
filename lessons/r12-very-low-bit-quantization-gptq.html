@@ -66,44 +66,46 @@
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Serving a language model is mostly a memory problem (weights, plus a KV cache that grows with every token of context), so the efficiency toolkit is four ways of storing less or moving less: fewer bits per number, smarter attention kernels and cache layouts, fewer weights, and a smaller model trained to imitate a bigger one. Each trades a little quality for a lot of hardware, and the art is knowing where the quality loss hides.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Serving a language model is mostly a memory problem (weights, plus a KV cache that grows with every token of context), so efficiency means storing or moving less: fewer bits per number, smarter attention and cache layouts, fewer weights, or a small model trained to imitate a big one. Each trades a little quality for a lot of hardware; the skill is knowing where the loss hides.</p>
 
-    <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A Gulf bank wants an internal assistant that reads credit memos and trade documents. Data may not leave the country, so the model must run on the bank's own servers. The best open-weight model for the job has 70 billion parameters. Stored as 16-bit numbers, that is 70 billion × 2 bytes = <strong>140 GB</strong>. A single high-end data-centre GPU has 80 GB. The model does not fit on one card, and before it answers a single question you are already renting two or three.</p>
-        <p>Now the surprise. Fix the weights, and a second memory bill appears: the <strong>KV cache</strong>, the model's working memory of everything it has read so far (M1.5 explains it). For a long document it can be bigger than the weights. And a third cost hides in the arithmetic: the naive way to compute attention writes out a table of size (context length)², which at 128,000 tokens is 17 billion entries for every attention head.</p>
-        <p>None of this is about making the model smarter. It is about <em>fitting and moving numbers</em>. A modern GPU can do arithmetic far faster than it can fetch numbers from its memory, so for chat-style generation the speed limit is how many bytes you must read per token. Fewer bytes means more answers per second, per rupee, per dirham.</p>
+        <p>A 70-billion-parameter model stored as 16-bit numbers takes 70 billion × 2 bytes = <strong>140 GB</strong>. One data-centre GPU has 80 GB. A Gulf bank that cannot send data abroad must run this on its own servers, so it needs two or three cards before the first question. It is like a removals van that is too small: you either pack tighter or hire more vans.</p>
+        <p>Two more bills follow. The <strong>KV cache</strong> is the model's working memory of everything read so far (M1.5), and for a long document it can exceed the weights. Naive attention also writes a table of (context length)², which is 17 billion entries per head at 128,000 tokens.</p>
+        <p>None of this is about intelligence. It is about <em>moving numbers</em>. A GPU does arithmetic far faster than it fetches from memory, so generation speed is set by bytes read per token. Fewer bytes means more answers per second per dirham.</p>
       </div>
 
       <div class="prose">
-        <p>Four levers follow from that:</p>
+        <p>Four levers:</p>
         <ul>
-          <li><strong>Quantization</strong>: keep every weight but store it with 4 bits instead of 16. It is rounding, done cleverly, so the rounding errors land where they hurt least.</li>
-          <li><strong>Better attention kernels and cache layouts</strong>: compute exactly the same attention but never write the giant table (FlashAttention), and store keys and values in fewer, smaller pieces (grouped heads, quantized or evicted cache).</li>
-          <li><strong>Pruning</strong>: delete the weights that matter least.</li>
-          <li><strong>Distillation</strong>: train a small model on the outputs of a big one, so it learns the big model's judgements and not only the training labels.</li>
+          <li><strong>Quantization</strong>: keep every weight, store it in 4 bits not 16. Like rounding prices to the nearest dirham, done so the errors land where they hurt least.</li>
+          <li><strong>Attention kernels and cache layouts</strong>: same attention, never write the giant table (FlashAttention); store fewer or smaller keys and values.</li>
+          <li><strong>Pruning</strong>: delete the least useful weights.</li>
+          <li><strong>Distillation</strong>: train a small model on a big model's outputs.</li>
         </ul>
-        <p>Quantization is the one you will meet first and most, because it needs no retraining and is a one-line option in serving tools. Start with the first simulation: round a set of weights to a few bits, and watch what breaks.</p>
+        <p>Quantization comes first because it needs no retraining and is a one-line option in serving tools.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Ask of any efficiency claim: <em>which memory does it shrink</em> (weights, KV cache, or activations), <em>what quality does it risk</em>, and <em>on which tasks was that measured</em>? "4-bit with no loss" usually means no loss on a benchmark average, not on your Arabic contract clauses.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Ask of any efficiency claim: <em>which memory does it shrink</em> (weights, KV cache, activations), <em>what quality does it risk</em>, and <em>on which tasks was that measured</em>? "4-bit with no loss" usually means no loss on an average benchmark, not on your Arabic contract clauses.</div>
     </section>
 
-    <!-- ============================== 2. MECHANICS ============================== -->
     <section class="part" id="mechanics">
       <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
 
       <h3 class="sub" id="m-quant">Very low-bit quantization: round-to-nearest, GPTQ, AWQ and FP4</h3>
       <div class="prose">
-        <p>A weight is stored as a 16-bit floating-point number. Quantization stores a small integer <em>q</em> plus a shared <em>scale</em> <em>s</em>, and recovers an approximation at run time:</p>
+        <p>Think of measuring heights with a ruler marked only every 10 cm: you store the nearest mark, plus the ruler's spacing. Quantization stores a small integer <em>q</em> and a shared <em>scale</em> <em>s</em>:</p>
       </div>
       <div class="formula">
         <math display="block"><mover><mi>w</mi><mo>^</mo></mover><mo>=</mo><mi>s</mi><mo>·</mo><mi>q</mi><mo>,</mo><mspace width="1em"></mspace><mi>s</mi><mo>=</mo><mfrac><mrow><mo>max</mo><mo stretchy="false">|</mo><mi>w</mi><mo stretchy="false">|</mo></mrow><mrow><msup><mn>2</mn><mrow><mi>b</mi><mo>−</mo><mn>1</mn></mrow></msup><mo>−</mo><mn>1</mn></mrow></mfrac></math>
         <p class="where">With <i>b</i> bits there are 2<sup>b</sup> levels; the integer <i>q</i> runs from −(2<sup>b−1</sup>−1) to +(2<sup>b−1</sup>−1). The scale <i>s</i> is set so the largest weight in the group just fits. Everything else is rounded to the nearest multiple of <i>s</i>. At 4 bits the integer is between −7 and 7: fifteen usable values for each weight in the group.</p>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Two design choices matter before any clever algorithm. The first is the <strong>group size</strong>: how many weights share one scale. One scale for the whole matrix is cheapest but fragile; one scale per 128 or 32 weights costs an extra 16-bit number per group (about 0.125 or 0.5 extra bits per weight) and is much more accurate. The second is the <strong>outlier problem</strong>. Large language models contain a few weights, and especially a few activation channels, that are many times larger than the rest. One outlier in a group stretches the scale, and every ordinary weight in that group collapses onto zero or one level. The next simulation shows it.</p>
+        <p>Two choices matter before any clever algorithm.</p>
+        <ul>
+          <li><strong>Group size</strong>: how many weights share a scale. One scale per matrix is cheap but coarse. One per 128 or 32 weights costs an extra 16-bit number per group (about 0.125 or 0.5 bits per weight) and is much more accurate.</li>
+          <li><strong>Outliers</strong>: a few weights, and especially a few activation channels, are many times larger than the rest. One outlier stretches the scale, like one giant in a class forcing the ruler to be marked in metres, so everyone else rounds to zero or one mark. Simulation 1 shows it.</li>
+        </ul>
       </div>
 
       <figure class="figure" id="fig-q">
@@ -134,40 +136,38 @@
       </figure>
 
       <div class="prose">
-        <p>Plain round-to-nearest (RTN) handles each weight independently, and it works acceptably at 8 bits and often at 4. Below that it degrades fast, so the research since 2022 asks: <em>given that I must round, which rounding errors does the model feel least?</em></p>
+        <p>Plain round-to-nearest (RTN) rounds each weight alone. It works at 8 bits and often at 4, then degrades fast. Newer methods ask: <em>given that I must round, which errors does the model feel least?</em></p>
         <ul>
-          <li><strong>GPTQ</strong> (Frantar et al., 2022) quantizes one layer at a time. It rounds weights one column at a time and, after each, <em>adjusts the not-yet-rounded weights to compensate</em> for the error just introduced, using second-order information (the Hessian of the layer's output error, estimated from a few hundred calibration examples). The intuition: if rounding one weight pushes the output up, nudge its neighbours down. It brought 175-billion-parameter models to 3–4 bits in a few GPU-hours with small quality loss.</li>
-          <li><strong>AWQ</strong> (Lin et al., 2023, activation-aware weight quantization) observes that about 1% of weight channels matter far more than the rest, and that you find them by looking at the <em>activations</em> that flow through them, not at the weights themselves. Instead of storing those channels in higher precision (awkward for hardware), it multiplies them by a factor before rounding and divides the activation by the same factor, so the important channels get more of the integer grid. No retraining, no mixed precision.</li>
-          <li><strong>Outlier-handling relatives.</strong> LLM.int8() (Dettmers et al., 2022) keeps outlier feature dimensions in 16-bit. SmoothQuant moves difficulty from activations into weights so both can be 8-bit. QLoRA's NF4 format spaces its 16 levels to match a bell-shaped weight distribution, and is used to fine-tune big models on a single GPU.</li>
-          <li><strong>Below 4 bits.</strong> Methods such as QuIP#, AQLM and vector or codebook quantization store small groups of weights as an index into a learned table, and reach usable quality near 2 bits per weight for the largest models. Smaller models suffer more, because they have less redundancy to spare. BitNet b1.58 goes further and <em>trains</em> a model with ternary weights (−1, 0, +1) from the start, which is a different thing from compressing a finished model.</li>
+          <li><strong>GPTQ</strong> (Frantar et al., 2022) quantizes a layer one column at a time and, after each, <em>adjusts the not-yet-rounded weights to compensate</em>, using second-order information (the Hessian of output error, from a few hundred calibration examples). Like a baker who rounded one ingredient up and trims the next to keep the cake right. It took 175B-parameter models to 3–4 bits in GPU-hours.</li>
+          <li><strong>AWQ</strong> (Lin et al., 2023) notes that about 1% of weight channels matter far more, and you find them from the <em>activations</em> flowing through, not the weights. It scales those channels up before rounding (and the activation down) so they get more of the grid. No retraining, no mixed precision.</li>
+          <li><strong>Outlier relatives.</strong> LLM.int8() keeps outlier dimensions in 16-bit. SmoothQuant shifts difficulty from activations to weights so both fit 8-bit. QLoRA's NF4 spaces its 16 levels to suit bell-shaped weights, for fine-tuning on one GPU.</li>
+          <li><strong>Below 4 bits.</strong> QuIP#, AQLM and codebook methods store groups of weights as an index into a learned table, reaching usable quality near 2 bits for the largest models. Small models suffer more, with less redundancy to spare. BitNet b1.58 <em>trains</em> ternary weights (−1, 0, +1) from scratch, which is different from compressing a finished model.</li>
         </ul>
       </div>
 
       <div class="prose">
         <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">FP4: a floating-point grid with block scales</h4>
-        <p>The methods above use evenly spaced integers. The newest hardware formats instead use tiny floating-point numbers. <strong>FP4</strong> (called E2M1: one sign bit, two exponent bits, one mantissa bit) has only 16 values, bunched near zero and sparse further out: 0, 0.5, 1, 1.5, 2, 3, 4, 6 and their negatives. That shape suits bell-shaped weights. The catch is range, so every block of values shares a scale. Two formats are in use: <strong>MXFP4</strong>, the open microscaling standard, with 32 values per block and a power-of-two scale; and NVIDIA's <strong>NVFP4</strong>, with blocks of 16 and a finer 8-bit floating-point scale plus a per-tensor scale. Smaller blocks and a finer scale lower the error, which is why NVFP4 is usually reported as more accurate. The point of hardware formats is speed: recent GPUs multiply FP4 numbers natively, so you save arithmetic time as well as memory, which integer weight-only schemes (dequantize, then compute in 16-bit) do not.</p>
-        <p>One distinction to hold: <strong>weight-only</strong> quantization (W4A16: 4-bit weights, 16-bit activations) saves memory and bandwidth, which is what matters for single-user chat. <strong>Weight-and-activation</strong> (W4A4, W8A8) also speeds the arithmetic, which matters for large batches and long prompts, but activations have worse outliers and are much harder to squeeze.</p>
+        <p><strong>FP4</strong> (E2M1: one sign, two exponent, one mantissa bit) has 16 values bunched near zero and sparse far out: 0, 0.5, 1, 1.5, 2, 3, 4, 6 and negatives. Like a ruler with fine marks near zero and coarse ones far away, it suits bell-shaped weights. Range is limited, so each block shares a scale. <strong>MXFP4</strong> (open standard) uses 32 values per block and a power-of-two scale. NVIDIA's <strong>NVFP4</strong> uses blocks of 16, a finer 8-bit floating-point scale and a per-tensor scale, which is why it is usually reported as more accurate. Recent GPUs multiply FP4 natively, so you save arithmetic time as well as memory; integer weight-only schemes dequantize to 16-bit first and do not.</p>
+        <p><strong>Weight-only</strong> (W4A16) saves memory and bandwidth, which is what single-user chat needs. <strong>Weight-and-activation</strong> (W4A4, W8A8) also speeds arithmetic for big batches and long prompts, but activations have worse outliers and are harder to squeeze.</p>
       </div>
 
       <h3 class="sub" id="m-flash">FlashAttention and KV-cache compression</h3>
       <div class="prose">
-        <p>Attention (F5.3) scores every token against every earlier token: an N × N table, softmaxed row by row, then used to mix value vectors. Written naively, the table goes to the GPU's main memory (HBM) and is read back. It is not the arithmetic that is slow, it is the traffic: the table is huge and HBM is slow relative to the chip's compute.</p>
-        <p><strong>FlashAttention</strong> (Dao et al., 2022) computes <em>exactly the same result</em> without ever materialising the table. It cuts the queries, keys and values into tiles small enough to sit in the chip's fast on-chip memory (SRAM), processes one tile of scores at a time, and keeps a running maximum and running sum so that the softmax can be finished incrementally ("online softmax"). Memory for the scores falls from N² to nothing extra, and the time falls because far fewer bytes cross the slow bus. Later versions (FlashAttention-2 and -3) rework the tiling and use newer hardware features, including 8-bit support on Hopper-generation GPUs. It is an <em>exact</em> method: no approximation, no quality trade. That is why it spread everywhere, and why a 128,000-token window stopped being a memory crisis for the scores.</p>
-      </div>
-      <div class="prose">
-        <p>The second cost is the KV cache. During generation the model keeps, for every layer and every earlier token, one key vector and one value vector per KV head. Its size is:</p>
+        <p>Attention (F5.3) scores every token against every earlier one: an N × N table. Written naively it goes out to the GPU's slow main memory (HBM) and back. The arithmetic is cheap; the traffic is the cost. It is like carrying every page of a report to a distant filing room instead of working at your desk.</p>
+        <p><strong>FlashAttention</strong> (Dao et al., 2022) computes <em>exactly the same result</em> without storing the table. It processes tiles small enough for the chip's fast on-chip memory (SRAM), keeping a running maximum and sum so the softmax finishes incrementally ("online softmax"). Score memory drops from N² to nothing extra, and time falls because fewer bytes cross the slow bus. Versions 2 and 3 improve tiling and add 8-bit support on Hopper GPUs. It is exact, with no quality trade, so it spread everywhere.</p>
+        <p>The KV cache holds, per layer and per earlier token, one key and one value vector per KV head:</p>
       </div>
       <div class="formula">
         <math display="block"><mtext>KV bytes</mtext><mo>=</mo><mn>2</mn><mo>×</mo><mi>layers</mi><mo>×</mo><mi>kvHeads</mi><mo>×</mo><mi>headDim</mi><mo>×</mo><mi>bytes</mi><mo>×</mo><mi>tokens</mi></math>
         <p class="where">The 2 is for keys and values. For a 70B-class model with 80 layers, head dimension 128 and 16-bit storage: if every one of 64 query heads had its own key and value (multi-head attention), that is 2 × 80 × 64 × 128 × 2 bytes = 2.6 MB per token. With <strong>grouped-query attention</strong> sharing 8 KV heads, it is 327,680 bytes per token, <strong>42.9 GB at 131,072 tokens, for one user</strong>.</p>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Every term in the formula is a lever:</p>
+        <p>Each term is a lever:</p>
         <ul>
-          <li><strong>Fewer KV heads.</strong> Multi-query attention (Shazeer, 2019) shares one KV head across all queries; grouped-query attention (Ainslie et al., 2023) is the middle ground. Almost all current open models use GQA. DeepSeek's multi-head latent attention (MLA) goes further, caching a compressed latent vector from which keys and values are rebuilt. This is decided at pre-training time. You cannot bolt it on later without some retraining.</li>
-          <li><strong>Fewer bytes.</strong> Quantize the cache to 8 or 4 bits (for example KIVI, which quantizes keys per channel and values per token because keys have channel-wise outliers). Serving engines now offer 8-bit and FP4 cache options.</li>
-          <li><strong>Fewer tokens.</strong> Evict tokens the model rarely attends to (H2O), keep the first few "attention sink" tokens plus a recent window (StreamingLLM), or use sliding-window layers that only look back a fixed distance. This is lossy and can fail on exactly the detail you needed from page 90.</li>
-          <li><strong>Less waste.</strong> PagedAttention (the vLLM engine, Kwon et al., 2023) stores the cache in small pages instead of one large block per request, which removes most fragmentation and allows requests to share the cache for a common prefix, such as a long system prompt.</li>
+          <li><strong>Fewer KV heads.</strong> Multi-query attention shares one KV head across all queries; grouped-query attention (GQA) is the middle ground and is in almost all current open models. DeepSeek's MLA caches a compressed latent instead. Chosen at pre-training; you cannot bolt it on later without retraining.</li>
+          <li><strong>Fewer bytes.</strong> Quantize the cache to 8 or 4 bits (KIVI quantizes keys per channel and values per token, since keys have channel-wise outliers). Engines offer 8-bit and FP4 options.</li>
+          <li><strong>Fewer tokens.</strong> Evict rarely-attended tokens (H2O), keep a few "attention sink" tokens plus a recent window (StreamingLLM), or use sliding-window layers. Lossy: it can drop the detail from page 90.</li>
+          <li><strong>Less waste.</strong> PagedAttention (vLLM) stores the cache in small pages, removing fragmentation and letting requests share a common prefix such as a long system prompt.</li>
         </ul>
       </div>
 
@@ -198,12 +198,12 @@
 
       <h3 class="sub" id="m-prune">Pruning and distillation for on-premises models</h3>
       <div class="prose">
-        <p>Quantization keeps every weight and stores each one coarsely. <strong>Pruning</strong> instead sets some weights to zero and skips them. There are two kinds, and the difference decides whether you get a speed-up.</p>
+        <p><strong>Pruning</strong> sets some weights to zero and skips them, like cutting the least-read chapters from a manual. Whether it speeds things up depends on the kind.</p>
         <ul>
-          <li><strong>Unstructured</strong> pruning zeroes individual weights anywhere. Accuracy survives remarkably high sparsity, but ordinary GPUs cannot skip scattered zeros, so you save storage and not much time.</li>
-          <li><strong>Structured</strong> pruning removes whole rows, attention heads, or layers, so the matrices simply become smaller and every GPU benefits. It hurts quality more per parameter removed, and usually needs some retraining to recover. NVIDIA's <strong>2:4 sparsity</strong> sits between: in every group of four weights, two must be zero, and recent GPUs have hardware that exploits the pattern.</li>
+          <li><strong>Unstructured</strong>: zeroes individual weights anywhere. Accuracy survives high sparsity, but ordinary GPUs cannot skip scattered zeros, so you save storage, not time.</li>
+          <li><strong>Structured</strong>: removes whole rows, heads or layers, so matrices shrink and every GPU benefits. It hurts more per parameter and usually needs retraining. NVIDIA's <strong>2:4 sparsity</strong> sits between: two of every four weights are zero, and recent GPUs exploit the pattern.</li>
         </ul>
-        <p>Which weights to remove? Plain <em>magnitude</em> pruning drops the smallest. SparseGPT (Frantar and Alistarh, 2023) applies GPTQ-style second-order compensation to prune large models in one shot. <strong>Wanda</strong> (Sun et al., 2023) scores each weight by |weight| × the typical size of the input it multiplies, the same insight as AWQ: a small weight attached to a large, busy activation channel is not small in effect. Simulation 3 tests it.</p>
+        <p>Which weights go? Magnitude pruning drops the smallest. SparseGPT (2023) applies GPTQ-style compensation to prune in one shot. <strong>Wanda</strong> (2023) scores |weight| × typical input size, the AWQ insight again: a small weight on a busy channel is not small in effect. Simulation 3 tests it.</p>
       </div>
 
       <figure class="figure" id="fig-prune">
@@ -230,7 +230,7 @@
       </figure>
 
       <div class="prose">
-        <p>Pruning and quantization both end in a model that is a little off. <strong>Distillation</strong> asks for something different: train a fresh, smaller <em>student</em> to copy a bigger <em>teacher</em>. The trick (Hinton, Vinyals and Dean, 2015) is what the student copies. A normal label says "this transaction is genuine". The teacher's full output says "genuine 89%, card fraud 5%, account takeover 4%, mule 0.5%". That tells the student that this case resembles card fraud more than it resembles a mule, information no one-hot label contains. Hinton called it dark knowledge. A <strong>temperature</strong> <em>T</em> in the softmax flattens the teacher's distribution so those small numbers become visible:</p>
+        <p><strong>Distillation</strong> trains a fresh, smaller <em>student</em> to copy a bigger <em>teacher</em> (Hinton, Vinyals and Dean, 2015). A hard label says "genuine". The teacher's full output says "genuine 89%, card fraud 5%, account takeover 4%, mule 0.5%", so this case looks more like card fraud than a mule. A teacher marking a pupil's essay with comments teaches more than a bare grade. Hinton called it dark knowledge. A <strong>temperature</strong> <em>T</em> flattens the distribution so the small numbers show:</p>
       </div>
       <div class="formula">
         <math display="block"><msub><mi>p</mi><mi>i</mi></msub><mo>=</mo><mfrac><mrow><mi>exp</mi><mo stretchy="false">(</mo><msub><mi>z</mi><mi>i</mi></msub><mo>/</mo><mi>T</mi><mo stretchy="false">)</mo></mrow><mrow><munder><mo>∑</mo><mi>j</mi></munder><mi>exp</mi><mo stretchy="false">(</mo><msub><mi>z</mi><mi>j</mi></msub><mo>/</mo><mi>T</mi><mo stretchy="false">)</mo></mrow></mfrac></math>
@@ -259,157 +259,46 @@
       </figure>
 
       <div class="prose">
-        <p>For language models, distillation has several forms. <strong>Logit distillation</strong> matches the teacher's token probabilities, which needs the teacher's internals. <strong>Sequence-level distillation</strong> simply trains the student on text the teacher wrote, which works through an API and is how many "reasoning" students inherit step-by-step behaviour (the distilled DeepSeek-R1 models are an example). Combining the two crafts, <strong>prune a large model and then distil to recover quality</strong>, is the most efficient route found so far: NVIDIA's Minitron work compressed models to a fraction of the size while using a small fraction of the training tokens that training from scratch would need. The same pattern sits behind the small variants in several model families.</p>
-        <p>For the bank, distillation has a second use. A specific task (classify a complaint in Arabic, English or both; extract fields from a letter of credit) can be done by a large model once, offline, on thousands of examples. A small student, even a classic classifier, is then trained on those outputs and runs in milliseconds on a CPU. You get the large model's judgement at a thousandth of the serving cost, inside your own perimeter. The rules still apply: check the teacher's labels on a human-reviewed sample first, because the student inherits every teacher mistake and cannot exceed it.</p>
+        <p>For language models there are two forms. <strong>Logit distillation</strong> matches the teacher's token probabilities and needs its internals. <strong>Sequence-level distillation</strong> trains on text the teacher wrote, which works through an API and is how distilled DeepSeek-R1 models inherit step-by-step reasoning. <strong>Prune a large model, then distil to recover quality</strong> is the most efficient route so far: NVIDIA's Minitron used a small fraction of the training tokens that training from scratch needs.</p>
+        <p>At the bank, the same idea works for narrow tasks (classify a complaint in Arabic or English; extract fields from a letter of credit). A large model labels thousands of examples once, offline. A small student, even a classic classifier, trains on those labels and runs in milliseconds on a CPU at a fraction of the cost, inside your perimeter. Check the teacher's labels on a human-reviewed sample first: the student inherits every teacher mistake and cannot exceed it.</p>
       </div>
     </section>
 
-    <!-- ============================== 3. CONNECTS ============================== -->
-    <section class="part" id="connects">
-      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
-      <div class="prose"><p>Efficiency is the plumbing under most deployment decisions. These are the lessons it plugs into.</p></div>
-      <div class="links">
-        <div class="link-card"><span class="code">P3.1 – P3.3 · Quantization, pruning, distillation in production</span><span class="t"><a href="p3-quantization-pruning-and-distillation.html">The practical, serving-side view</a></span><p>This lesson explains the ideas and the frontier. P3 covers latency budgets, serving stacks and what to measure before shipping a compressed model.</p></div>
-        <div class="link-card"><span class="code">M1.5 · Context windows and the KV cache</span><span class="t"><a href="m1-context-windows-and-the-kv.html">Where the cache comes from</a></span><p>Why a model needs earlier keys and values at all, and why long context is not free.</p></div>
-        <div class="link-card"><span class="code">F5.3 · Attention</span><span class="t"><a href="f5-attention.html">The N × N table</a></span><p>FlashAttention changes how attention is computed, never what it computes. You need the mechanism first to see the saving.</p></div>
-        <div class="link-card"><span class="code">F6.5 · Mixed precision</span><span class="t"><a href="f6-overfitting-dropout-and-data-augmentation.html">Fewer bits during training</a></span><p>Training in 16-bit and 8-bit uses the same number formats, with the extra problem that gradients need range.</p></div>
-        <div class="link-card"><span class="code">R2.3 · FP8 and FP4 training</span><span class="t"><a href="r2-synthetic-data-and-model-collapse.html">Low precision when learning, not only when serving</a></span><p>Quantizing a finished model and training natively in FP8 or FP4 are different problems. The second is harder and newer.</p></div>
-        <div class="link-card"><span class="code">R1.1 · Mixture-of-experts</span><span class="t"><a href="r1-mixture-of-experts-at-scale.html">Big on disk, small per token</a></span><p>Sparse models compute with few parameters per token but must still hold all of them in memory. Weight quantization matters even more there.</p></div>
-        <div class="link-card"><span class="code">P4 · Hybrid and on-premises deployment</span><span class="t"><a href="p4-hybrid-and-on-premises-deployment.html">Where the GPUs actually are</a></span><p>Data residency rules and procurement lead times turn "fits on two cards" into a real decision.</p></div>
-        <div class="link-card"><span class="code">M2.3 · Model choice, cost and latency</span><span class="t"><a href="m2-model-choice-cost-and-latency.html">Choosing the size</a></span><p>A distilled or quantized model is one of the options in the cost and latency trade-off, usually between an API call and a full-size hosted model.</p></div>
-        <div class="link-card"><span class="code">R3.2 · Test-time scaling</span><span class="t"><a href="r3-process-reward-models-and-verifiers.html">Spending the savings</a></span><p>Cheaper tokens make more thinking per question affordable. Efficiency and reasoning quality compete for the same budget.</p></div>
-      </div>
-      <div class="prose" style="margin-top:22px">
-        <p>Where it shows up at the bank:</p>
-        <ul>
-          <li><strong>On-premises copilots</strong> for credit memos, policies and trade documents under data-residency rules. The first question from infrastructure is always how many GPUs, and the answer comes straight from Simulation 2.</li>
-          <li><strong>Document-heavy workflows</strong> (trade finance, KYC files) that need long context. Cache size, not model size, is often what limits how many analysts can use the system at once.</li>
-          <li><strong>High-volume classification</strong> such as complaints, transaction narratives, sanctions-screening triage. Distil to a small model for cost and latency, keep the large model for the hard cases and for auditing.</li>
-          <li><strong>Edge and branch use</strong>, such as voice or on-device assistants, where a 1–4 billion parameter model at 4 bits is the only practical option.</li>
-          <li><strong>Model risk management.</strong> A quantized model is a different model from the one that was validated. It needs its own test on the bank's own data, in both Arabic and English.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- ============================== 4. FIELD ============================== -->
-    <section class="part" id="field">
-      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
-      <div class="prose">
-        <p>The basics are settled: 8-bit is routine, 4-bit weights are the default for self-hosting, and FlashAttention-style kernels and grouped-query attention are standard. The live questions are how low precision can go for <em>reasoning</em> models, whether the KV cache can be shrunk without losing long-range recall, and how far hardware formats such as FP4 should be used during training as well as serving.</p>
-      </div>
-      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with one web search. Items marked "preprint" or "reported" were seen in search results only and not read in full; earlier items are from the published literature.</p>
-      <ol class="timeline" style="margin-top:14px">
-        <li><span class="yr">2015</span><div><div class="t">Distillation</div><p>Hinton, Vinyals and Dean showed that a small network trained on a large one's softened outputs learns more than it does from hard labels alone.</p><div class="src">Hinton et al., arXiv 1503.02531</div></div></li>
-        <li><span class="yr">2022</span><div><div class="t">GPTQ, LLM.int8() and FlashAttention</div><p>Three results in one year: accurate 3–4 bit post-training quantization of very large models, a diagnosis of outlier features as the reason 8-bit had been failing, and an exact attention algorithm that avoids the N × N table.</p><div class="src">Frantar et al.; Dettmers et al.; Dao et al., 2022</div></div></li>
-        <li><span class="yr">2023</span><div><div class="t">AWQ, SparseGPT, Wanda, PagedAttention, GQA</div><p>Activation-aware weight scaling; one-shot pruning of large models; activation-weighted pruning scores; paged cache management in vLLM; grouped KV heads. The shared idea is that activations tell you which weights matter.</p><div class="src">Lin et al.; Frantar &amp; Alistarh; Sun et al.; Kwon et al.; Ainslie et al.</div></div></li>
-        <li><span class="yr">2024</span><div><div class="t">Pruning plus distillation as a recipe; cache quantization; FlashAttention-3</div><p>Minitron-style compression of large models into smaller ones with a fraction of the training tokens. KIVI showed a 2-bit KV cache with little quality loss on its benchmarks. FlashAttention-3 targeted Hopper GPUs, including FP8.</p><div class="src">Muralidharan et al.; Liu et al. (KIVI); Shah et al., 2024</div></div></li>
-        <li><span class="yr">2025</span><div><div class="t">4-bit floating point reaches products</div><p>Hardware support for MXFP4 and NVFP4 arrived with the newest data-centre GPUs. OpenAI released its gpt-oss open-weight models with their mixture-of-experts weights stored in MXFP4, so the larger one fits on a single 80 GB GPU. NVIDIA's research blog describes NVFP4 inference in TensorRT-LLM and reports quality close to 8-bit on its tests.</p><div class="src">OpenAI gpt-oss model card, 2025; NVIDIA research blog, "Pushing Intelligence to 4-bit"</div></div></li>
-        <li><span class="yr">2026</span><div><div class="t">FP4 for reasoning models and for the cache itself (preprints, reported)</div><p>One preprint reports that full 4-bit weights, activations and cache (W4A4KV4) can cost reasoning models noticeable accuracy, and proposes quantization-aware training (training with the rounding in the loop) to close the gap. Another reports a DeepSeek model that stores much of its KV cache in FP4 with quantization-aware training, nearly halving cache memory against FP8. I have not read either in full; treat the numbers as claims to verify.</p><div class="src">arXiv 2606.15682 (ReQAT); arXiv 2609.19969 (DeepSeek-V4.1-Flash), both preprints</div></div></li>
-      </ol>
-      <div class="prose" style="margin-top:22px"><p>How established each practice is:</p></div>
-      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
-      <div class="table-wrap" style="margin-top:10px">
-        <table class="data">
-          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
-          <tbody>
-            <tr><td><b>8-bit weights, 4-bit weight-only (GPTQ, AWQ)</b></td><td>The default way to self-host a 30–120B model on a few GPUs. Offered by every major serving engine.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>FlashAttention, grouped-query attention, paged cache</b></td><td>Built into mainstream training and serving stacks. You usually get them without asking.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Distilling a large model into a task-specific small one</b></td><td>Labels from a big model, human-checked sample, small classifier or small language model in production.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>FP4 (MXFP4, NVFP4) inference</b></td><td>Available on the newest GPUs and shipped in some open-weight releases. Quality varies by task, especially reasoning.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>KV-cache quantization to 4 bits or below, cache eviction</b></td><td>Options in serving engines; quality on long-document recall needs your own testing.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>Structured pruning plus distillation of foundation models</b></td><td>Published by large labs; banks rarely do this themselves and usually pick an already-compressed model.</td><td><span class="status inf">Reported</span></td></tr>
-            <tr><td><b>Sub-3-bit and ternary models (QuIP#, AQLM, BitNet)</b></td><td>Strong research results, thin production evidence, limited tooling.</td><td><span class="status prop">Proposed</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>4-bit weights are the safe default, the KV cache is the new frontier because context keeps growing, and any compressed model must be re-evaluated on your own tasks before it replaces the one you validated.</div>
-    </section>
-
-    <!-- ============================== 5. FAILS ============================== -->
     <section class="part" id="fails">
-      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Compression failures are quiet: the model still answers fluently. Each one comes with the quickest check.</p></div>
+      <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>Compression failures are quiet: the model still answers fluently.</p></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">"No loss" measured on the wrong benchmark</div><p>The vendor shows an average over English multiple-choice tasks. Your task is Arabic contract extraction or long-document question answering.</p><div class="spot"><b>Spot it</b>Ask what was measured and in which languages. Run the full-precision and compressed models on 200 of your own documents and compare.</div></li>
-        <li><div class="t">Averages hiding the tails</div><p>Mean accuracy drops by 0.5 points, but rare, hard cases (long numbers, negations, low-resource language, tables) lose far more.</p><div class="spot"><b>Spot it</b>Break results down by slice: language, length, document type. Diff the answers, not only the scores.</div></li>
-        <li><div class="t">Calibration set that does not look like your data</div><p>GPTQ and AWQ tune themselves on a few hundred example texts. If those are English web pages, Arabic and numeric-heavy financial text may be rounded badly.</p><div class="spot"><b>Spot it</b>Ask what calibration data was used. Re-quantize with samples of your own text if you can.</div></li>
-        <li><div class="t">Long-context recall silently degrading</div><p>A quantized or evicted cache looks fine on short prompts and loses the clause on page 70.</p><div class="spot"><b>Spot it</b>Plant a known fact at several depths in a long document ("needle" test) and check recall at each depth, at the context length you will actually use.</div></li>
-        <li><div class="t">Reasoning models degrading more than chat models</div><p>Long chains of thought compound small errors. A model that is fine for summaries can fail multi-step calculations after 4-bit compression.</p><div class="spot"><b>Spot it</b>Test the exact multi-step tasks, with the chain-of-thought length you plan to allow, not a short-answer proxy.</div></li>
-        <li><div class="t">Memory saved, speed not gained</div><p>Pruned weights that the hardware cannot skip, or W4 weights dequantized on the fly in a slow kernel.</p><div class="spot"><b>Spot it</b>Measure tokens per second and cost per request on the target hardware. Do not infer speed from the file size.</div></li>
-        <li><div class="t">Forgetting the validated model changed</div><p>Model risk signed off the 16-bit model; operations deploys a 4-bit version.</p><div class="spot"><b>Spot it</b>Check the model hash or version in the deployment record against the validation report. A compressed model needs its own evidence.</div></li>
-        <li><div class="t">Distilling a teacher's mistakes and bias</div><p>The student copies every teacher error with high confidence, and cannot be better than its labels.</p><div class="spot"><b>Spot it</b>Have humans label a sample independently of the teacher, and compare student, teacher and humans.</div></li>
-        <li><div class="t">Comparing quantization levels at different true bit-widths</div><p>"4-bit" with group size 32 and extra outlier storage is closer to 4.6 bits than to 4.0.</p><div class="spot"><b>Spot it</b>Ask for effective bits per weight, and the file size in GB.</div></li>
+        <li><div class="t">"No loss" measured on the wrong benchmark</div><p>The vendor averages English multiple-choice tasks; yours is Arabic contract extraction.</p><div class="spot"><b>Spot it</b>Ask what was measured and in which languages. Compare full-precision and compressed models on 200 of your own documents.</div></li>
+        <li><div class="t">Averages hiding the tails</div><p>Mean accuracy drops 0.5 points, but rare hard cases (long numbers, negations, tables, low-resource language) lose far more.</p><div class="spot"><b>Spot it</b>Break results down by language, length and document type. Diff the answers, not only the scores.</div></li>
+        <li><div class="t">Calibration set unlike your data</div><p>GPTQ and AWQ tune on a few hundred texts. If those are English web pages, Arabic and numeric financial text may round badly.</p><div class="spot"><b>Spot it</b>Ask what calibration data was used. Re-quantize with your own text if you can.</div></li>
+        <li><div class="t">Long-context recall silently degrading</div><p>A quantized or evicted cache looks fine on short prompts and loses the clause on page 70.</p><div class="spot"><b>Spot it</b>Plant a known fact at several depths in a long document ("needle" test) at the context length you will use.</div></li>
+        <li><div class="t">Reasoning models degrading more than chat models</div><p>Long chains of thought compound small errors. A model fine for summaries can fail multi-step calculations at 4 bits.</p><div class="spot"><b>Spot it</b>Test the exact multi-step tasks, at the chain-of-thought length you will allow.</div></li>
+        <li><div class="t">Memory saved, speed not gained</div><p>Pruned weights the hardware cannot skip, or W4 weights dequantized in a slow kernel.</p><div class="spot"><b>Spot it</b>Measure tokens per second and cost per request on target hardware, not file size.</div></li>
+        <li><div class="t">Forgetting the validated model changed</div><p>Model risk signed off the 16-bit model; operations deploys a 4-bit one.</p><div class="spot"><b>Spot it</b>Check the model hash or version in the deployment record against the validation report. A compressed model needs its own evidence.</div></li>
+        <li><div class="t">Distilling a teacher's mistakes and bias</div><p>The student copies every teacher error confidently and cannot beat its labels.</p><div class="spot"><b>Spot it</b>Have humans label a sample independently, and compare student, teacher and humans.</div></li>
+        <li><div class="t">Comparing different true bit-widths</div><p>"4-bit" with group size 32 and outlier storage is nearer 4.6 bits than 4.0.</p><div class="spot"><b>Spot it</b>Ask for effective bits per weight and file size in GB.</div></li>
       </ul>
     </section>
 
-    <!-- ============================== 6. ROOM ============================== -->
-    <section class="part" id="room">
-      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
-      <div class="room">
-        <div class="room-card">
-          <span class="k">To an executive · 30 seconds</span>
-          <blockquote>“A model of this size normally needs about 140 GB of memory. Storing each number in 4 bits instead of 16 brings it to roughly 36 GB, which fits on one GPU. That cuts our hardware bill by two thirds or more. The price is a small quality loss that we measure on our own Arabic and English documents before anything goes live. Long documents have a separate memory cost, and I'll give you that figure by use case.”</blockquote>
-        </div>
-        <div class="room-card">
-          <span class="k">To a technical interviewer or validator</span>
-          <blockquote>“I'd start from an AWQ or GPTQ 4-bit checkpoint with group size 128, calibrated on our own text, and compare it to the 16-bit model on a task suite that includes long-context recall at depth, Arabic, and the multi-step cases, reported by slice with intervals. I'd size the KV cache per user explicitly, since it often dominates at long context, and consider 8-bit cache before 4-bit. Distillation to a smaller student is the option for high-volume narrow tasks, with human-checked labels.”</blockquote>
-        </div>
-      </div>
-      <div class="qa">
-        <details class="reveal"><summary>“Why does a 4-bit model not lose 75% of its quality?”</summary><div class="ans"><p>Because the information is in the pattern across billions of weights, not in the precision of any one. Rounding adds small, mostly independent noise that averages out, and good methods (GPTQ, AWQ) steer the noise away from the weights that matter. Outliers are the exception, which is why the careful methods exist. Quality does fall, more at 3 bits and sharply at 2.</p></div></details>
-        <details class="reveal"><summary>“What is FlashAttention? Does it make the model worse?”</summary><div class="ans"><p>No. It computes exactly the same attention result, but in tiles that stay in fast on-chip memory, so the huge intermediate table is never stored. It is a faster way to do the same sum, not an approximation.</p></div></details>
-        <details class="reveal"><summary>“We have 80 GB cards. Can we serve a 70B model with 100 users reading 100-page files?”</summary><div class="ans"><p>Not on one card. At 4-bit weights, about 36 GB remain for about 36 GB of cache; at 128k tokens each user's cache is 43 GB at 16-bit, 11 GB at 4-bit. We would need several cards, a smaller model, cache quantization or sharing, or to retrieve passages (RAG) instead of loading whole files. I'd size it from the real document lengths and peak concurrency.</p></div></details>
-        <details class="reveal"><summary>“Pruning or quantization: which should we use?”</summary><div class="ans"><p>Quantization first. It is mature, needs no retraining, and tools support it. Pruning only pays off if the hardware can exploit the sparsity (structured or 2:4), and it usually needs retraining or distillation to recover quality. For most banks, the practical pruning is picking a smaller model someone else has already pruned and distilled.</p></div></details>
-        <details class="reveal"><summary>“Can we just train a small model on the big model's answers?”</summary><div class="ans"><p>Yes, and for narrow tasks it often works well. Check the licence of the teacher (some forbid using outputs to train other models), validate the teacher's labels on a human sample, and remember that the student inherits the teacher's mistakes. Keep a monitored sample of the student's decisions going to the larger model for drift detection.</p></div></details>
-      </div>
-    </section>
-
-    <!-- ============================== 7. CHECK ============================== -->
     <section class="part" id="check">
-      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
-      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the formulas in Part 2.</p></div>
+      <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Try each before opening the answer. The numeric ones need only Part 2's formulas.</p></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A 70B-parameter model is stored at 4 bits with one 16-bit scale per 128 weights. How many GB, and how does that compare with 16-bit?</summary><div class="ans"><p>Bits per weight = 4 + 16/128 = 4.125. Memory = 70 × 10⁹ × 4.125 ÷ 8 ≈ <strong>36.1 GB</strong>, against 140 GB at 16-bit: about 3.9 times smaller, not exactly 4.</p></div></details>
-        <details class="reveal"><summary>2. Why does one huge outlier hurt a 4-bit group so much?</summary><div class="ans"><p>The scale is set by the largest value so it just fits in the integer range −7 to +7. If the outlier is 10 times a typical weight, one step of the grid is about 1.4 times a typical weight, and nearly every ordinary weight rounds to 0 or ±1 step. Smaller groups, or keeping the outlier in 16-bit, restore a fine grid for the rest.</p></div></details>
-        <details class="reveal"><summary>3. A model has 32 layers, 8 KV heads, head dimension 128. What is the KV cache for one user at 32,768 tokens in 16-bit?</summary><div class="ans"><p>2 × 32 × 8 × 128 × 2 bytes = 131,072 bytes per token. × 32,768 tokens = 4.29 × 10⁹ bytes, about <strong>4.3 GB</strong>. At 4-bit it is about a quarter of that, ignoring scales.</p></div></details>
-        <details class="reveal"><summary>4. Why is generation speed limited by memory rather than arithmetic?</summary><div class="ans"><p>To produce each token for one user the GPU must read all the weights (and the cache) from memory, but it does only a small amount of arithmetic per byte read. The chip can multiply much faster than it can fetch, so time per token is roughly bytes read ÷ memory bandwidth. Halving the bytes nearly doubles speed. With many users batched together the arithmetic per byte rises and compute matters more.</p></div></details>
-        <details class="reveal"><summary>5. What does FlashAttention change, and what does it not change?</summary><div class="ans"><p>It changes where the work happens: tiled computation in on-chip memory with an online softmax, so the N × N table is never stored and memory traffic falls. It does not change the output (it is exact), and it does not shrink the KV cache. Cache size is a separate problem.</p></div></details>
-        <details class="reveal"><summary>6. A vendor says their 2-bit model "matches the original". List three things you would check.</summary><div class="ans"><p>The model size and task (large models tolerate low bits better than small ones); which benchmarks and languages, and whether long-context and multi-step tasks were included; and the effective bits per weight, calibration data and speed on your hardware. Then run it on 200 of your own examples against the full-precision model.</p></div></details>
-        <details class="reveal"><summary>7. Why does distilling from a temperature-softened teacher teach more than training on the correct label?</summary><div class="ans"><p>A hard label has no information about how wrong the wrong answers are. The softened distribution says which classes the teacher considers close (card fraud and account takeover) and which far (money mule). That similarity structure is extra supervision on every example, so the student learns from fewer examples. Too high a temperature flattens it into noise.</p></div></details>
-        <details class="reveal"><summary>8. Why is 2:4 sparsity often more useful in practice than 50% unstructured pruning, even though it prunes the same fraction?</summary><div class="ans"><p>The fixed pattern (two zeros in every four) is something the hardware can skip efficiently, so it gives real speed. Scattered zeros save storage but a normal GPU still multiplies by them. The price is a somewhat larger accuracy loss than free-form pruning at the same sparsity, as the black dot in Simulation 3 shows.</p></div></details>
+        <details class="reveal"><summary>1. A 70B-parameter model is stored at 4 bits with one 16-bit scale per 128 weights. How many GB, and how does that compare with 16-bit?</summary><div class="ans"><p>Bits per weight = 4 + 16/128 = 4.125. Memory = 70 × 10⁹ × 4.125 ÷ 8 ≈ <strong>36.1 GB</strong>, against 140 GB: about 3.9 times smaller, not exactly 4.</p></div></details>
+        <details class="reveal"><summary>2. Why does one huge outlier hurt a 4-bit group so much?</summary><div class="ans"><p>The scale is set by the largest value fitting −7 to +7. If the outlier is 10 times a typical weight, one grid step is about 1.4 times a typical weight, so nearly every ordinary weight rounds to 0 or ±1 step. Smaller groups, or keeping the outlier in 16-bit, restore a fine grid.</p></div></details>
+        <details class="reveal"><summary>3. A model has 32 layers, 8 KV heads, head dimension 128. What is the KV cache for one user at 32,768 tokens in 16-bit?</summary><div class="ans"><p>2 × 32 × 8 × 128 × 2 bytes = 131,072 bytes per token. × 32,768 tokens ≈ 4.29 × 10⁹ bytes, about <strong>4.3 GB</strong>. At 4-bit, about a quarter, ignoring scales.</p></div></details>
+        <details class="reveal"><summary>4. Why is generation speed limited by memory rather than arithmetic?</summary><div class="ans"><p>Each token needs all the weights (and cache) read from memory, with little arithmetic per byte. The chip multiplies faster than it fetches, so time per token is roughly bytes read ÷ bandwidth. Halving bytes nearly doubles speed. With many users batched, arithmetic per byte rises and compute matters more.</p></div></details>
+        <details class="reveal"><summary>5. What does FlashAttention change, and what does it not change?</summary><div class="ans"><p>It changes where the work happens: tiles in on-chip memory with an online softmax, so the N × N table is never stored and traffic falls. It does not change the output (it is exact) and does not shrink the KV cache.</p></div></details>
+        <details class="reveal"><summary>6. A vendor says their 2-bit model "matches the original". List three things you would check.</summary><div class="ans"><p>Model size and task (large models tolerate low bits better); which benchmarks and languages, including long-context and multi-step tasks; and effective bits per weight, calibration data and speed on your hardware. Then run 200 of your own examples against the full-precision model.</p></div></details>
+        <details class="reveal"><summary>7. Why does distilling from a temperature-softened teacher teach more than training on the correct label?</summary><div class="ans"><p>A hard label says nothing about how wrong the wrong answers are. The softened output shows which classes the teacher sees as close (card fraud, account takeover) and which far (money mule). That similarity structure is extra supervision per example. Too high a temperature flattens it into noise.</p></div></details>
+        <details class="reveal"><summary>8. Why is 2:4 sparsity often more useful in practice than 50% unstructured pruning, though it prunes the same fraction?</summary><div class="ans"><p>The fixed pattern is something hardware can skip efficiently, giving real speed; scattered zeros save storage but a normal GPU still multiplies by them. The price is somewhat larger accuracy loss, as the black dot in Simulation 3 shows.</p></div></details>
       </div>
     </section>
 
-    <!-- ============================== SOURCES ============================== -->
-    <section class="part" id="sources">
-      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
-      <ol class="sources">
-        <li>E. Frantar, S. Ashkboos, T. Hoefler, D. Alistarh. <a href="https://arxiv.org/abs/2210.17323">GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers</a>. ICLR, 2023.</li>
-        <li>J. Lin et al. <a href="https://arxiv.org/abs/2306.00978">AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration</a>. MLSys, 2024.</li>
-        <li>T. Dettmers, M. Lewis, Y. Belkada, L. Zettlemoyer. <a href="https://arxiv.org/abs/2208.07339">LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale</a>. NeurIPS, 2022.</li>
-        <li>G. Xiao et al. <a href="https://arxiv.org/abs/2211.10438">SmoothQuant</a>. ICML, 2023.</li>
-        <li>T. Dettmers et al. <a href="https://arxiv.org/abs/2305.14314">QLoRA: Efficient Finetuning of Quantized LLMs</a>. NeurIPS, 2023. Introduces the NF4 format.</li>
-        <li>Open Compute Project. <a href="https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf">OCP Microscaling Formats (MX) Specification v1.0</a>, 2023. Defines MXFP4.</li>
-        <li>NVIDIA Research. <a href="https://research.nvidia.com/labs/eai/blogs/pushing-intelligence-to-4-bit/">Pushing Intelligence to 4-bit</a>. Describes NVFP4 (vendor source).</li>
-        <li>T. Dao, D. Fu, S. Ermon, A. Rudra, C. Ré. <a href="https://arxiv.org/abs/2205.14135">FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness</a>. NeurIPS, 2022.</li>
-        <li>T. Dao. <a href="https://arxiv.org/abs/2307.08691">FlashAttention-2</a>, 2023; J. Shah et al. <a href="https://arxiv.org/abs/2407.08608">FlashAttention-3</a>, 2024.</li>
-        <li>J. Ainslie et al. <a href="https://arxiv.org/abs/2305.13245">GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints</a>. EMNLP, 2023.</li>
-        <li>W. Kwon et al. <a href="https://arxiv.org/abs/2309.06180">Efficient Memory Management for Large Language Model Serving with PagedAttention</a>. SOSP, 2023.</li>
-        <li>Z. Liu et al. <a href="https://arxiv.org/abs/2402.02750">KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache</a>. ICML, 2024.</li>
-        <li>G. Xiao et al. <a href="https://arxiv.org/abs/2309.17453">Efficient Streaming Language Models with Attention Sinks</a>. ICLR, 2024.</li>
-        <li>E. Frantar, D. Alistarh. <a href="https://arxiv.org/abs/2301.00774">SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot</a>. ICML, 2023.</li>
-        <li>M. Sun, Z. Liu, A. Bair, J. Z. Kolter. <a href="https://arxiv.org/abs/2306.11695">A Simple and Effective Pruning Approach for Large Language Models (Wanda)</a>. ICLR, 2024.</li>
-        <li>S. Muralidharan et al. <a href="https://arxiv.org/abs/2407.14679">Compact Language Models via Pruning and Knowledge Distillation</a>. NeurIPS, 2024.</li>
-        <li>G. Hinton, O. Vinyals, J. Dean. <a href="https://arxiv.org/abs/1503.02531">Distilling the Knowledge in a Neural Network</a>, 2015.</li>
-        <li>S. Ma et al. <a href="https://arxiv.org/abs/2402.17764">The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits</a>, 2024.</li>
-        <li><a href="https://arxiv.org/abs/2606.15682">ReQAT: Achieving Full-Precision Reasoning Accuracy with 4-bit Floating-Point Quantization-Aware Training</a>. arXiv 2606.15682, 2026 (preprint; seen in search results only).</li>
-        <li><a href="https://arxiv.org/abs/2609.19969">DeepSeek-V4.1-Flash: Pushing the Limits of KV Cache Compression</a>. arXiv 2609.19969, 2026 (preprint; seen in search results only).</li>
-      </ol>
       <div class="lesson-foot">
         <a href="../index.html">← Back to the curriculum</a>
         <span>Next in R: Module R13, agents and discovery</span>
       </div>
-    </section>
   </main>
 </div>
 

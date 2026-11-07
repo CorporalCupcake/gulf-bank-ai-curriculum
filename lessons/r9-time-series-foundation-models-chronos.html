@@ -83,9 +83,9 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>Imagine the treasury team wants a 14-day forecast of cash withdrawals for each of 1,800 ATMs. The classical route (<a href="f9-time-series-and-forecasting.html">F9.1</a>) is to fit a model per machine: seasonality, trend, holidays, an error model. It works, but it means 1,800 fits, a pipeline to keep running, and nothing to say about the 40 ATMs installed last month, which have only three weeks of history.</p>
-        <p>A <strong>time-series foundation model</strong> takes the language-model route. Train one large network once, on billions of observations from thousands of unrelated series (electricity, web traffic, retail sales, weather, synthetic curves). Then hand it any new series as context and ask for the next 14 values. No fitting on your data. It has already seen a thousand daily series with a weekend dip, and it recognises yours as another one. That is <em>zero-shot</em> forecasting, and the bet is the same one language models made: broad pretraining beats narrow fitting when data per task is small.</p>
-        <p>The second half of the lesson is about a different shape of data. A payments network is a graph: accounts are nodes, transfers are edges. Graph neural networks learn from that structure, for example by passing messages between neighbouring accounts. The trouble in a bank is that the edges carry <strong>timestamps</strong>, and the order matters. Money moving A to B at 09:00 and B to C at 09:05 is a relay. B to C at 08:00 and A to B at 09:00 is two unrelated payments. A model that ignores order will see a chain where there is none. Temporal graph models, graph transformers and the early graph foundation models are all attempts to learn from structure without losing the clock.</p>
+        <p>Take a 14-day cash-withdrawal forecast for each of 1,800 ATMs. The classical route (<a href="f9-time-series-and-forecasting.html">F9.1</a>) fits one model per machine: 1,800 fits, a pipeline to maintain, and nothing useful for the 40 ATMs installed last month with three weeks of history.</p>
+        <p>A <strong>time-series foundation model</strong> takes the language-model route. Train one large network once on billions of observations from thousands of unrelated series (electricity, web traffic, retail, weather, synthetic curves). Then give it any new series as context and ask for the next 14 values, with no fitting. Like a doctor who has seen thousands of patients and recognises a new one as another weekend-dip case. That is <em>zero-shot</em> forecasting; the bet is that broad pretraining beats narrow fitting when data per task is small.</p>
+        <p>The second half is about graphs. A payments network is a graph: accounts are nodes, transfers are edges, and graph neural networks learn by passing messages between neighbours. In a bank the edges carry <strong>timestamps</strong>, and order matters. A to B at 09:00 then B to C at 09:05 is a relay. B to C at 08:00 then A to B at 09:00 is two unrelated payments. A model that ignores order sees a chain that isn't there. Temporal graph models, graph transformers and early graph foundation models all try to learn structure without losing the clock.</p>
       </div>
 
       <figure class="figure" id="fig-intro-note">
@@ -100,7 +100,7 @@
         </div>
       </figure>
 
-      <div class="callout key"><span class="k">Hold onto this</span>"Zero-shot" means no training on <em>your</em> series, not no judgement. A foundation model is a very well-read generic forecaster. It is strongest where data per series is short and patterns are generic, and weakest where your series depend on things it cannot see: a salary-day calendar, a Ramadan shift, a product launch, a fraud ring changing tactics. Judge it the way you judge any model, against the cheapest strong baseline, out of time, with intervals.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>"Zero-shot" means no training on <em>your</em> series, not no judgement. A foundation model is a very well-read generic forecaster: strongest where series are short and patterns generic, weakest where they depend on what it cannot see (salary-day calendar, Ramadan shift, product launch, a fraud ring changing tactics). Judge it like any model: against the cheapest strong baseline, out of time, with intervals.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -109,17 +109,17 @@
 
       <h3 class="sub" id="m-chronos">Chronos: treat numbers as a language</h3>
       <div class="prose">
-        <p>Chronos (Ansari et al., Amazon, 2024) makes one move that sounds almost silly: turn the series into a sequence of tokens from a small fixed vocabulary, and train a standard language-model architecture (T5) on it with the usual next-token cross-entropy loss. Two steps do it:</p>
+        <p>Chronos (Ansari et al., Amazon, 2024) turns a series into a sequence of tokens from a small fixed vocabulary, like words, and trains a standard language-model network (T5) with next-token cross-entropy. Think of rounding every value to the nearest mark on a ruler, then reading the marks as words. Two steps:</p>
         <ol>
-          <li><strong>Scale.</strong> Divide the context by its mean absolute value, so series measured in AED millions and series measured in single units look alike. Every series now lives around 1.</li>
-          <li><strong>Quantise.</strong> Cut a fixed range of scaled values (roughly −15 to +15) into several thousand equal bins. Each value becomes the ID of its bin, like a word. Anything beyond the range is clipped to the end bin.</li>
+          <li><strong>Scale.</strong> Divide the context by its mean absolute value, so series in AED millions and in single units look alike, all around 1.</li>
+          <li><strong>Quantise.</strong> Cut a fixed range of scaled values (about −15 to +15) into several thousand equal bins. Each value becomes its bin ID. Anything outside is clipped to the end bin.</li>
         </ol>
-        <p>The model reads token IDs and predicts the next ID as a probability distribution over the vocabulary. To forecast, you <strong>sample</strong>: draw a next token, append it, repeat. Run that many times and you get many plausible futures, which is a forecast distribution for free. Quantiles of the samples give the intervals. The loss is classification, not squared error, so the model can be bimodal ("either a normal Thursday or a salary-day spike") without being forced to average the two.</p>
-        <p>This has a cost, and the simulation shows it. Scaling by a mean makes the system sensitive to outliers in the context, and the bin width in original units is fixed by the scale, so there is a floor on how fine a difference the model can represent.</p>
+        <p>The model predicts the next ID as a probability distribution. To forecast, <strong>sample</strong>: draw a token, append it, repeat. Many runs give many plausible futures, so quantiles of the samples are the intervals for free. Because the loss is classification, not squared error, the model can be bimodal ("a normal Thursday or a salary-day spike") instead of averaging the two.</p>
+        <p>The cost: scaling by a mean makes the system sensitive to outliers in the context, and the bin width in original units is set by the scale, so there is a floor on the finest difference it can represent. The simulation shows both.</p>
       </div>
       <div class="formula">
         <math display="block"><mi>s</mi><mo>=</mo><mfrac><mn>1</mn><mi>n</mi></mfrac><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover><mo stretchy="false">|</mo><msub><mi>x</mi><mi>t</mi></msub><mo stretchy="false">|</mo><mo>,</mo><mspace width="1em"></mspace><mtext>token</mtext><mo stretchy="false">(</mo><msub><mi>x</mi><mi>t</mi></msub><mo stretchy="false">)</mo><mo>=</mo><mo stretchy="false">⌊</mo><mfrac><mrow><mi>clip</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mi>t</mi></msub><mo>/</mo><mi>s</mi><mo>,</mo><mo>−</mo><mn>15</mn><mo>,</mo><mn>15</mn><mo stretchy="false">)</mo><mo>+</mo><mn>15</mn></mrow><mrow><mn>30</mn><mo>/</mo><mi>B</mi></mrow></mfrac><mo stretchy="false">⌋</mo></math>
-        <p class="where"><i>s</i> is the scale, <i>B</i> the number of bins. The smallest difference the model can tell apart is one bin: 30·<i>s</i>/<i>B</i> in original units. I use this simplified form in the simulation; the published tokenizer has a few extra details (special tokens, the exact bin count near 4,096).</p>
+        <p class="where"><i>s</i> is the scale, <i>B</i> the number of bins. The smallest difference the model can tell apart is one bin: 30·<i>s</i>/<i>B</i> in original units. Simplified; the published tokenizer adds special tokens and uses about 4,096 bins.</p>
       </div>
 
       <figure class="figure" id="fig-tok">
@@ -147,19 +147,22 @@
       </figure>
 
       <div class="prose">
-        <p>Chronos was trained on a large public collection plus <em>synthetic</em> series generated from random Gaussian-process kernels (the paper calls it KernelSynth), with augmentations that mix real series. Synthetic data matters here: it teaches trend, seasonality and level shifts in forms that real datasets under-represent. Variants followed: Chronos-Bolt, which swaps the token sampling for patches and a direct quantile output for much faster inference, and Chronos-2 (October 2025), which adds multivariate series and covariates in one model. The general pattern is that the tokenised-language idea was the first step and the field then moved to patches and direct quantile heads (below).</p>
+        <p>Chronos trained on a large public collection plus <em>synthetic</em> series from random Gaussian-process kernels (KernelSynth), which teach trend, seasonality and level shifts that real datasets under-represent. Variants followed: Chronos-Bolt swaps token sampling for patches and a direct quantile output, for much faster inference; Chronos-2 (October 2025) adds multivariate series and covariates. The field moved from tokenised values to patches and direct quantile heads (below).</p>
       </div>
 
       <h3 class="sub" id="m-timesfm">TimesFM and patches: read in chunks, write in chunks</h3>
       <div class="prose">
-        <p>Tokenising one value at a time makes long contexts and long horizons expensive. Attention cost grows with the square of the sequence length, and generating a 720-step forecast one token at a time needs 720 passes through the network, with each guess fed back in so errors can compound.</p>
-        <p>TimesFM (Das et al., Google, ICML 2024) is a decoder-only transformer (the same family as GPT) that works on <strong>patches</strong>: a block of consecutive values, say 32, is embedded as one token by a small network. Context of 512 values becomes 16 tokens. Crucially, the output side is also patched: from each position the model predicts a longer block, 128 values in the first release, so a 512-step horizon needs 4 passes, not 512. It was pretrained on a corpus reported at around 100 billion time points mixing Google Trends, Wikipedia page views, public datasets and synthetic series. It outputs a point forecast, and later releases add quantile heads. Moirai (Salesforce) takes a related patch-based route but is built to accept several related variables at once with an "any-variate" attention design, and outputs a mixture of distributions rather than one number.</p>
-        <p>Two ideas to keep. First, <strong>patching is a speed and range trade</strong>: fewer tokens means cheaper attention and longer usable context, at the price of coarser positional detail inside a patch. Second, <strong>output patch length controls compounding</strong>: each autoregressive pass feeds its own forecast back as if it were data, so fewer passes means fewer chances for error to feed on itself.</p>
+        <p>One token per value makes long contexts and horizons expensive. Attention cost grows with the square of sequence length, and a 720-step forecast written one token at a time needs 720 passes, each fed its own earlier guesses so errors compound. It is like copying a book letter by letter instead of word by word.</p>
+        <p>TimesFM (Das et al., Google, ICML 2024) is a decoder-only transformer (the GPT family) working on <strong>patches</strong>: a block of consecutive values, say 32, is embedded as one token. A 512-value context becomes 16 tokens. The output is patched too: each position predicts a longer block (128 values in the first release), so a 512-step horizon takes 4 passes, not 512. Pretraining used about 100 billion time points (Google Trends, Wikipedia page views, public datasets, synthetic series). It outputs a point forecast; later releases add quantile heads. Moirai (Salesforce) is also patch-based but accepts several related variables at once ("any-variate" attention) and outputs a mixture of distributions.</p>
+        <ul>
+          <li><strong>Patching trades detail for speed and range.</strong> Fewer tokens means cheaper attention and longer usable context, at the cost of coarser position inside a patch.</li>
+          <li><strong>Output patch length controls compounding.</strong> Each pass feeds its forecast back as if it were data; fewer passes, fewer chances for error to feed on itself.</li>
+        </ul>
       </div>
 
       <figure class="figure" id="fig-patch">
         <div class="fig-head"><span class="fig-title">Patches shrink the work</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> with a 512-value context, patch length 1 means 262,144 attention pairs; patch length 32 means 256. Then lengthen the horizon to 720 steps and compare one value per pass with 128 values per pass. The last card shows an illustration of why fewer passes matter.</p>
+        <p class="try"><b>Try:</b> with a 512-value context, patch length 1 means 262,144 attention pairs; patch length 32 means 256. Then set the horizon to 720 and compare one value per pass with 128 per pass. The last card illustrates why fewer passes matter.</p>
         <div class="chart-wrap" id="patch-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-pin">Input patch length (values per token) <output for="s-pin"></output></label><input type="range" id="s-pin" min="0" max="4" step="1" value="3"></div>
@@ -178,13 +181,13 @@
 
       <h3 class="sub" id="m-honest">Zero-shot against honest baselines</h3>
       <div class="prose">
-        <p>What does "good" mean here? Not "looks plausible". The foundation model has to beat the cheapest strong method <em>on your data, out of time</em>. For daily banking series with weekly seasonality, that method is a seasonal average with a drift term: take the last <i>C</i> weeks, average each weekday, add the trend. It costs nothing, needs no GPU and is hard to beat on clean, stable series. A good deal of research shows how often fancy models lose to simple ones: Zeng et al. (2023) beat several elaborate transformer forecasters with a single linear layer, and the benchmarks that followed made evaluation more careful.</p>
-        <p>The simulation below does not run a foundation model; that would need the real weights. It builds the baseline set you must beat and lets you see when each simple method wins, so you know what you are asking a foundation model to improve on. Two features of the data are deliberately outside what any zero-shot model can see: a month-end bump in the forecast window (a calendar fact) and an optional regime shift.</p>
+        <p>"Good" means beating the cheapest strong method <em>on your data, out of time</em>, not looking plausible. For daily banking series with weekly seasonality that method is a seasonal average with drift: average each weekday over the last <i>C</i> weeks, add the trend. It is free, needs no GPU and is hard to beat on clean, stable series. Zeng et al. (2023) beat several elaborate transformer forecasters with a single linear layer, and benchmarks have since become more careful. It is like a gym app against a personal trainer: the trainer must beat what a simple plan already delivers.</p>
+        <p>The simulation does not run a foundation model (that needs real weights). It builds the baselines you must beat and shows when each wins. Two features lie outside any zero-shot model's view: a month-end bump in the forecast window (a calendar fact) and an optional regime shift.</p>
       </div>
 
       <figure class="figure" id="fig-base">
         <div class="fig-head"><span class="fig-title">The baseline you must beat</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> with low noise, the repeat-last-week method is strong. Raise noise to 40 and averaging several weeks usually overtakes it, because averaging cancels noise (the table tells you). Then switch on the regime shift: every method misses by roughly the same amount, because nothing in the history says the level will jump. That is a job for a covariate or a human, not for more pretraining.</p>
+        <p class="try"><b>Try:</b> with low noise, repeat-last-week is strong. At noise 40, averaging several weeks usually overtakes it, because averaging cancels noise. Then switch on the regime shift: every method misses by about the same amount, because nothing in the history says the level will jump. That needs a covariate or a human, not more pretraining.</p>
         <div class="chart-wrap" id="base-chart"></div>
         <div class="legend">
           <span><i style="background:var(--muted)"></i>History</span>
@@ -207,7 +210,7 @@
       </figure>
 
       <div class="prose">
-        <p>If you do want to test one on your own series, the code is short. Check the repository for the current interface, since these packages change quickly:</p>
+        <p>To test one on your own series (check the repository for the current interface; these packages change quickly):</p>
 <pre><code># Chronos-Bolt (Amazon), via the chronos-forecasting package; from memory, check the README
 import torch
 from chronos import BaseChronosPipeline
@@ -219,20 +222,19 @@ quantiles, mean = pipe.predict_quantiles(
     quantile_levels=[0.1, 0.5, 0.9],
 )
 # then score against a seasonal baseline on a held-out period, with pinball loss and MAE</code></pre>
-        <p>Evaluate with quantile loss and coverage (see <a href="f7-forecast-and-regression-metrics-mae.html">F7.5</a> and <a href="r8-conformal-prediction.html">conformal prediction</a>): do the 10-90% intervals contain about 80% of outcomes? A foundation model that gives sharp but over-confident intervals is worse for liquidity planning than a wider honest one.</p>
-        <p>How these models can use extra information is the live frontier. Early models were <em>univariate</em>: one series in, one out. Chronos-2 and Moirai take related series and covariates (known-future inputs such as a holiday calendar or planned campaigns) through group attention, which is the direction treasury cares about, since salary days, Eid and Ramadan are known in advance. Fine-tuning on your data is possible, and often a few steps of it close the gap to a tuned local model. The honest order of attack is zero-shot first, then light fine-tuning if the gap to your baseline is real.</p>
+        <p>Score with quantile loss and coverage (<a href="f7-forecast-and-regression-metrics-mae.html">F7.5</a>, <a href="r8-conformal-prediction.html">conformal prediction</a>): do the 10-90% intervals contain about 80% of outcomes? Sharp but over-confident intervals are worse for liquidity planning than wider honest ones.</p>
+        <p>Early models were <em>univariate</em>: one series in, one out. Chronos-2 and Moirai also take related series and known-future covariates (holiday calendars, planned campaigns) through group attention. That matters for treasury, since salary days, Eid and Ramadan are known in advance. A few steps of fine-tuning on your data often close the gap to a tuned local model. Order of attack: zero-shot first, then light fine-tuning if the gap to your baseline is real.</p>
       </div>
 
       <h3 class="sub" id="m-graph">Graphs that change over time</h3>
       <div class="prose">
-        <p>A graph neural network (GNN) updates each node's representation by gathering messages from its neighbours: your account's embedding is mixed with those of accounts you pay or are paid by, over a few rounds. This captures guilt-by-association patterns a flat table of per-account features cannot: a fresh account whose first five counterparties were all previously flagged.</p>
-        <p>Three things make the banking version harder, and each has a model family.</p>
+        <p>A graph neural network (GNN) updates each account's representation by gathering messages from its neighbours over a few rounds, like judging someone by the company they keep. It catches guilt by association that a flat feature table cannot: a fresh account whose first five counterparties were all flagged. Banking adds three difficulties, each with a model family.</p>
         <ul>
-          <li><strong>Time matters on the edges.</strong> Temporal GNNs such as TGN (Rossi et al., 2020) and TGAT (Xu et al., 2020) process a stream of timestamped events. Each node keeps a <em>memory</em> that updates when it is involved in an event, and time encodings let attention weight recent interactions more than old ones. Prediction at time <i>t</i> may only use events before <i>t</i>, which is point-in-time correctness (<a href="f3-leakage-point-in-time.html">F3.1</a>) applied to the graph.</li>
-          <li><strong>Message passing sees only nearby nodes.</strong> Stacking many layers blurs ("over-smoothing") and squeezes far-away information through a few connections ("over-squashing"). <em>Graph transformers</em> (Graphormer, GPS) let every node attend to every other, adding positional or structural encodings (distances, random-walk features) so the model still knows the graph's shape. The cost is attention across all pairs, which limits them to modest graphs, so for a bank-wide payments graph you run them on sampled neighbourhoods.</li>
-          <li><strong>Each graph is different.</strong> A GNN trained on one bank's graph does not transfer to another's. <em>Graph foundation models</em> try to pretrain across many graphs, for example by using relation-structure alone so features need not match (ULTRA does this for knowledge graphs), or by turning graph tasks into text prompts for a language model. This area is early: results are strongest on knowledge-graph link prediction and weakest on the noisy, high-volume, heterogeneous graphs banks have.</li>
+          <li><strong>Time matters on the edges.</strong> Temporal GNNs (TGN, TGAT) process a stream of timestamped events. Each node keeps a <em>memory</em> updated by its events, and time encodings let attention favour recent interactions. Prediction at time <i>t</i> may use only events before <i>t</i>: point-in-time correctness (<a href="f3-leakage-point-in-time.html">F3.1</a>) applied to a graph.</li>
+          <li><strong>Message passing sees only nearby nodes.</strong> Stacking many layers blurs everything ("over-smoothing") and squeezes distant information through a few links ("over-squashing"). <em>Graph transformers</em> (Graphormer, GPS) let every node attend to every other, with positional or structural encodings (distances, random-walk features) to keep the graph's shape. Quadratic cost limits them to modest graphs, so on a bank-wide graph you run them on sampled neighbourhoods.</li>
+          <li><strong>Each graph is different.</strong> A GNN trained on one bank's graph does not transfer to another's. <em>Graph foundation models</em> pretrain across many graphs, for example using relation structure alone so features need not match (ULTRA, for knowledge graphs), or turning graph tasks into text prompts. The area is early: strongest on knowledge-graph link prediction, weakest on noisy, high-volume, heterogeneous bank graphs.</li>
         </ul>
-        <p>The most useful single idea from temporal graph work for a bank is the <strong>time-respecting path</strong>: a path <i>A → B → C</i> only counts if the edge into <i>B</i> happened before the edge out of <i>B</i>, and, for mule-style layering, soon enough after it. The simulation makes that exact.</p>
+        <p>The most useful temporal idea for a bank is the <strong>time-respecting path</strong>. A path <i>A → B → C</i> counts only if the payment into <i>B</i> came before the payment out, and, for mule layering, soon enough after. Like a relay race: the baton must arrive before it can be handed on.</p>
       </div>
 
       <figure class="figure" id="fig-graph">
@@ -259,156 +261,46 @@ quantiles, mean = pipe.predict_quantiles(
       </figure>
 
       <div class="prose">
-        <p>This hard rule is also a strong <em>feature</em> for a conventional model: count the time-respecting two- and three-hop paths into each account in the last 24 hours and feed the count to a gradient-boosted tree. In practice, teams find that carefully engineered graph features plus a tree model are a high bar for a deep temporal GNN to clear, and benchmarks have shown simple recency heuristics (such as EdgeBank, which just remembers past edges) beating several learned temporal models on some link-prediction tasks. Try the cheap version first.</p>
+        <p>The hard rule is also a strong <em>feature</em>: count time-respecting two- and three-hop paths into each account in the last 24 hours and feed the count to a gradient-boosted tree. Engineered graph features plus a tree are a high bar for a deep temporal GNN. Benchmarks show EdgeBank, which just remembers past edges, beating several learned temporal models on some link-prediction tasks. Try the cheap version first.</p>
       </div>
     </section>
 
-    <!-- ============================== 3. CONNECTS ============================== -->
-    <section class="part" id="connects">
-      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
-      <div class="prose"><p>Both halves reuse ideas you already have; the novelty is the scale of pretraining and the use of time.</p></div>
-      <div class="links">
-        <div class="link-card"><span class="code">F9.1 · Time series and forecasting</span><span class="t"><a href="f9-time-series-and-forecasting.html">The classical toolkit</a></span><p>Seasonality, trend, ARIMA and ETS. Every foundation-model result is measured against these, and the seasonal average in Simulation 3 is their simplest form.</p></div>
-        <div class="link-card"><span class="code">F7.5 · Forecast metrics</span><span class="t"><a href="f7-forecast-and-regression-metrics-mae.html">MAE, MASE and quantile loss</a></span><p>How to score point and interval forecasts, and why a scale-free metric is needed when you forecast many series.</p></div>
-        <div class="link-card"><span class="code">F5.5 · Attention</span><span class="t"><a href="f5-attention.html">The block both families use</a></span><p>Patching changes what a token is, not how attention works. Graph transformers apply the same operation to nodes.</p></div>
-        <div class="link-card"><span class="code">F5.7 · Self-supervised learning</span><span class="t"><a href="f5-self-supervised-and-contrastive-learning.html">Pretraining without labels</a></span><p>Predicting the next value needs no labels, so time series can be pretrained on huge unlabelled collections just as text can.</p></div>
-        <div class="link-card"><span class="code">R9.1 · R9.2 · Relational and tabular models</span><span class="t"><a href="r9-relational-deep-learning-relbench.html">The neighbouring lesson</a></span><p>Relational deep learning turns a database into a temporal graph, the same object as this lesson's second half. Tabular foundation models are the "pretrained on many tables" parallel to pretrained forecasters.</p></div>
-        <div class="link-card"><span class="code">R8.1 · Conformal prediction</span><span class="t"><a href="r8-conformal-prediction.html">Intervals you can trust</a></span><p>Foundation models give intervals but not guarantees. Conformal calibration on your own recent errors is a cheap way to repair coverage.</p></div>
-        <div class="link-card"><span class="code">B5.1 · Liquidity forecasting</span><span class="t"><a href="b5-liquidity-forecasting-and-asset-liability.html">The treasury use case</a></span><p>Cash, ATM and funding forecasts across many entities, many with short histories, are the natural target for zero-shot models.</p></div>
-        <div class="link-card"><span class="code">A9.2 · Mule detection with graph ML</span><span class="t"><a href="a9-scams-on-instant-payment-rails.html">The temporal graph at work</a></span><p>Fast relays through freshly opened accounts are exactly the time-respecting paths of Simulation 4.</p></div>
-        <div class="link-card"><span class="code">A8.1 · Transaction foundation models</span><span class="t"><a href="a8-foundation-models-for-transaction-data.html">Pretraining on payments</a></span><p>A foundation model for sequences of transactions is the same bet as Chronos, with categorical events rather than one numeric series.</p></div>
-        <div class="link-card"><span class="code">B1.1 · Fraud and B2 · AML monitoring</span><span class="t"><a href="b1-transaction-and-card-fraud-detection.html">Where the graph signal pays</a></span><p>Shared devices, shared beneficiaries and layering chains. See also <a href="b2-transaction-monitoring-rules-versus-ml.html">rules versus ML</a> for how graph scores fit alongside rule scenarios.</p></div>
-        <div class="link-card"><span class="code">F3.1 · Point-in-time</span><span class="t"><a href="f3-leakage-point-in-time.html">Time travel in a graph</a></span><p>Using an edge that happened after the prediction date is leakage, and graphs make it easy to do by accident.</p></div>
-      </div>
-      <div class="prose" style="margin-top:22px">
-        <p>Where it shows up at the bank:</p>
-        <ul>
-          <li><strong>Treasury and operations.</strong> ATM cash, branch footfall, call-centre volume, payment-rail load. Many series, uneven history, forecasts needed per entity.</li>
-          <li><strong>New products and new entities.</strong> Cold-start series (a new card product, a new branch) where a local model has nothing to learn from.</li>
-          <li><strong>Balance and deposit monitoring.</strong> Zero-shot forecasts as a quick expected range for anomaly flags, to be backed by a proper model if it matters.</li>
-          <li><strong>AML and scam networks.</strong> Layering chains, mule rings, shared devices; temporal graph features and, where data supports it, GNN scores.</li>
-          <li><strong>Regulated use.</strong> Capital, IFRS 9 and liquidity-risk numbers go through model-risk governance. A third-party pretrained model whose training data you cannot inspect is a harder validation case; I would not assume an answer to how a CBUAE or SAMA reviewer treats it, and would raise it early with model risk.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- ============================== 4. FIELD ============================== -->
-    <section class="part" id="field">
-      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
-      <div class="prose">
-        <p>The live questions: how much do pretrained forecasters beat tuned local models, can they use covariates well, and how much of the benchmark progress is real given overlapping data. For graphs: whether learned temporal models beat engineered features, and whether a graph foundation model can work outside knowledge graphs.</p>
-      </div>
-      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with a few searches. The leaderboard changes often; newer items below come from papers and secondary write-ups and should be checked against the live pages.</p>
-      <ol class="timeline" style="margin-top:14px">
-        <li><span class="yr">2020</span><div><div class="t">Temporal graph networks</div><p>TGN keeps a memory per node updated by timestamped events; TGAT adds functional time encodings to attention. They set the template for continuous-time graph learning.</p><div class="src">Rossi et al., 2020; Xu et al., ICLR 2020</div></div></li>
-        <li><span class="yr">2021–22</span><div><div class="t">Graph transformers</div><p>Graphormer showed that adding structural encodings to a transformer wins on molecule benchmarks. GPS gave a recipe combining local message passing with global attention.</p><div class="src">Ying et al., NeurIPS 2021; Rampášek et al., NeurIPS 2022</div></div></li>
-        <li><span class="yr">2022</span><div><div class="t">Simple memory beats learned temporal models, sometimes</div><p>EdgeBank, a non-learning method that remembers past edges, matched or beat several temporal GNNs on link prediction, prompting a push for harder evaluation.</p><div class="src">Poursafaei et al., NeurIPS 2022</div></div></li>
-        <li><span class="yr">2023</span><div><div class="t">Simple linear forecasters</div><p>A one-layer linear model outperformed several transformer forecasters on common benchmarks, which reset standards for evaluation.</p><div class="src">Zeng et al., AAAI 2023</div></div></li>
-        <li><span class="yr">2023</span><div><div class="t">Temporal Graph Benchmark; a graph foundation model for knowledge graphs</div><p>TGB provided large, standardised datasets and a realistic evaluation protocol for temporal link and node prediction. ULTRA showed one pretrained model transferring to dozens of unseen knowledge graphs.</p><div class="src">Huang et al., NeurIPS 2023; Galkin et al., ICLR 2024</div></div></li>
-        <li><span class="yr">2024</span><div><div class="t">Chronos, TimesFM, Moirai</div><p>Three pretrained forecasters from Amazon, Google and Salesforce: tokenised values with a T5 model; decoder-only patches; any-variate patch attention. GIFT-Eval followed as a benchmark for comparing them.</p><div class="src">Ansari et al.; Das et al., ICML 2024; Woo et al., ICML 2024; Aksu et al., 2024</div></div></li>
-        <li><span class="yr">2025</span><div><div class="t">Chronos-2 and the covariate turn</div><p>Chronos-2 handles multivariate series, covariates and cross-series information in one pretrained model of around 119 million parameters, and led GIFT-Eval at launch. The authors note some overlap between their training data and GIFT-Eval's training splits, but not its test portions. A survey of graph foundation models also appeared.</p><div class="src">Ansari et al., arXiv 2510.15821; Wang et al., arXiv 2505.15116</div></div></li>
-        <li><span class="yr">2026</span><div><div class="t">Rankings keep moving</div><p>Later comparisons report TimesFM-3.0 ahead of Chronos-2 on GIFT-Eval, but those tables come from third-party papers rather than the official leaderboard, and independent tests show first place changing with the dataset. For temporal graphs and fraud, recent preprints propose continuous-time graph transformers and conformal wrappers, with caution that public benchmark results may not transfer to real bank fraud.</p><div class="src">arXiv 2609.24559 (t0 paper); Frontiers in AI, 2026; arXiv 2608.15768. Preprints; check the published versions</div></div></li>
-      </ol>
-      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
-      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
-      <div class="table-wrap" style="margin-top:10px">
-        <table class="data">
-          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
-          <tbody>
-            <tr><td><b>Seasonal and ETS/ARIMA baselines for forecasting</b></td><td>Per-series statistical models with calendar effects, used in treasury and operations planning.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Gradient boosting on engineered graph features</b></td><td>Counts of counterparties, shared devices, time-windowed path features fed to a tree model for fraud and AML triage.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Pretrained forecasters as a benchmark or cold-start tool</b></td><td>Zero-shot forecasts for new entities or as a challenger beside the production model.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>GNN scores in fraud and AML</b></td><td>Message-passing models on account graphs, usually alongside rules; temporal variants less common.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>Production forecasts from a foundation model alone</b></td><td>Driving limits or regulatory numbers directly from a zero-shot model. Little is published.</td><td><span class="status inf">Reported</span></td></tr>
-            <tr><td><b>Graph foundation models for payments</b></td><td>One pretrained graph model reused across banks or products. Results are mostly on public benchmarks.</td><td><span class="status prop">Proposed</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Pretrained forecasters are a credible challenger and a good cold-start tool, increasingly able to use covariates; temporal graph structure is valuable, but engineered time-aware features and tree models remain a hard baseline. In both, the burden of proof is an out-of-time comparison against the simple method.</div>
-    </section>
-
-    <!-- ============================== 5. FAILS ============================== -->
+    <!-- ============================== 3. FAILS ============================== -->
     <section class="part" id="fails">
-      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Each failure comes with the quickest check.</p></div>
+      <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Benchmark leakage and "zero-shot" that wasn't</div><p>The test series (or a near copy, or the same period of the same public dataset) was in pretraining. The model looks remarkable, then disappoints on your private data.</p><div class="spot"><b>Spot it</b>Ask what was in the pretraining corpus. Judge only on a period after the model's data cutoff, or on series that are private to you.</div></li>
-        <li><div class="t">Not beating a seasonal baseline</div><p>A glossy comparison to one weak competitor, such as the last value.</p><div class="spot"><b>Spot it</b>Demand seasonal naive and a seasonal average with drift in the table, scored with a scale-free metric such as MASE over several forecast origins.</div></li>
-        <li><div class="t">Outliers wrecking the scale</div><p>Tokenised models scale by a context statistic. A data error or a one-off settlement in the context rescales everything.</p><div class="spot"><b>Spot it</b>Check the forecast's behaviour when you remove or cap the outlier. Clean obvious errors before forecasting.</div></li>
-        <li><div class="t">Missing calendar knowledge</div><p>Salary days, Eid, Ramadan, school fees, quarter-end. A univariate model sees only past data, and the Islamic calendar shifts about 11 days a year against the Gregorian one.</p><div class="spot"><b>Spot it</b>Plot errors by day-of-month and around holidays. If they cluster there, add covariates or a calendar adjustment.</div></li>
-        <li><div class="t">Over-confident intervals</div><p>Sharp 80% intervals that contain 60% of outcomes.</p><div class="spot"><b>Spot it</b>Count coverage on a held-out period. Recalibrate with conformal methods if it is off.</div></li>
-        <li><div class="t">Regime breaks</div><p>A new product, merger or rule change moves the level. No pretrained model can know.</p><div class="spot"><b>Spot it</b>Run the change-point check on the history; track forecast bias over rolling windows and alert on a run of same-sign errors.</div></li>
-        <li><div class="t">Graph leakage through future edges</div><p>Features or neighbours computed on the full graph include transfers made after the prediction date. Offline AUC is high; live performance is not.</p><div class="spot"><b>Spot it</b>Check that the neighbourhood sampler filters by timestamp. Rebuild features as of each date and compare.</div></li>
-        <li><div class="t">Label bias in graph training sets</div><p>Known mules are those the old rules caught. The model learns to find what the rules found.</p><div class="spot"><b>Spot it</b>Look at how labels were produced. Hold out cases found by other means (customer complaints, external tip-offs) as a test.</div></li>
-        <li><div class="t">Static graph, time-blind reading</div><p>A chain of payments that never was a chain because of ordering. Investigators chase false leads.</p><div class="spot"><b>Spot it</b>Ask whether paths respect timestamps and a plausible hold window; compare time-respecting counts with static ones as in Simulation 4.</div></li>
-        <li><div class="t">Cost and opacity</div><p>A large pretrained model is a vendor-style dependency: weights, licence, versioning, GPU for large volumes.</p><div class="spot"><b>Spot it</b>Pin the model version and licence, store its outputs for audit, and keep the baseline running as a fallback.</div></li>
+        <li><div class="t">Benchmark leakage: "zero-shot" that wasn't</div><p>The test series, or a copy of it, was in pretraining. Like a student who saw the exam paper: great result, then disappointing on your private data.</p><div class="spot"><b>Spot it</b>Ask what was in the pretraining corpus. Judge only on periods after the model's data cutoff, or on series private to you.</div></li>
+        <li><div class="t">Not beating a seasonal baseline</div><p>A glossy comparison against one weak rival, such as the last value.</p><div class="spot"><b>Spot it</b>Demand seasonal naive and seasonal average with drift in the table, scored with a scale-free metric such as MASE over several forecast origins.</div></li>
+        <li><div class="t">Outliers wrecking the scale</div><p>Tokenised models scale by a context statistic. One data error or one-off settlement rescales everything, like one giant in a photo shrinking everyone else.</p><div class="spot"><b>Spot it</b>Remove or cap the outlier and see whether the forecast changes. Clean obvious errors first.</div></li>
+        <li><div class="t">Missing calendar knowledge</div><p>Salary days, Eid, Ramadan, school fees, quarter-end. A univariate model sees only past data, and the Islamic calendar shifts about 11 days a year against the Gregorian one.</p><div class="spot"><b>Spot it</b>Plot errors by day-of-month and around holidays. If they cluster, add covariates or a calendar adjustment.</div></li>
+        <li><div class="t">Over-confident intervals</div><p>Sharp 80% intervals that contain only 60% of outcomes.</p><div class="spot"><b>Spot it</b>Count coverage on a held-out period. Recalibrate with conformal methods if it is off.</div></li>
+        <li><div class="t">Regime breaks</div><p>A new product, merger or rule change moves the level. No pretrained model can know.</p><div class="spot"><b>Spot it</b>Run a change-point check on the history. Track forecast bias over rolling windows and alert on a run of same-sign errors.</div></li>
+        <li><div class="t">Graph leakage through future edges</div><p>Features or neighbours computed on the full graph include transfers made after the prediction date. Offline AUC is high; live performance is not.</p><div class="spot"><b>Spot it</b>Check the neighbourhood sampler filters by timestamp. Rebuild features as of each date and compare.</div></li>
+        <li><div class="t">Label bias in graph training sets</div><p>Known mules are those the old rules caught, so the model learns to find what the rules found.</p><div class="spot"><b>Spot it</b>Check how labels were produced. Hold out cases found by other means (complaints, external tip-offs) as a test.</div></li>
+        <li><div class="t">Static graph, time-blind reading</div><p>A payment chain that never was a chain because of ordering. Investigators chase false leads.</p><div class="spot"><b>Spot it</b>Ask whether paths respect timestamps and a plausible hold window. Compare time-respecting and static counts, as in Simulation 4.</div></li>
+        <li><div class="t">Cost and opacity</div><p>A large pretrained model is a vendor-style dependency: weights, licence, versioning, GPU at volume. Capital, IFRS 9 and liquidity numbers go through model-risk governance, and a third-party model with uninspectable training data is a harder case. I would not assume how a CBUAE or SAMA reviewer treats it; raise it early with model risk.</p><div class="spot"><b>Spot it</b>Pin model version and licence, store outputs for audit, and keep the baseline running as fallback.</div></li>
       </ul>
     </section>
 
-    <!-- ============================== 6. ROOM ============================== -->
-    <section class="part" id="room">
-      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
-      <div class="room">
-        <div class="room-card">
-          <span class="k">To an executive · 30 seconds</span>
-          <blockquote>“These are forecasting models trained once on a huge variety of series, so they can give a reasonable forecast for a new ATM or branch with almost no history of its own. I would use them as a challenger and for cold starts, and keep our simple seasonal model as the benchmark. If the pretrained model does not beat it on our own data, over a period it has not seen, we do not adopt it.”</blockquote>
-        </div>
-        <div class="room-card">
-          <span class="k">To a technical interviewer or validator</span>
-          <blockquote>“Chronos scales by mean absolute value and quantises to a few thousand tokens; TimesFM works on patches with a decoder-only transformer and writes longer output blocks. I'd evaluate zero-shot against seasonal naive and seasonal average with drift, scoring MASE and quantile loss over rolling origins after the model's data cutoff, and check interval coverage. For graphs I'd ask first whether engineered time-windowed path features in a boosted tree already capture the signal, and make sure neighbour sampling respects timestamps. Only then would I justify a temporal GNN.”</blockquote>
-        </div>
-      </div>
-      <div class="qa">
-        <details class="reveal"><summary>“Can we replace our forecasting models with Chronos?”</summary><div class="ans"><p>Not on faith. It is a strong generic forecaster and a good fit for short or new series. For long, stable series with good calendar features, tuned local models are often as good. Run it as a challenger on rolling out-of-time windows, compare with a seasonal baseline and with interval coverage, and decide per segment. Model risk will also want the training-data and versioning questions answered.</p></div></details>
-        <details class="reveal"><summary>“What does zero-shot mean here, exactly?”</summary><div class="ans"><p>The model weights are not updated on your series; you pass recent history as context and read off the forecast. It still conditions on that context, so the quality of the history matters. Light fine-tuning on your data is a middle path if zero-shot falls short.</p></div></details>
-        <details class="reveal"><summary>“Why not just use an LLM for forecasting?”</summary><div class="ans"><p>General language models can be prompted with numbers, but they are slow, costly and poorly calibrated on numeric series. Purpose-built forecasters are far smaller and trained for the task. Chronos borrows the language-model recipe, but is not a chatbot.</p></div></details>
-        <details class="reveal"><summary>“Is a graph neural network better than our rules and features for mule detection?”</summary><div class="ans"><p>It can add signal where relationships matter, such as ring structure and relay speed. But I'd start with time-windowed graph features in a gradient-boosted model, which is simpler to validate and explain, and add a GNN if it improves precision at our alert capacity on a time-ordered test set. Timestamps must be respected throughout, or we will measure leakage.</p></div></details>
-        <details class="reveal"><summary>“Could we use one graph foundation model across all our products?”</summary><div class="ans"><p>It's an attractive idea, but the evidence is early and mostly on public or knowledge-graph benchmarks. Our graphs are large, noisy and have sparse labels. I'd treat it as research to track, and test it as a challenger rather than rely on it.</p></div></details>
-      </div>
-    </section>
-
-    <!-- ============================== 7. CHECK ============================== -->
+    <!-- ============================== 4. CHECK ============================== -->
     <section class="part" id="check">
-      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
-      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A context has mean absolute value AED 50m. With 4,096 bins over ±15 times the scale, what is the finest difference represented? What if one data error pushes the mean to AED 100m?</summary><div class="ans"><p>30 × 50 ÷ 4,096 ≈ AED 0.37m. After the outlier, 30 × 100 ÷ 4,096 ≈ AED 0.73m. The resolution doubled in coarseness for every normal day, and the outlier itself is clipped if it is above 15 × the new scale.</p></div></details>
-        <details class="reveal"><summary>2. Why can Chronos give a forecast distribution without an extra model of uncertainty?</summary><div class="ans"><p>Its output is a probability distribution over the next token. Sampling many paths, each token fed back in, gives many futures. Quantiles of those paths are the intervals. Whether the intervals are well calibrated is a separate question to test.</p></div></details>
+        <details class="reveal"><summary>1. A context has mean absolute value AED 50m. With 4,096 bins over ±15 times the scale, what is the finest difference represented? What if one data error pushes the mean to AED 100m?</summary><div class="ans"><p>30 × 50 ÷ 4,096 ≈ AED 0.37m. After the outlier, 30 × 100 ÷ 4,096 ≈ AED 0.73m: twice as coarse for every normal day. The outlier itself is clipped if it exceeds 15 × the new scale.</p></div></details>
+        <details class="reveal"><summary>2. Why can Chronos give a forecast distribution without an extra uncertainty model?</summary><div class="ans"><p>It outputs a probability distribution over the next token. Sample many paths, feeding each token back in, and quantiles of the paths are the intervals. Whether they are well calibrated still needs testing.</p></div></details>
         <details class="reveal"><summary>3. A context of 512 values is split into patches of 32. How many tokens, and how many attention pairs compared with patch length 1?</summary><div class="ans"><p>16 tokens and 256 pairs, against 512 tokens and 262,144 pairs: a thousand-fold reduction.</p></div></details>
         <details class="reveal"><summary>4. You need a 400-step horizon. How many passes with output patch 128, and with one value per pass?</summary><div class="ans"><p>ceil(400/128) = 4 passes, against 400. Fewer passes mean fewer chances for fed-back errors to compound.</p></div></details>
-        <details class="reveal"><summary>5. A foundation model beats "repeat last week" on 14 ATMs. Should you adopt it?</summary><div class="ans"><p>Not yet. Compare with a seasonal average and drift too, over many forecast origins, on more series, after the model's data cutoff, with a scale-free metric and interval coverage. Fourteen ATMs and one weak baseline is anecdote.</p></div></details>
-        <details class="reveal"><summary>6. Month-end salary spikes are known in advance. Why does that matter for model choice?</summary><div class="ans"><p>A univariate model sees them only as past pattern, and they sit on a calendar it cannot infer reliably. A model that accepts known-future covariates, or a local model with calendar features, uses them directly. Covariate support is a key differentiator in newer pretrained forecasters.</p></div></details>
-        <details class="reveal"><summary>7. In Simulation 4, funds reach E at hour 5 and an edge E to F occurs at hour 1. Is F linked in the static graph? In the time-respecting one?</summary><div class="ans"><p>Static: yes, there is an edge. Time-respecting: no, the transfer happened before the money arrived, so it cannot be part of the relay. This is the false lead the time-aware view removes.</p></div></details>
-        <details class="reveal"><summary>8. What is over-squashing, and how do graph transformers address it?</summary><div class="ans"><p>In message passing, information from distant nodes must pass through a narrow set of intermediate connections and gets compressed into fixed-size vectors. Graph transformers let any node attend to any other directly, with structural encodings so the model knows where nodes sit. The price is quadratic attention cost.</p></div></details>
+        <details class="reveal"><summary>5. A foundation model beats "repeat last week" on 14 ATMs. Should you adopt it?</summary><div class="ans"><p>Not yet. Compare with seasonal average and drift too, over many forecast origins, on more series, after the model's data cutoff, with a scale-free metric and interval coverage. Fourteen ATMs and one weak baseline is anecdote.</p></div></details>
+        <details class="reveal"><summary>6. Month-end salary spikes are known in advance. Why does that matter for model choice?</summary><div class="ans"><p>A univariate model sees them only as past pattern and cannot reliably infer the calendar. A model with known-future covariates, or a local model with calendar features, uses them directly. Covariate support is a key differentiator in newer pretrained forecasters.</p></div></details>
+        <details class="reveal"><summary>7. In Simulation 4, funds reach E at hour 5 and an edge E to F occurs at hour 1. Is F linked in the static graph? In the time-respecting one?</summary><div class="ans"><p>Static: yes, the edge exists. Time-respecting: no, the transfer happened before the money arrived. This is the false lead the time-aware view removes.</p></div></details>
+        <details class="reveal"><summary>8. What is over-squashing, and how do graph transformers address it?</summary><div class="ans"><p>In message passing, information from distant nodes is squeezed through a few connections into fixed-size vectors. Graph transformers let any node attend to any other, with structural encodings to keep the graph's shape. The price is quadratic attention cost.</p></div></details>
       </div>
     </section>
 
-    <!-- ============================== SOURCES ============================== -->
-    <section class="part" id="sources">
-      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
-      <ol class="sources">
-        <li>A. Ansari et al. <a href="https://arxiv.org/abs/2403.07815">Chronos: Learning the Language of Time Series</a>. 2024.</li>
-        <li>A. Ansari et al. <a href="https://arxiv.org/abs/2510.15821">Chronos-2: From Univariate to Universal Forecasting</a>. 2025.</li>
-        <li>A. Das, W. Kong, R. Sen, Y. Zhou. <a href="https://arxiv.org/abs/2310.10688">A decoder-only foundation model for time-series forecasting</a> (TimesFM). ICML 2024.</li>
-        <li>G. Woo et al. <a href="https://arxiv.org/abs/2402.02592">Unified Training of Universal Time Series Forecasting Transformers</a> (Moirai). ICML 2024.</li>
-        <li>T. Aksu et al. <a href="https://arxiv.org/abs/2410.10393">GIFT-Eval: A Benchmark for General Time Series Forecasting Model Evaluation</a>. 2024.</li>
-        <li>A. Zeng et al. <a href="https://arxiv.org/abs/2205.13504">Are Transformers Effective for Time Series Forecasting?</a> AAAI 2023.</li>
-        <li><a href="https://github.com/amazon-science/chronos-forecasting">chronos-forecasting</a> and <a href="https://github.com/google-research/timesfm">timesfm</a> repositories. Current model names and interfaces.</li>
-        <li>E. Rossi et al. <a href="https://arxiv.org/abs/2006.10637">Temporal Graph Networks for Deep Learning on Dynamic Graphs</a>. 2020.</li>
-        <li>D. Xu et al. <a href="https://arxiv.org/abs/2002.07962">Inductive Representation Learning on Temporal Graphs</a> (TGAT). ICLR 2020.</li>
-        <li>C. Ying et al. <a href="https://arxiv.org/abs/2106.05234">Do Transformers Really Perform Bad for Graph Representation?</a> (Graphormer). NeurIPS 2021.</li>
-        <li>L. Rampášek et al. <a href="https://arxiv.org/abs/2205.12454">Recipe for a General, Powerful, Scalable Graph Transformer</a> (GPS). NeurIPS 2022.</li>
-        <li>F. Poursafaei et al. <a href="https://arxiv.org/abs/2207.10128">Towards Better Evaluation for Dynamic Link Prediction</a> (EdgeBank). NeurIPS 2022.</li>
-        <li>S. Huang et al. <a href="https://arxiv.org/abs/2307.01026">Temporal Graph Benchmark for Machine Learning on Temporal Graphs</a>. NeurIPS 2023.</li>
-        <li>M. Galkin et al. <a href="https://arxiv.org/abs/2310.04562">Towards Foundation Models for Knowledge Graph Reasoning</a> (ULTRA). ICLR 2024.</li>
-        <li>Graph Foundation Models: <a href="https://arxiv.org/abs/2505.15116">A Comprehensive Survey</a>. 2025.</li>
-        <li>E. Altman et al. <a href="https://arxiv.org/abs/2306.16424">Realistic Synthetic Financial Transactions for Anti-Money Laundering Models</a>. 2023. A public AML graph dataset.</li>
-      </ol>
-      <div class="lesson-foot">
-        <a href="../index.html">← Back to the curriculum</a>
-        <span>Next in R9: relational deep learning and tabular foundation models (R9.1 · R9.2)</span>
-      </div>
-    </section>
+    <div class="lesson-foot">
+      <a href="../index.html">← Back to the curriculum</a>
+      <span>Next in R9: relational deep learning and tabular foundation models (R9.1 · R9.2)</span>
+    </div>
   </main>
 </div>
 
