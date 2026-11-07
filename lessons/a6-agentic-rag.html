@@ -69,16 +69,16 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A relationship manager asks the bank's internal assistant: <em>"Which of our corporate clients depend on suppliers owned by the group that just defaulted, and what did the credit committee say about them last year?"</em></p>
-        <p>A basic RAG system (<a href="m3-hybrid-search-and-reciprocal-rank.html">M3</a>) embeds the question, pulls the five nearest chunks and asks the model to answer. It will probably find a news article about the default and a credit memo that mentions the group by name. It will not find the supplier two steps away, because no single passage mentions both the defaulted group and that supplier's client. The model then writes a fluent answer from what it was given. That is the failure: one search, one shot, no way to notice it came back with the wrong material.</p>
-        <p>Three upgrades address this, and each one has a price.</p>
+        <p>A relationship manager asks: <em>"Which corporate clients depend on suppliers owned by the group that just defaulted, and what did the credit committee say about them last year?"</em></p>
+        <p>Basic RAG (<a href="m3-hybrid-search-and-reciprocal-rank.html">M3</a>) embeds the question, pulls the five nearest chunks and answers. It finds the default news and a credit memo naming the group. It misses the supplier two steps away, because no single passage names both the group and that supplier's client. The model still writes a fluent answer. One search, one shot, no way to notice the wrong material came back.</p>
+        <p>Three upgrades, each with a price:</p>
         <ul>
-          <li><strong>Agentic RAG (A6.3).</strong> Let the model run the search like an analyst: search, read, decide what is still missing, search again with a better query, and stop when satisfied. It handles multi-step questions. It costs more and can stop for the wrong reasons.</li>
-          <li><strong>GraphRAG (A6.4).</strong> Build a map of entities and relationships (who owns whom, who supplies whom, who guarantees whom) and retrieve by walking the map. Good for "how is A connected to B" and "what are the themes across this whole corpus". Expensive to build and only as good as the extraction.</li>
-          <li><strong>Permission-aware retrieval (A6.5).</strong> Make sure the person asking, and the agent acting for them, only ever get chunks they are entitled to see. This is not an upgrade in quality. It is the entry ticket for a bank, and it is harder than it sounds once the corpus spans thousands of sources.</li>
+          <li><strong>Agentic RAG (A6.3).</strong> The model runs the search like an analyst, looping until satisfied. Handles multi-step questions; costs more and can stop for the wrong reasons.</li>
+          <li><strong>GraphRAG (A6.4).</strong> Build a map of who owns, supplies and guarantees whom, and walk it. Good for "how is A connected to B" and corpus-wide themes; expensive to build and only as good as the extraction.</li>
+          <li><strong>Permission-aware retrieval (A6.5).</strong> The asker, and the agent acting for them, only get chunks they may see. Not a quality upgrade; the entry ticket for a bank.</li>
         </ul>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>All three are about the same hidden question: <em>what is in the model's context window, and who decided that?</em> Agentic RAG lets the model decide. GraphRAG lets a data structure decide. Permissions put a rule above both. The model should never be the one enforcing access.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>All three answer one question: <em>what is in the model's context window, and who decided that?</em> Agentic RAG lets the model decide, GraphRAG a data structure, and permissions put a rule above both. The model should never enforce access.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -87,7 +87,7 @@
 
       <h3 class="sub" id="m-agentic">Agentic RAG: the agent decides what to search and when to stop</h3>
       <div class="prose">
-        <p>Strip away the branding and agentic RAG is the agent loop from <a href="m4-the-agent-loop-reason-act.html">M4.1</a> with retrieval as the main tool. The skeleton:</p>
+        <p>Think of an analyst, not a vending machine: search, read, spot the gap, search again, stop when satisfied. Agentic RAG is the agent loop from <a href="m4-the-agent-loop-reason-act.html">M4.1</a> with retrieval as the main tool.</p>
 <pre><code>evidence = []
 for step in range(budget):
     plan = llm("What do I still need to know?", question, evidence)
@@ -96,19 +96,19 @@ for step in range(budget):
     query = plan.next_query        # often rewritten, split or routed (M3.7)
     evidence += search(query, tool=plan.source)   # which index, which tool
 answer = llm("Answer only from the evidence", question, evidence)</code></pre>
-        <p>Compared with the fixed pipeline, the model now makes three decisions that used to be hard-coded: <strong>what to ask</strong> (rewriting, decomposing a question into sub-questions, <a href="m3-query-rewriting-hyde-and-multi.html">M3.7</a>), <strong>where to ask</strong> (policy index, core-banking facts, a SQL tool, the web), and <strong>whether it is done</strong>. The research variants differ mostly in how they make the third decision:</p>
+        <p>The model now makes three decisions that were hard-coded: <strong>what to ask</strong> (rewriting, splitting into sub-questions, <a href="m3-query-rewriting-hyde-and-multi.html">M3.7</a>), <strong>where to ask</strong> (policy index, core-banking facts, SQL, web) and <strong>whether it is done</strong>. Research variants differ mostly on the third:</p>
         <ul>
-          <li><strong>Self-RAG</strong> trains the model to emit special tokens saying whether retrieval is needed and whether a passage is relevant and supports its answer.</li>
-          <li><strong>Corrective RAG</strong> scores the retrieved set with a lightweight evaluator and, if it looks poor, falls back to another source such as web search.</li>
-          <li><strong>Search-R1 and its relatives</strong> train the model with reinforcement learning (<a href="r3-process-reward-models-and-verifiers.html">R3</a>) to interleave reasoning and search, rewarded for the final answer being right.</li>
-          <li><strong>Multi-agent research systems</strong> have a lead agent split a task across sub-agents that search in parallel, then merge findings. Anthropic described this design for its own Research feature.</li>
+          <li><strong>Self-RAG</strong> trains the model to emit tokens saying whether to retrieve and whether a passage is relevant and supports the answer.</li>
+          <li><strong>Corrective RAG</strong> scores the retrieved set with a light evaluator and falls back to another source (e.g. web) if it looks poor.</li>
+          <li><strong>Search-R1</strong> and relatives use reinforcement learning (<a href="r3-process-reward-models-and-verifiers.html">R3</a>) to interleave reasoning and search, rewarded for a correct final answer.</li>
+          <li><strong>Multi-agent research systems</strong> have a lead agent split work across parallel sub-agents, then merge. Anthropic described this for its Research feature.</li>
         </ul>
-        <p>Why it helps is arithmetic. A two-step question needs a fact from document A to know what to look for in document B. One retrieval cannot do that. A loop can, and a retry after a bad query is a second chance. Below, a simulated two-fact question shows the trade, including the thing that quietly goes wrong: the agent's own judgement that it has "enough".</p>
+        <p>Why it helps: a two-step question needs a fact from document A to know what to look for in document B. One retrieval cannot do that; a loop can, and a retry after a bad query is a second chance. The simulation shows the trade, including the quiet failure: the agent's own judgement that it has "enough".</p>
       </div>
 
       <figure class="figure" id="fig-agentic">
         <div class="fig-head"><span class="fig-title">One shot against a loop, and the cost of stopping early</span><span class="fig-tag">Simulation 1 of 3</span></div>
-        <p class="try"><b>Try:</b> leave the hit rate at 60% and raise the step budget from 1 to 6: correct answers climb past the single-shot line (dashed). Then raise the premature-stop rate. The red part is the agent answering confidently from partial evidence, and it grows even as the loop gets more chances. Lower the hit rate to 30% to see the agent abstain, which is the right behaviour when evidence cannot be found.</p>
+        <p class="try"><b>Try:</b> keep the hit rate at 60% and raise the budget from 1 to 6: correct answers pass the single-shot line (dashed). Then raise the premature-stop rate: the red part is confident answers from partial evidence, and it persists even with more chances. Drop the hit rate to 30% to see abstention, the right behaviour when evidence cannot be found.</p>
         <div class="chart-wrap" id="ag-chart"></div>
         <div class="legend">
           <span><i class="sq" style="background:var(--accent)"></i>Correct, evidence complete</span>
@@ -128,32 +128,32 @@ answer = llm("Answer only from the evidence", question, evidence)</code></pre>
           <div class="stat"><div class="k">Searches per question</div><div class="v" id="a-cost"></div><div class="s">single-shot uses 1</div></div>
         </div>
         <p class="verdict" id="a-verdict"></p>
-        <p class="sim-note">Simulated: a two-fact question. Each search finds the fact it targets with the chosen probability; the first fact must be found before the agent can target the second. Single-shot RAG must find both with one query, and is assumed to find the second at half the usual rate because the query cannot name what the first fact would have revealed (an assumption, not a measurement). After each miss the agent stops early with the chosen probability. Exact expected values from a small recursion, no sampling noise.</p>
+        <p class="sim-note">Simulated: a two-fact question. Each search finds its target fact with the chosen probability; the first fact must be found before the second can be targeted. Single-shot must find both in one query and is assumed to find the second at half the usual rate (an assumption, not a measurement). After each miss the agent stops early with the chosen probability. Exact expected values from a small recursion.</p>
       </figure>
 
       <div class="prose">
-        <p>Three engineering consequences follow from the loop.</p>
+        <p>Three engineering consequences.</p>
         <ul>
-          <li><strong>Cost and latency are variable.</strong> Practitioner estimates put agentic RAG at several times the tokens of single-shot per question, and a loop that runs ten steps feels slow to a user. Set a hard budget, stream progress, and use the cheap path (single retrieval) for questions that a router classes as simple (<a href="m2-model-choice-cost-and-latency.html">M2.4</a>).</li>
-          <li><strong>The stopping judgement is the weak point.</strong> A model asked "do you have enough?" tends to say yes. That is the red bar. Counter it with a separate checker, with a requirement that every claim cites a retrieved passage, and with measurement of groundedness (<a href="a4-hallucination-detection-and-groundedness.html">A4.3</a>).</li>
-          <li><strong>It widens the attack surface.</strong> Every retrieved page is text the agent will read and may obey. More retrieval steps means more chances to ingest a poisoned document (<a href="a3-indirect-prompt-injection.html">A3</a>), and an agent that picks its own tools needs the approval gates of <a href="m4-guardrails-and-approval-gates.html">M4.5</a>.</li>
+          <li><strong>Cost and latency vary.</strong> Practitioner estimates put agentic RAG at several times the tokens of single-shot, and a ten-step loop feels slow. Set a hard budget, stream progress, and route simple questions to single retrieval (<a href="m2-model-choice-cost-and-latency.html">M2.4</a>).</li>
+          <li><strong>The stopping judgement is the weak point.</strong> A model asked "do you have enough?" tends to say yes (the red bar). Counter with a separate checker, a rule that every claim cites a retrieved passage, and groundedness measurement (<a href="a4-hallucination-detection-and-groundedness.html">A4.3</a>).</li>
+          <li><strong>The attack surface widens.</strong> Every retrieved page is text the agent may obey. More steps mean more chances to ingest a poisoned document (<a href="a3-indirect-prompt-injection.html">A3</a>), and an agent that picks its own tools needs the gates in <a href="m4-guardrails-and-approval-gates.html">M4.5</a>.</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-graph">GraphRAG: retrieval over customer and company relationships</h3>
       <div class="prose">
-        <p>Vector search finds passages that <em>sound like</em> the question. It is weak when the answer lives in the <em>links</em> between things: a group owns a company, the company supplies a client, the client is guaranteed by a director who also sits on another board. No passage needs to contain the whole chain. A knowledge graph stores the chain explicitly: nodes are entities (companies, people, accounts, devices) and edges are typed relationships (owns, supplies, guarantees, shares an address with).</p>
-        <p>"GraphRAG" covers two related ideas, and it is worth keeping them apart in a meeting.</p>
+        <p>Vector search finds passages that <em>sound like</em> the question. It fails when the answer lives in the <em>links</em>: a group owns a company, the company supplies a client, the client's guarantor sits on another board. Think of a subway map: the stations (entities) matter less than the lines between them. A knowledge graph stores nodes (companies, people, accounts, devices) and typed edges (owns, supplies, guarantees, shares an address with).</p>
+        <p>"GraphRAG" means two different things. Keep them apart in a meeting.</p>
         <ol>
-          <li><strong>Graph as the index, built from text.</strong> This is the Microsoft Research design (2024). An LLM reads every chunk and extracts entities and relationships; the graph is clustered into communities; each community gets a generated summary. Local questions ("tell me about this entity") walk the graph from the entity. Global questions ("what are the main themes across all these credit files?") use the community summaries, which plain RAG cannot answer because no top-k set summarises a whole corpus. Cost is paid up front: an LLM call over every chunk. Lighter variants such as LightRAG and HippoRAG cut that cost.</li>
-          <li><strong>A graph you already have.</strong> Banks hold ownership registers, KYC beneficial-owner structures, payment networks and guarantor links in structured form. Retrieving over those with a graph query (a traversal, not an LLM guess) and passing the result plus supporting documents to the model is cheaper, auditable, and often what actually ships. Fraud rings and shell-company networks (<a href="b2-transaction-monitoring-rules-versus-ml.html">B2</a>, <a href="b3-customer-due-diligence-and-risk.html">B3</a>) are the classic use.</li>
+          <li><strong>Graph built from text</strong> (Microsoft Research, 2024). An LLM extracts entities and relationships from every chunk; the graph is clustered into communities, each with a generated summary. Local questions ("tell me about this entity") walk the graph from the entity. Global questions ("main themes across all these credit files?") use community summaries, which plain RAG cannot answer because no top-k set summarises a corpus. The cost is an LLM call per chunk, up front. LightRAG and HippoRAG cut it.</li>
+          <li><strong>A graph you already have.</strong> Banks hold ownership registers, KYC beneficial-owner structures, payment networks and guarantor links as structured data. A graph query (a traversal, not an LLM guess) plus supporting documents passed to the model is cheaper, auditable, and often what ships. Fraud rings and shell-company networks (<a href="b2-transaction-monitoring-rules-versus-ml.html">B2</a>, <a href="b3-customer-due-diligence-and-risk.html">B3</a>) are the classic use.</li>
         </ol>
-        <p>The core operation is a <strong>k-hop traversal</strong>: start at an entity, collect everything within k relationship steps. The choice of k is the whole trade. Too few hops and you miss the indirect exposure; too many and, because the number of neighbours multiplies at each hop, you return most of the bank. Extraction errors add a second problem: a missing edge silently disconnects part of the network.</p>
+        <p>The core operation is a <strong>k-hop traversal</strong>: collect everything within k relationship steps. Like friends of friends, the count multiplies each hop. Too few hops miss indirect exposure; too many return most of the bank. A missing edge from bad extraction silently disconnects part of the network.</p>
       </div>
 
       <figure class="figure" id="fig-graph">
         <div class="fig-head"><span class="fig-title">How many hops, and what if the graph is missing edges?</span><span class="fig-tag">Simulation 2 of 3</span></div>
-        <p class="try"><b>Try:</b> start with <b>Graph traversal</b>, 2 hops, no missing edges: every exposed entity within two steps of the defaulted group (green) is found and nothing else. Push to 3 hops and the orange noise floods in. Go back to 2 hops and raise the missing-edge rate: hollow red rings are entities you should have found but the broken links hide. Switch to <b>Vector search</b>: it finds only entities whose documents name the group directly.</p>
+        <p class="try"><b>Try:</b> start with <b>Graph traversal</b>, 2 hops, no missing edges: every exposed entity (green) is found and nothing else. At 3 hops the orange noise floods in. Back at 2 hops, raise the missing-edge rate: hollow red rings are relevant entities hidden by broken links. Switch to <b>Vector search</b>: it finds only entities whose documents name the group directly.</p>
         <div class="btns" role="group" aria-label="Retrieval method">
           <button class="btn" type="button" id="g-graph" aria-pressed="true">Graph traversal</button>
           <button class="btn" type="button" id="g-vec" aria-pressed="false">Vector search</button>
@@ -176,32 +176,29 @@ answer = llm("Answer only from the evidence", question, evidence)</code></pre>
           <div class="stat" id="g-st-p"><div class="k">Precision</div><div class="v" id="g-prec"></div><div class="s">of those returned are relevant</div></div>
         </div>
         <p class="verdict" id="g-verdict"></p>
-        <p class="sim-note">Simulated: a made-up 31-node network (one group, 3 direct links, 9 at two steps, 18 at three), with a few extra cross-links for redundancy. "Relevant" is defined as within two steps of the group in the true network, an assumption for the example; in practice relevance depends on the relationship types and weights. Missed edges are dropped by a fixed pseudo-random rule so the picture is stable. Vector search is modelled as finding entities whose own documents name the group directly (one step). Exact counts on this graph.</p>
+        <p class="sim-note">Simulated: a made-up 31-node network (one group, 3 direct links, 9 at two steps, 18 at three), with a few cross-links. "Relevant" means within two steps of the group in the true network (an assumption; in practice it depends on relationship types and weights). Missed edges are dropped by a fixed pseudo-random rule. Vector search is modelled as finding entities whose own documents name the group (one step). Exact counts.</p>
       </figure>
 
       <div class="prose">
-        <p>The lesson of the picture holds on real graphs: traversal helps with indirect relationships, but it is only as complete as the graph, and the number of results explodes with each hop. Production systems therefore weight edges (a 51% ownership link counts for more than a shared address), filter by relationship type, and rank what comes back before it reaches the model. GraphRAG is not a replacement for vector search. The common pattern is hybrid: vector search finds the entry points and the supporting text, the graph supplies the connections.</p>
-        <p>Be honest about when not to build one. If your questions are "what does policy X say about Y", a good chunker and hybrid search (<a href="m3-chunking-strategies.html">M3.5</a>) beat a graph on cost and simplicity. A graph pays off for relationship questions, for corpus-wide summaries, and where you need to <em>explain</em> a link ("connected through these three filings").</p>
+        <p>Traversal helps with indirect links, but it is only as complete as the graph, and results explode with each hop. Production systems weight edges (a 51% ownership link beats a shared address), filter by relationship type, and rank before the model sees anything. GraphRAG does not replace vector search: the common pattern is hybrid, with vectors finding entry points and text, and the graph supplying connections.</p>
+        <p>Skip the graph for "what does policy X say about Y": good chunking and hybrid search (<a href="m3-chunking-strategies.html">M3.5</a>) are cheaper and simpler. A graph pays off for relationship questions, corpus-wide summaries, and explaining a link ("connected through these three filings").</p>
       </div>
-
       <h3 class="sub" id="m-perm">Permission-aware retrieval at enterprise scale</h3>
       <div class="prose">
-        <p>In a bank, the sentence "the assistant can search everything" is a breach waiting for a date. A retail branch employee must not read the corporate M&amp;A file. A compliance investigator can read an AML case that nobody on the sales floor may know exists. Material non-public information sits behind information barriers. Staff move teams and their access changes by Monday morning. The assistant must respect all of it, for every chunk, in every language.</p>
-        <p>The central rule: <strong>enforce access in the retrieval layer, with the end user's identity, never in the prompt.</strong> "Do not reveal documents the user is not allowed to see" is an instruction to a model, and models can be talked out of instructions. Once a forbidden chunk is in the context window, you have already lost: it can be paraphrased, summarised or leaked through a clever question.</p>
-        <p>The mechanics have a few parts.</p>
+        <p>Think of a library with locked rooms. A guard who lets everyone in and asks them not to read the restricted shelves is useless; the door must stay locked. In a bank, a retail branch employee must not read the corporate M&amp;A file, an AML case may be invisible to the sales floor, and staff change teams by Monday morning.</p>
+        <p>The rule: <strong>enforce access in the retrieval layer, with the end user's identity, never in the prompt.</strong> "Do not reveal documents the user may not see" is an instruction, and models can be talked out of instructions. Once a forbidden chunk is in the context window, it can be paraphrased or leaked.</p>
         <ul>
-          <li><strong>Carry the identity through.</strong> The agent acts <em>on behalf of</em> a user, with that user's entitlements, not with a broad service account. Tool calls made by the agent (<a href="a2-mcp-and-a2a.html">A2.1</a>) must propagate the user's identity, or the agent becomes a way to read what the user cannot.</li>
-          <li><strong>Store access control lists with the chunks.</strong> Each chunk carries the groups or roles allowed to read it, copied from the source system (SharePoint, the document management system, the case tool). Where the source models access as a relationship graph (Google's Zanzibar paper is the reference design), a policy service answers "can user U read object O?".</li>
-          <li><strong>Filter inside the search, not after it.</strong> This is the engineering heart, and the next simulation shows why.</li>
-          <li><strong>Keep entitlements fresh.</strong> The index is a copy. When someone leaves a project, the copy must change. A lag between the source's permissions and the index's is a window of unauthorised access. Many designs also re-check the live source permission for the final handful of results at query time.</li>
-          <li><strong>Mind the side channels.</strong> A refusal ("I cannot show you the Project Falcon file") reveals that Project Falcon exists. Cached answers, shared embeddings caches and logs can carry content across users. Graph retrieval needs the same care: a path through a node you cannot see can still disclose that it exists.</li>
+          <li><strong>Carry the identity through.</strong> The agent acts <em>on behalf of</em> a user, not through a broad service account. Tool calls (<a href="a2-mcp-and-a2a.html">A2.1</a>) must propagate the user's identity.</li>
+          <li><strong>Store ACLs with the chunks.</strong> Each chunk carries the groups allowed to read it, copied from the source system (SharePoint, document management, case tool). Where the source models access as a relationship graph (Google's Zanzibar is the reference design), a policy service answers "can user U read object O?".</li>
+          <li><strong>Filter inside the search, not after it.</strong> The next simulation shows why.</li>
+          <li><strong>Keep entitlements fresh.</strong> The index is a copy; lag between source and index permissions is a window of unauthorised access. Many designs also re-check the live source for the final handful of results.</li>
+          <li><strong>Mind the side channels.</strong> A refusal ("I cannot show you the Project Falcon file") reveals that Falcon exists. Answer caches, shared embedding caches and logs can carry content across users. A graph path through a hidden node can disclose it exists.</li>
         </ul>
-        <p>At the scale of thousands of sources and millions of chunks, the difference between post-filtering and pre-filtering becomes a practical question of whether the product works at all.</p>
       </div>
 
       <figure class="figure" id="fig-perm">
         <div class="fig-head"><span class="fig-title">Filter after the search, filter inside it, or leak</span><span class="fig-tag">Simulation 3 of 3</span></div>
-        <p class="try"><b>Try:</b> set the share of the corpus the user may read to about 1%, as for a junior analyst in a locked-down bank. Post-filtering with the top 10 returns nothing most of the time, so the assistant says "no results" or, worse, the team widens access to fix it. Raise the over-fetch factor and watch the cost rise. Pre-filtering always returns a full, entitled result. Finally look at the unfiltered row: how many forbidden chunks reach the model?</p>
+        <p class="try"><b>Try:</b> set the share to about 1%, like a junior analyst in a locked-down bank. Post-filtering the top 10 returns nothing most of the time, so the assistant says "no results" or the team widens access to fix it. Raise the over-fetch factor and watch cost rise. Pre-filtering always returns a full, entitled result. Check the unfiltered row for forbidden chunks reaching the model.</p>
         <div class="chart-wrap" id="p-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-sh">Share of the corpus this user may read <output for="s-sh"></output></label><input type="range" id="s-sh" min="-3" max="0" step="0.05" value="-2"></div>
@@ -216,163 +213,63 @@ answer = llm("Answer only from the evidence", question, evidence)</code></pre>
           <div class="stat" id="p-st4"><div class="k">Revoked docs still visible</div><div class="v" id="p-stale"></div><div class="s" id="p-stale-s"></div></div>
         </div>
         <p class="verdict" id="p-verdict"></p>
-        <p class="sim-note">Simulated: relevance is independent of permission (each retrieved chunk is readable with probability equal to the share). Post-filter retrieves k times the over-fetch factor, then drops the forbidden ones; the chance of a full top-k is an exact binomial tail. The staleness figure assumes a 2,000,000-chunk index in which 0.05% of chunks lose some reader group each day (an illustrative assumption, not a benchmark), so revoked-but-visible chunks approximate chunks x rate x lag. Real approximate-nearest-neighbour indexes also lose recall under restrictive filters, which is not modelled here.</p>
+        <p class="sim-note">Simulated: relevance is independent of permission (each chunk is readable with probability equal to the share). Post-filter fetches k times the over-fetch factor, then drops forbidden chunks; the full-top-k chance is an exact binomial tail. Staleness assumes a 2,000,000-chunk index where 0.05% of chunks lose a reader group each day (illustrative, not a benchmark): revoked-but-visible is about chunks x rate x lag. Real ANN indexes also lose recall under restrictive filters, not modelled here.</p>
       </figure>
 
       <div class="prose">
-        <p>Practical designs, from simplest to heaviest:</p>
+        <p>Four designs, simplest to heaviest:</p>
       </div>
       <div class="table-wrap" style="margin-top:16px">
         <table class="data">
           <thead><tr><th>Approach</th><th>How</th><th>Strength</th><th>Weakness</th></tr></thead>
           <tbody>
-            <tr><td><b>Metadata filter in the vector store</b></td><td>Each chunk stores allowed groups; the query passes the user's groups as a filter.</td><td>Simple, fast, supported by most vector databases.</td><td>Users in hundreds of groups make huge filters; sparse filters hurt ANN recall and speed. Permissions drift.</td></tr>
-            <tr><td><b>Separate index per audience</b></td><td>One index for each tenant or business line.</td><td>Hard isolation, easy to reason about.</td><td>Duplicates data and does not fit per-document sharing.</td></tr>
-            <tr><td><b>Query-time check against the source</b></td><td>Retrieve candidates, then ask the source system or policy service whether the user can read each.</td><td>Always current. Good as a last gate.</td><td>Latency; the source system gets hammered. Alone, it reproduces the post-filter problem.</td></tr>
-            <tr><td><b>Relationship-based access (Zanzibar-style)</b></td><td>Permissions as a graph of users, groups and objects, answered by a central service.</td><td>Handles inheritance and sharing at huge scale.</td><td>Significant infrastructure. Syncing it with the content index is its own project.</td></tr>
+            <tr><td><b>Metadata filter in the vector store</b></td><td>Each chunk stores allowed groups; the query passes the user's groups as a filter.</td><td>Simple, fast, widely supported.</td><td>Users in hundreds of groups make huge filters; sparse filters hurt ANN recall and speed. Permissions drift.</td></tr>
+            <tr><td><b>Separate index per audience</b></td><td>One index per tenant or business line.</td><td>Hard isolation, easy to reason about.</td><td>Duplicates data; no per-document sharing.</td></tr>
+            <tr><td><b>Query-time check against the source</b></td><td>Retrieve candidates, then ask the source or policy service if the user can read each.</td><td>Always current. Good last gate.</td><td>Latency, load on the source. Alone, it is post-filtering.</td></tr>
+            <tr><td><b>Relationship-based access (Zanzibar-style)</b></td><td>Permissions as a graph of users, groups and objects, answered centrally.</td><td>Handles inheritance and sharing at scale.</td><td>Heavy infrastructure; syncing with the content index is its own project.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Most banks end up layered: coarse isolation by business line or jurisdiction (data residency rules in the UAE and Saudi Arabia may force this anyway, so check your own policy and regulator guidance), a metadata pre-filter for fine control, and a live check on the final few chunks. Log what was retrieved for whom: that log is your audit trail and your incident-response tool.</p>
+        <p>Most banks layer these: coarse isolation by business line or jurisdiction (UAE and Saudi data residency rules may force this, so check your own policy and regulator guidance), a metadata pre-filter for fine control, and a live check on the final few chunks. Log what was retrieved for whom: that is your audit trail.</p>
       </div>
-    </section>
-
-    <!-- ============================== 3. CONNECTS ============================== -->
-    <section class="part" id="connects">
-      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
-      <div class="prose"><p>These three topics sit on top of the retrieval stack and the agent stack, and they tie directly to risk and governance.</p></div>
-      <div class="links">
-        <div class="link-card"><span class="code">M3.3 – M3.8 · Hybrid search, chunking, query rewriting</span><span class="t"><a href="m3-query-rewriting-hyde-and-multi.html">The tools the agent calls</a></span><p>An agentic loop is only as good as the single search it makes. Weak chunks and weak ranking get repeated, not fixed, by looping.</p></div>
-        <div class="link-card"><span class="code">M4.1 · M4.3 · M4.5 · The agent loop, memory, guardrails</span><span class="t"><a href="m4-the-agent-loop-reason-act.html">Agentic RAG is the loop with retrieval as the tool</a></span><p>Budgets, stopping rules and approval gates from <a href="m4-guardrails-and-approval-gates.html">M4.5</a> apply directly, and <a href="m4-memory-short-term-long-term.html">memory</a> raises its own permission questions.</p></div>
-        <div class="link-card"><span class="code">A6.1 – A6.2 · Document-image retrieval</span><span class="t"><a href="a6-search-over-document-images-colpali.html">Retrieving from scans and layouts</a></span><p>Trade finance and KYC files are often images. An agent can route between text and visual indexes.</p></div>
-        <div class="link-card"><span class="code">A3 · Indirect prompt injection</span><span class="t"><a href="a3-indirect-prompt-injection.html">Retrieved text is untrusted input</a></span><p>The more an agent reads, the more injected instructions it can meet. Permissions limit the damage if one succeeds.</p></div>
-        <div class="link-card"><span class="code">A4.3 · A4.5 · Groundedness and agent evaluation</span><span class="t"><a href="a4-hallucination-detection-and-groundedness.html">Measuring the red bar</a></span><p>Premature, confident answers are caught by groundedness checks and by <a href="a4-simulation-testing-for-agents-tau.html">simulated trajectories</a>.</p></div>
-        <div class="link-card"><span class="code">M5 · Evaluating agents</span><span class="t"><a href="m5-evaluating-agents-trajectories-tool-use.html">Judge the path, not only the answer</a></span><p>Number of steps, tool choice and wasted searches are part of quality for a looping retriever.</p></div>
-        <div class="link-card"><span class="code">B2 · B3 · AML and due diligence</span><span class="t"><a href="b3-customer-due-diligence-and-risk.html">Networks are the AML problem</a></span><p>Beneficial ownership and transaction networks are graphs already. GraphRAG makes them askable in plain language, with the sanctions side in <a href="b2-sanctions-screening-and-name-matching.html">B2.3</a>.</p></div>
-        <div class="link-card"><span class="code">G1 · P1.5 · Threat models and lineage</span><span class="t"><a href="g1-threat-modelling-an-ai-system.html">Who can see what, and where it came from</a></span><p><a href="p1-lineage-and-metadata.html">Lineage and metadata</a> are what let you carry an ACL from the source system to the chunk and prove it afterwards.</p></div>
-        <div class="link-card"><span class="code">B7.2 · Internal copilots</span><span class="t"><a href="b7-internal-copilots-for-staff.html">Where all three meet</a></span><p>Staff copilots are the first place a bank hits the permission problem at scale.</p></div>
-      </div>
-      <div class="prose" style="margin-top:22px">
-        <p>Where it shows up at the bank:</p>
-        <ul>
-          <li><strong>Credit analyst assistant.</strong> Multi-step questions over memos, financials and covenants: agentic. Group structures and guarantors: graph.</li>
-          <li><strong>AML investigator support.</strong> "Show me every account linked to this device or address and summarise the prior alerts." Graph traversal, strict need-to-know permissions, a full audit log.</li>
-          <li><strong>Policy and regulatory Q&amp;A.</strong> Mostly plain hybrid RAG, in Arabic and English. An agent helps with questions spanning a CBUAE circular, an internal policy and a procedure note. Permissions are mild but versioning is not.</li>
-          <li><strong>Relationship manager briefings.</strong> A customer view that combines internal notes, news and ownership. The permission model decides what each banker may see about a client they do not cover.</li>
-          <li><strong>Islamic finance product Q&amp;A.</strong> Fatwa and Sharia-board decisions cited per product: an agent that must retrieve the governing ruling, not a similar one.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- ============================== 4. FIELD ============================== -->
-    <section class="part" id="field">
-      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
-      <div class="prose">
-        <p>By late 2026 the vocabulary has settled around "retrieval is a tool an agent uses" more than "RAG is a pipeline". The open arguments are cost, evaluation and trust.</p>
-      </div>
-      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with one light web search; the search returned mostly vendor and blog material, so earlier items below are from the papers themselves and from my memory of them. Verify details before quoting a number.</p>
-      <ol class="timeline" style="margin-top:14px">
-        <li><span class="yr">2023</span><div><div class="t">Self-RAG: learn when to retrieve and critique</div><p>The model emits reflection tokens to decide whether to retrieve and to grade its own use of passages.</p><div class="src">Asai et al., arXiv 2310.11511</div></div></li>
-        <li><span class="yr">2024</span><div><div class="t">Corrective RAG and GraphRAG</div><p>CRAG added an evaluator that triggers a fallback search when retrieval looks poor. Microsoft Research's GraphRAG introduced entity graphs with community summaries for corpus-wide questions.</p><div class="src">Yan et al., arXiv 2401.15884; Edge et al., arXiv 2404.16130</div></div></li>
-        <li><span class="yr">2024</span><div><div class="t">Lighter graph indexes</div><p>HippoRAG and LightRAG pursued cheaper graph construction and retrieval, because indexing every chunk with an LLM is the main cost of the original design.</p><div class="src">Gutiérrez et al., arXiv 2405.14831; Guo et al., arXiv 2410.05779</div></div></li>
-        <li><span class="yr">2025</span><div><div class="t">Training search behaviour with reinforcement learning</div><p>Search-R1 trains a model to interleave reasoning with search calls using outcome-based rewards. Anthropic described its multi-agent Research system, where a lead agent coordinates parallel search sub-agents, with an honest account of the token cost.</p><div class="src">Jin et al., arXiv 2503.09516; Anthropic Engineering blog, 2025</div></div></li>
-        <li><span class="yr">2026</span><div><div class="t">Agentic graph retrieval and cost-focused work</div><p>Research such as Graph-R1 (ICML 2026) applies the agentic idea to graph retrieval, arguing that a single fixed retrieval is the limit of earlier GraphRAG. Workshop work reports sizeable token savings for context engineering over GraphRAG and agentic RAG. Commentary in 2026 says agentic RAG can use roughly 5 to 20 times the tokens of single-shot RAG, and that GraphRAG costs several times basic RAG; treat those as vendor-grade estimates, not benchmarks.</p><div class="src">ICML 2026 slides (Graph-R1); practitioner guides, 2026</div></div></li>
-        <li><span class="yr">2026</span><div><div class="t">Retrieval-time entitlement as a stated requirement</div><p>Enterprise guidance now commonly says an agent acting for a user must see only what that user may see, enforced at retrieval time and logged. I found no peer-reviewed work that tests this together with graph and agentic retrieval; it is engineering practice more than science.</p><div class="src">Practitioner guidance, 2026 (not peer reviewed)</div></div></li>
-      </ol>
-      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
-      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
-      <div class="table-wrap" style="margin-top:10px">
-        <table class="data">
-          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
-          <tbody>
-            <tr><td><b>Retrieval-time ACL filtering for staff copilots</b></td><td>Chunk-level permissions synced from document systems, user identity passed to the search layer.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Bounded agentic retrieval with a step budget</b></td><td>Query rewriting, a few retrieval rounds, source routing and cited answers.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Graph queries over existing ownership and transaction data</b></td><td>Graph databases for AML and fraud networks; an LLM turns the result into a readable summary.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>LLM-built knowledge graphs over document corpora</b></td><td>Entity extraction and community summaries over credit files or regulation. Quality and cost still under study.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>Multi-agent deep research on internal data</b></td><td>Parallel sub-agents compile long briefings, with human review.</td><td><span class="status inf">Reported</span></td></tr>
-            <tr><td><b>RL-trained search agents</b></td><td>Models trained end to end to search and reason. Mostly open research and benchmarks.</td><td><span class="status prop">Proposed</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Start with good hybrid retrieval, add a bounded loop where questions are multi-step, add a graph only where relationships are the question, and treat permission enforcement as a property of the retrieval layer that is designed first and tested hardest.</div>
     </section>
 
     <!-- ============================== 5. FAILS ============================== -->
     <section class="part" id="fails">
-      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Each failure comes with the quickest check.</p></div>
+      <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Permission enforced in the prompt</div><p>"Only answer from documents the user may see", with the full index behind it. One clever question and the model reveals the contents.</p><div class="spot"><b>Spot it</b>Ask where the access check runs. If the answer mentions the system prompt, it is not a control. Test with a user who has no access and look at what is retrieved, not only what is said.</div></li>
-        <li><div class="t">Post-filtering that quietly empties results</div><p>Top-10 fetched, 9 dropped, the answer is built on one weak chunk or "I couldn't find anything".</p><div class="spot"><b>Spot it</b>Log how many chunks survive filtering per query, by user group. Low-access users with short results are the signal.</div></li>
-        <li><div class="t">Stale entitlements</div><p>A leaver, a transfer or a lifted information barrier does not reach the index for days.</p><div class="spot"><b>Spot it</b>Revoke access to a test document and time how long until retrieval stops returning it. That lag is your exposure window.</div></li>
-        <li><div class="t">The agent with a super-user</div><p>The tool layer uses a service account with broad rights, so the agent reads what the human could not.</p><div class="spot"><b>Spot it</b>Check which identity each tool call runs under in the logs. It should be the user's, or a delegated, narrowed token.</div></li>
-        <li><div class="t">Looping on a bad query</div><p>The agent repeats near-identical searches, burns the budget and answers from noise.</p><div class="spot"><b>Spot it</b>Plot searches per question and the fraction that hit the budget. Review trajectories with repeated queries.</div></li>
-        <li><div class="t">Declaring "enough" too soon</div><p>A confident, cited-looking answer built on one of the two needed facts.</p><div class="spot"><b>Spot it</b>Evaluate on multi-hop questions with known evidence sets, and check whether the final answer's citations cover each needed fact.</div></li>
-        <li><div class="t">A graph built from wrong extraction</div><p>The LLM merges two companies with similar names or invents a relationship. The graph then states it as fact, and a false link between a client and a sanctioned entity is serious.</p><div class="spot"><b>Spot it</b>Sample edges and check them against source. Keep a source citation on every edge. Do not use LLM-extracted edges for decisions without review.</div></li>
-        <li><div class="t">Hop explosion</div><p>Three hops from a large corporate returns thousands of entities, most of them noise.</p><div class="spot"><b>Spot it</b>Count entities returned per query. Cap by edge type, weight and rank before the model sees them.</div></li>
-        <li><div class="t">Side-channel leaks</div><p>Refusals, answer caches, shared logs or graph paths that reveal that a restricted item exists.</p><div class="spot"><b>Spot it</b>Red-team with a low-access user asking about known restricted projects; check refusal wording, caches and logs.</div></li>
+        <li><div class="t">Permission enforced in the prompt</div><p>"Only answer from documents the user may see", with the full index behind it. One clever question and the model reveals the contents.</p><div class="spot"><b>Spot it</b>Ask where the access check runs. If the answer is the system prompt, it is not a control. Test with a no-access user and inspect what is retrieved, not just what is said.</div></li>
+        <li><div class="t">Post-filtering that quietly empties results</div><p>Top-10 fetched, 9 dropped, so the answer rests on one weak chunk or "I couldn't find anything".</p><div class="spot"><b>Spot it</b>Log chunks surviving the filter per query, by user group. Short results for low-access users are the signal.</div></li>
+        <li><div class="t">Stale entitlements</div><p>A leaver, transfer or lifted information barrier takes days to reach the index.</p><div class="spot"><b>Spot it</b>Revoke access to a test document and time how long until it stops being returned. That is your exposure window.</div></li>
+        <li><div class="t">The agent with a super-user</div><p>The tool layer uses a broad service account, so the agent reads what the human could not.</p><div class="spot"><b>Spot it</b>Check which identity each tool call runs under. It should be the user's, or a narrowed delegated token.</div></li>
+        <li><div class="t">Looping on a bad query</div><p>The agent repeats near-identical searches, burns the budget and answers from noise.</p><div class="spot"><b>Spot it</b>Plot searches per question and the share hitting the budget. Review trajectories with repeated queries.</div></li>
+        <li><div class="t">Declaring "enough" too soon</div><p>A confident, cited-looking answer built on one of the two needed facts.</p><div class="spot"><b>Spot it</b>Test on multi-hop questions with known evidence sets; check the citations cover each needed fact.</div></li>
+        <li><div class="t">A graph built from wrong extraction</div><p>The LLM merges two similarly named companies or invents a relationship, and the graph states it as fact. A false link to a sanctioned entity is serious.</p><div class="spot"><b>Spot it</b>Sample edges against source and keep a citation on every edge. Do not use LLM-extracted edges for decisions without review.</div></li>
+        <li><div class="t">Hop explosion</div><p>Three hops from a large corporate returns thousands of entities, mostly noise.</p><div class="spot"><b>Spot it</b>Count entities returned per query. Cap by edge type, weight and rank before the model sees them.</div></li>
+        <li><div class="t">Side-channel leaks</div><p>Refusals, answer caches, shared logs or graph paths reveal that a restricted item exists.</p><div class="spot"><b>Spot it</b>Red-team with a low-access user asking about known restricted projects; check refusal wording, caches and logs.</div></li>
       </ul>
-    </section>
-
-    <!-- ============================== 6. ROOM ============================== -->
-    <section class="part" id="room">
-      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
-      <div class="room">
-        <div class="room-card">
-          <span class="k">To an executive · 30 seconds</span>
-          <blockquote>“The simple assistant searches once. For questions that need several steps, like tracing a client to a defaulted group, we let it search in a controlled loop with a hard limit, which costs more per question but finds the evidence. The part I'd not compromise on is access: the system checks who is asking before it retrieves anything, so a junior banker cannot get a document through the assistant that they could not open directly. We'd test that with accounts of different seniority before launch.”</blockquote>
-        </div>
-        <div class="room-card">
-          <span class="k">To a technical interviewer or validator</span>
-          <blockquote>“I'd treat retrieval as a tool with a budget: routed sources, query decomposition, a stop condition checked independently of the generator, and answers that must cite a passage for each claim. A graph only where the question is relational, preferably over structured ownership data we already trust, with LLM-extracted edges kept as cited, reviewable candidates. For permissions: user identity propagated to every tool call, ACLs stored with the chunks and applied as a pre-filter inside the search, a live check on the final results, and an alarm on sync lag. I'd evaluate on multi-hop questions with known evidence and on a red-team set of low-access users.”</blockquote>
-        </div>
-      </div>
-      <div class="qa">
-        <details class="reveal"><summary>“Is agentic RAG just better RAG?”</summary><div class="ans"><p>Better on multi-step questions, worse on cost, latency and predictability. For simple lookups a single good retrieval is faster and easier to audit. I'd route: simple questions take the cheap path, hard ones get a bounded loop. And I'd measure the loop's characteristic failure, stopping too early, rather than only average accuracy.</p></div></details>
-        <details class="reveal"><summary>“Do we need a knowledge graph?”</summary><div class="ans"><p>Only if relationships are the question: ownership chains, guarantor networks, shared devices, or corpus-wide themes. For policy Q&amp;A, good chunking and hybrid search are cheaper and as good. Where the graph is real data we already hold, such as beneficial ownership, query it directly. Building one from text with an LLM is costlier and needs edge-level quality control.</p></div></details>
-        <details class="reveal"><summary>“Can't we just tell the model not to show restricted documents?”</summary><div class="ans"><p>No. Instructions are not access control. If the chunk is in the context, the model can be coaxed into using it. The filter has to run in retrieval, using the user's identity, so forbidden content never enters the context. The prompt can be a second layer, never the first.</p></div></details>
-        <details class="reveal"><summary>“Why not filter the results after search? It's simpler.”</summary><div class="ans"><p>Because for restricted users most of the top results are forbidden and the survivors are few or none. A user who can read 1% of the corpus gets an empty top-10 about 90% of the time. Pre-filtering inside the search returns a full entitled set. We still add a live check on the final few results for freshness.</p></div></details>
-        <details class="reveal"><summary>“How do we know the agent isn't just making things up when it stops?”</summary><div class="ans"><p>We don't, unless we test for it. I'd require citations per claim, run an independent groundedness check, and keep a benchmark of multi-hop questions where we know which documents are needed. Then report how often the agent answered without having found all of them, separately from overall accuracy.</p></div></details>
-      </div>
     </section>
 
     <!-- ============================== 7. CHECK ============================== -->
     <section class="part" id="check">
-      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
-      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. Why can one retrieval not answer a two-hop question, and what does a loop add?</summary><div class="ans"><p>The second query depends on a fact in the first result (for example the name of a supplier). A single query cannot name it. A loop reads the first result, forms a better query, and also gets a retry when a search misses.</p></div></details>
-        <details class="reveal"><summary>2. Each search finds its fact with probability 0.5 and the agent never stops early. With a budget of 2 searches, what is the chance of a complete, correct answer?</summary><div class="ans"><p>Both searches must succeed: 0.5 × 0.5 = <strong>25%</strong>. With a budget of 3 it is 0.25 + (two ways to have one miss among the first two, then success) 2 × 0.5³ = 0.25 + 0.25 = 50%.</p></div></details>
-        <details class="reveal"><summary>3. Why is "stops too early" a bigger worry than "uses too many steps"?</summary><div class="ans"><p>Extra steps cost money and time, visibly. Stopping early produces a fluent, apparently well-grounded answer built on partial evidence, and no one notices unless they check. It is an accuracy and trust problem, not a cost problem.</p></div></details>
-        <details class="reveal"><summary>4. A group has 3 direct counterparties, each with 3 of their own, each of those with 2. How many entities are within 1, 2 and 3 hops, and what does it tell you about choosing k?</summary><div class="ans"><p>3, then 3 + 9 = 12, then 12 + 18 = 30. Each hop multiplies the result. Beyond the hops that matter for the decision, you mostly add noise, so cap k, weight edges and rank before sending anything to the model.</p></div></details>
-        <details class="reveal"><summary>5. When is a vector index better than a graph, and when is a graph better?</summary><div class="ans"><p>Vector search for "what does this passage or policy say" questions, where the answer sits in one place. Graph for indirect relationships, explaining a connection, and corpus-wide summaries. Hybrid is common: vector for entry points and evidence, graph for connections.</p></div></details>
-        <details class="reveal"><summary>6. A user may read 2% of chunks. You fetch the top 10 and then filter. What is the chance of an empty result, and the average number returned?</summary><div class="ans"><p>Empty: 0.98<sup>10</sup> ≈ <strong>82%</strong>. Average survivors: 10 × 0.02 = <strong>0.2</strong> chunks. Pre-filtering inside the search would return 10.</p></div></details>
-        <details class="reveal"><summary>7. Name three reasons a prompt instruction is not an access control.</summary><div class="ans"><p>The forbidden text is already in the context and can leak by paraphrase or inference; models can be manipulated into ignoring instructions (including by injected text in retrieved documents); and nothing in the prompt is auditable or testable as a deterministic control.</p></div></details>
-        <details class="reveal"><summary>8. Permissions are synced to the index nightly. What risk does that leave, and what would you add?</summary><div class="ans"><p>Up to a day of access for people who lost it, and a day before new staff see what they should. Add an event-driven update for revocations, a live permission check on the final results, and monitoring of sync lag.</p></div></details>
+        <details class="reveal"><summary>1. Why can one retrieval not answer a two-hop question, and what does a loop add?</summary><div class="ans"><p>The second query needs a fact from the first result (say a supplier's name), which one query cannot name. A loop reads, re-queries, and gets a retry after a miss.</p></div></details>
+        <details class="reveal"><summary>2. Each search finds its fact with probability 0.5 and the agent never stops early. With a budget of 2 searches, what is the chance of a complete answer?</summary><div class="ans"><p>Both must succeed: 0.5 × 0.5 = <strong>25%</strong>. With a budget of 3: 0.25 + 2 × 0.5³ = 50%.</p></div></details>
+        <details class="reveal"><summary>3. Why is "stops too early" a bigger worry than "uses too many steps"?</summary><div class="ans"><p>Extra steps cost visible money and time. Stopping early gives a fluent, apparently grounded answer on partial evidence that nobody notices. It is a trust problem, not a cost problem.</p></div></details>
+        <details class="reveal"><summary>4. A group has 3 direct counterparties, each with 3 of their own, each of those with 2. How many entities are within 1, 2 and 3 hops, and what does it tell you about choosing k?</summary><div class="ans"><p>3, then 3 + 9 = 12, then 12 + 18 = 30. Each hop multiplies the result, so past the useful depth you add noise. Cap k, weight edges and rank before the model.</p></div></details>
+        <details class="reveal"><summary>5. When is a vector index better than a graph, and when is a graph better?</summary><div class="ans"><p>Vector for "what does this policy say" questions, where the answer sits in one place. Graph for indirect relationships, explaining a link, and corpus-wide summaries. Hybrid is common: vector for entry points, graph for connections.</p></div></details>
+        <details class="reveal"><summary>6. A user may read 2% of chunks. You fetch the top 10 and then filter. What is the chance of an empty result, and the average number returned?</summary><div class="ans"><p>Empty: 0.98<sup>10</sup> ≈ <strong>82%</strong>. Average returned: 10 × 0.02 = <strong>0.2</strong> chunks. Pre-filtering returns 10.</p></div></details>
+        <details class="reveal"><summary>7. Name three reasons a prompt instruction is not an access control.</summary><div class="ans"><p>The forbidden text is already in context and can leak by paraphrase; models can be talked out of instructions (including by injected text in documents); and a prompt is not a deterministic, auditable, testable control.</p></div></details>
+        <details class="reveal"><summary>8. Permissions are synced to the index nightly. What risk does that leave, and what would you add?</summary><div class="ans"><p>Up to a day of access for people who lost it. Add event-driven revocation, a live check on final results, and sync-lag monitoring.</p></div></details>
       </div>
     </section>
 
-    <!-- ============================== SOURCES ============================== -->
-    <section class="part" id="sources">
-      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
-      <ol class="sources">
-        <li>A. Asai et al. <a href="https://arxiv.org/abs/2310.11511">Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection</a>. arXiv, 2023.</li>
-        <li>S.-Q. Yan et al. <a href="https://arxiv.org/abs/2401.15884">Corrective Retrieval Augmented Generation</a>. arXiv, 2024.</li>
-        <li>D. Edge et al. <a href="https://arxiv.org/abs/2404.16130">From Local to Global: A Graph RAG Approach to Query-Focused Summarization</a>. Microsoft Research, 2024.</li>
-        <li>B. Gutiérrez et al. <a href="https://arxiv.org/abs/2405.14831">HippoRAG: Neurobiologically Inspired Long-Term Memory for Large Language Models</a>. NeurIPS, 2024.</li>
-        <li>Z. Guo et al. <a href="https://arxiv.org/abs/2410.05779">LightRAG: Simple and Fast Retrieval-Augmented Generation</a>. arXiv, 2024.</li>
-        <li>B. Jin et al. <a href="https://arxiv.org/abs/2503.09516">Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning</a>. arXiv, 2025.</li>
-        <li>Anthropic Engineering. <a href="https://www.anthropic.com/engineering/multi-agent-research-system">How we built our multi-agent research system</a>. 2025.</li>
-        <li>R. Pang et al. <a href="https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/">Zanzibar: Google's Consistent, Global Authorization System</a>. USENIX ATC, 2019. The reference design for relationship-based access control.</li>
-        <li>OWASP. <a href="https://genai.owasp.org/llm-top-10/">Top 10 for LLM Applications</a>. Includes sensitive information disclosure and vector and embedding weaknesses.</li>
-        <li>Microsoft. <a href="https://microsoft.github.io/graphrag/">GraphRAG documentation</a>.</li>
-      </ol>
-      <div class="lesson-foot">
-        <a href="../index.html">← Back to the curriculum</a>
-        <span>Next in A6: see the module list on the curriculum home page</span>
-      </div>
-    </section>
+    <div class="lesson-foot">
+      <a href="../index.html">← Back to the curriculum</a>
+      <span>Next in A6: see the module list on the curriculum home page</span>
+    </div>
   </main>
 </div>
 
