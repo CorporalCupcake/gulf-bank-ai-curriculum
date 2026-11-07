@@ -80,22 +80,17 @@
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>People ask questions in their own words, not in the words of the documents, so rewriting the query (or inventing a fake answer to search with) can lift recall, at the cost of latency and new ways to go wrong; and no amount of relevance is worth anything if the retriever hands a branch agent a document they were never entitled to read, so permissions must be enforced inside the search, from live data, before anything reaches the model.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>People ask in their own words, not the documents' words, so rewriting the query (or searching with an invented answer) can lift recall at the cost of latency and new failure modes; and relevance is worthless if the retriever shows someone a document they may not read, so permissions must be enforced inside the search, from live data, before anything reaches the model.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A branch agent types into the bank's internal assistant: <em>"Can this customer get a loan without interest?"</em> The policy library has a 14-page document called <em>"Murabaha and Ijara: product terms, profit rates and eligibility"</em>. Not one word overlaps. The word "loan" is not in it, "interest" is not in it, and the embedding of a short, casual question can land nearer to the conventional lending pages than to the Islamic finance ones.</p>
-        <p>The retriever is not stupid. The question and the document are written by different people, for different purposes, in different vocabularies. Retrieval is a matching game between two pieces of text, and the question is usually the weaker half: short, vague, colloquial, full of pronouns, sometimes in a different language from the documents. <strong>Query transformation</strong> is the family of tricks that improves the question before you search: rewrite it, imagine its answer, or ask it several ways.</p>
-        <p>Now the second half of the lesson. Suppose the retrieval is perfect. The same assistant is used by 8,000 staff. The index contains the HR salary bands, a draft suspicious transaction report (STR), board papers, and the sanctions playbook. The same question, <em>"What do we tell a customer whose account is frozen?"</em>, matches the draft STR very well, because that file is literally about a frozen account. If the assistant quotes it to a branch agent, the bank may have just committed a <strong>tipping-off</strong> failure. Relevance and entitlement are different questions, and a retriever that answers only the first is a data-leak engine with a friendly interface.</p>
+        <p><strong>Problem 1: the question is a poor search key.</strong> A branch agent asks: <em>"Can this customer get a loan without interest?"</em> The policy is titled <em>"Murabaha and Ijara: product terms, profit rates and eligibility"</em>. No word overlaps, and a short casual question can embed closer to conventional lending pages. It is like asking a librarian for "that book about money from the 90s": the book exists, but you described it in your words, not the catalogue's. <strong>Query transformation</strong> improves the question before searching: rewrite it, imagine its answer, or ask it several ways.</p>
+        <p><strong>Problem 2: relevant is not the same as allowed.</strong> The index also holds HR salary bands, a draft suspicious transaction report (STR) and board papers. The question <em>"What do we tell a customer whose account is frozen?"</em> matches the draft STR very well. Quoting it to a branch agent could be a <strong>tipping-off</strong> failure. A retriever that checks only relevance is a data-leak engine with a friendly interface.</p>
       </div>
 
-      <div class="callout key"><span class="k">Hold onto this</span>Two different jobs, one stage of the pipeline. Query transformation asks, "How do I find what the user means?" and is a recall optimisation you earn by measuring. Permission-aware retrieval asks, "What is this person allowed to see?" and is a control, not an optimisation: it is on from day one, enforced before ranking, and tested like a security feature.</div>
-
-      <div class="prose">
-        <p>A useful way to keep both in your head: the user's question is <em>untrusted input</em> in two senses. It is an imperfect statement of their need, so we may rewrite it. And it carries no proof of who they are or what they may read, so we never let it decide access. Everything that follows is a consequence of those two sentences.</p>
-      </div>
+      <div class="callout key"><span class="k">Hold onto this</span>Query transformation is a recall optimisation you earn by measuring. Permission-aware retrieval is a control: on from day one, enforced before ranking, tested like a security feature. The question is untrusted twice over: it is an imperfect statement of need (so we may rewrite it), and it proves nothing about who is asking (so it never decides access).</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -104,41 +99,40 @@
 
       <h3 class="sub" id="m-gap">Why the raw question retrieves badly</h3>
       <div class="prose">
-        <p>Dense retrieval (M3.2) turns text into a vector and returns the nearest document chunks. Keyword retrieval (<a href="m3-keyword-search-and-bm25.html">BM25</a>) matches exact terms. Both inherit four mismatches between how people ask and how documents are written.</p>
+        <p>Dense retrieval (M3.2) returns the nearest chunk vectors; keyword retrieval (<a href="m3-keyword-search-and-bm25.html">BM25</a>) matches exact terms. Both suffer four mismatches:</p>
         <ul>
-          <li><strong>Vocabulary.</strong> "Loan without interest" against "murabaha". Dense models bridge some of this gap, BM25 none of it.</li>
-          <li><strong>Specificity.</strong> Questions are short and abstract; passages are long and concrete. A seven-word query and a 300-word chunk are different kinds of object, even in the same embedding space.</li>
-          <li><strong>Missing context.</strong> In a chat, "and for Business accounts?" means nothing alone. The thing it refers to sits in an earlier turn.</li>
-          <li><strong>Bundled intent.</strong> "Compare the transfer limits and fees for Premium and Business accounts, and say what changed after the January update" is really three or four searches stuffed into one vector, which then sits in the middle of none of them.</li>
+          <li><strong>Vocabulary.</strong> "Loan without interest" vs "murabaha". Dense models bridge some of this, BM25 none.</li>
+          <li><strong>Specificity.</strong> A seven-word abstract query vs a 300-word concrete chunk.</li>
+          <li><strong>Missing context.</strong> "And for Business accounts?" means nothing without the earlier turn.</li>
+          <li><strong>Bundled intent.</strong> "Compare limits and fees for Premium and Business, and what changed in January" is three or four searches in one vector, which lands in the middle of none.</li>
         </ul>
-        <p>The picture below makes this concrete. It is a toy "meaning map": each dot is a policy chunk, grouped by topic. What the user <em>means</em> sits inside the Islamic finance cluster. What they <em>typed</em> lands somewhere else, between clusters, and retrieval returns the neighbours of where the words landed.</p>
+        <p>Picture a "meaning map" where each dot is a policy chunk. What the user <em>means</em> sits inside the Islamic finance cluster. What they <em>typed</em> lands between clusters, and retrieval returns the neighbours of the typed words.</p>
       </div>
 
       <h3 class="sub" id="m-rewrite">Rewriting: condense, clarify, step back, decompose</h3>
       <div class="prose">
-        <p>The simplest transformation is to ask an LLM to rewrite the query into one that retrieves better. In practice "rewrite" covers several different jobs, and it helps to name them because they fail differently.</p>
+        <p>Ask an LLM to rewrite the query. "Rewrite" covers several jobs that fail differently:</p>
       </div>
       <div class="table-wrap" style="margin-top:16px">
         <table class="data">
           <thead><tr><th>Job</th><th>Example</th><th>Why it helps</th><th>Main risk</th></tr></thead>
           <tbody>
-            <tr><td><b>Condense a follow-up</b></td><td>"And for Business?" becomes "Daily limit on international transfers for Business accounts"</td><td>Makes the turn stand alone using the chat history. Almost always worth doing in a conversational assistant.</td><td>Wrong referent: it picks up the wrong earlier topic and confidently searches for the wrong thing.</td></tr>
-            <tr><td><b>Clarify and expand terms</b></td><td>"Interest-free loan" becomes "Sharia-compliant financing, murabaha, tawarruq, profit rate"</td><td>Adds the vocabulary the documents use. Helps BM25 and dense alike.</td><td>The model adds terms that sound right and are wrong for this bank's products.</td></tr>
-            <tr><td><b>Step back</b></td><td>"Why was payment TT-20931 rejected?" becomes also "Common reasons for cross-border payment rejection"</td><td>Retrieves the general principle alongside the specific case (Zheng et al., 2023).</td><td>Drowns the specific case in generic text if you keep only the abstract query.</td></tr>
-            <tr><td><b>Decompose</b></td><td>A comparison question becomes one sub-question per entity, answered separately</td><td>Each sub-question has a single target, which is what a vector can point at. Needed for multi-hop questions.</td><td>Costs several searches. Harms plain fact lookups that did not need splitting.</td></tr>
-            <tr><td><b>Translate or bridge language</b></td><td>An Arabic question searched against English policies, and vice versa</td><td>Puts the query in the documents' language, or in both (see M3.2 on multilingual embeddings).</td><td>Translation of product names and legal terms drifts; keep the original too.</td></tr>
+            <tr><td><b>Condense a follow-up</b></td><td>"And for Business?" becomes "Daily limit on international transfers for Business accounts"</td><td>Makes the turn stand alone. Almost always worth it in chat.</td><td>Wrong referent: searches confidently for the wrong topic.</td></tr>
+            <tr><td><b>Clarify and expand terms</b></td><td>"Interest-free loan" becomes "Sharia-compliant financing, murabaha, tawarruq, profit rate"</td><td>Adds the documents' vocabulary. Helps BM25 and dense.</td><td>Adds terms that sound right but are wrong for this bank's products.</td></tr>
+            <tr><td><b>Step back</b></td><td>"Why was payment TT-20931 rejected?" also searches "Common reasons for cross-border payment rejection"</td><td>Gets the general principle alongside the case (Zheng et al., 2023).</td><td>Generic text drowns the specific case if you keep only the abstract query.</td></tr>
+            <tr><td><b>Decompose</b></td><td>A comparison becomes one sub-question per entity</td><td>Each sub-question has one target a vector can point at. Needed for multi-hop questions.</td><td>Several searches; harms plain lookups.</td></tr>
+            <tr><td><b>Translate</b></td><td>An Arabic question against English policies, or vice versa</td><td>Puts the query in the documents' language, or both (see M3.2).</td><td>Product names and legal terms drift; keep the original too.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>One rule covers most of the lessons the field has learned: <strong>keep the original query in the mix</strong>. Search with the original and the rewrite, then merge the lists (reciprocal rank fusion, <a href="m3-hybrid-search-and-reciprocal-rank.html">M3.3</a>). The rewrite is a hypothesis about what the user wanted. If it is right, it adds the missing documents. If it is wrong, the original still finds the obvious ones.</p>
-        <p>A second rule: <strong>never let the rewriter touch identifiers.</strong> Reference numbers, account types, product codes, clause numbers and customer names are exact strings. A rewriter that "tidies" <code>TT-20931</code> into "a telegraphic transfer" has deleted the only thing that mattered. Tell the prompt which tokens to copy verbatim, or extract them with a regular expression first and pass them through untouched.</p>
+        <p><strong>Rule 1: keep the original query in the mix.</strong> Search with both, then merge with reciprocal rank fusion (<a href="m3-hybrid-search-and-reciprocal-rank.html">M3.3</a>). The rewrite is a bet. If right, it adds missing documents; if wrong, the original still finds the obvious ones.</p>
+        <p><strong>Rule 2: never let the rewriter touch identifiers.</strong> A rewriter that "tidies" <code>TT-20931</code> into "a telegraphic transfer" deleted the only thing that mattered, like autocorrect changing a surname. Tell the prompt which tokens to copy verbatim, or extract them with a regex first.</p>
       </div>
 
       <h3 class="sub" id="m-hyde">HyDE: search with a made-up answer</h3>
       <div class="prose">
-        <p>HyDE stands for <strong>Hypothetical Document Embeddings</strong> (Gao et al., 2022). The idea is slightly counterintuitive. Instead of embedding the question, ask an LLM to <em>write the answer</em>, without retrieval, then embed that fake answer and search with it.</p>
-        <p>Why would that work when the fake answer may contain errors? Because the fake answer <strong>looks like the documents</strong>. A passage-shaped paragraph full of the right kind of vocabulary sits near real passages in embedding space, even if its facts are wrong. The embedding model acts as a filter that discards the invented details and keeps the topic and style. The real documents then supply the facts.</p>
+        <p><strong>HyDE</strong> (Hypothetical Document Embeddings, Gao et al., 2022): ask an LLM to <em>write the answer</em> without retrieval, embed that fake answer, and search with it. It works even with wrong facts because the fake answer <strong>looks like the documents</strong>. It is like searching for a lost key by describing the lock, not the key. The embedding keeps topic and style and smooths away invented details; the real documents supply the facts.</p>
       </div>
       <div class="formula">
         <math display="block"><msub><mi>v</mi><mtext>HyDE</mtext></msub><mo>=</mo><mfrac><mn>1</mn><mrow><mi>N</mi><mo>+</mo><mn>1</mn></mrow></mfrac><mo stretchy="false">(</mo><mi>E</mi><mo stretchy="false">(</mo><mi>q</mi><mo stretchy="false">)</mo><mo>+</mo><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>N</mi></munderover><mi>E</mi><mo stretchy="false">(</mo><msub><mi>d</mi><mi>i</mi></msub><mo stretchy="false">)</mo><mo stretchy="false">)</mo></math>
@@ -150,26 +144,25 @@ vecs = [embed(q)] + [embed(a) for a in fake_answers]
 query_vec = sum(vecs) / len(vecs)
 hits = search(query_vec, top_k=20)   # real documents come back, not the fake ones</code></pre>
       <div class="prose" style="margin-top:1.2em">
-        <p>When does it help? When the question is short and the corpus is written in a different register: legal text, product terms, technical manuals. When does it hurt? Three situations.</p>
+        <p><strong>Helps</strong> when the question is short and the corpus is formal (legal text, product terms, manuals). <strong>Hurts</strong> in three cases:</p>
         <ul>
-          <li><strong>The model has no idea about the domain.</strong> If it does not know what "tawarruq" is, its fake answer drifts to a plausible neighbour. The drift is the hallucination: the search now looks for the wrong thing. Bank-internal products and policies are exactly where a general model knows least.</li>
-          <li><strong>The query is a lookup.</strong> "Find clause 14.2(b) of the master agreement." A fake answer adds noise to a query that was already precise.</li>
-          <li><strong>The corpus is out of date for the model.</strong> Last quarter's new tariff is not in the model's memory, so the fake answer describes the old one and pulls the old document.</li>
+          <li><strong>The model does not know the domain.</strong> It has never met "tawarruq", so the fake answer drifts to a plausible neighbour and the search looks for the wrong thing. Bank-internal products are where a general model knows least.</li>
+          <li><strong>The query is a lookup.</strong> "Find clause 14.2(b)" is already precise; a fake answer adds noise.</li>
+          <li><strong>The corpus is newer than the model.</strong> The fake answer describes last year's tariff and pulls the old document.</li>
         </ul>
-        <p>HyDE works with a dense retriever. With BM25 it adds a long list of plausible terms; some are useful, many are noise, and the evidence for gains there is weaker. And it costs a full LLM generation <em>before</em> the search starts, which matters for latency (<a href="m2-model-choice-cost-and-latency.html">M2.5</a>).</p>
+        <p>It suits dense retrievers; with BM25 the evidence is weaker. It also costs a full LLM generation <em>before</em> the search (<a href="m2-model-choice-cost-and-latency.html">M2.5</a>).</p>
       </div>
 
       <h3 class="sub" id="m-multi">Multi-query retrieval: ask it several ways</h3>
       <div class="prose">
-        <p>Multi-query asks an LLM for several paraphrases or angles on the question, runs each as a search, and merges the results. The motivation is robustness. A single query vector is a single bet: if the embedding lands a little off, the whole retrieval is off. Three differently worded queries hedge the bet, and a document that ranks well for several of them has better evidence of relevance than one that ranks well for just one.</p>
-        <p>The merge step matters as much as the paraphrases. Union them naively and you triple the candidates and the noise. The standard answer is <strong>reciprocal rank fusion</strong>:</p>
+        <p>Ask an LLM for several paraphrases, search each, merge. One query vector is one bet; three phrasings hedge it, like asking three colleagues and trusting the document they all point to. Merging naively triples the noise, so use <strong>reciprocal rank fusion</strong>:</p>
       </div>
       <div class="formula">
         <math display="block"><mtext>score</mtext><mo stretchy="false">(</mo><mi>d</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mi>i</mi></munder><mfrac><mn>1</mn><mrow><mi>k</mi><mo>+</mo><msub><mtext>rank</mtext><mi>i</mi></msub><mo stretchy="false">(</mo><mi>d</mi><mo stretchy="false">)</mo></mrow></mfrac></math>
         <p class="where">Each document earns a score from every list it appears in, larger when it ranks higher, and the scores are added. The constant <i>k</i> (often 60) stops one first-place finish from dominating. This is the same rule as in <a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a>: multi-query is "hybrid across query phrasings" instead of across retrieval methods. RAG-Fusion (Rackauckas, 2024) is this recipe with a name.</p>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Multi-query pays for itself most when the question is ambiguous or broad, and least when it is already specific. It multiplies retrieval cost, not generation cost, and the searches can run in parallel, so latency grows far less than the call count suggests. The paraphrase step is still one extra sequential LLM call.</p>
+        <p>Read it as: a document scores more the higher it ranks and the more lists it appears in. Multi-query is "hybrid across phrasings" instead of across retrievers. RAG-Fusion (Rackauckas, 2024) is this recipe with a name. It pays most for ambiguous or broad questions and least for specific ones. It multiplies retrieval cost, not generation cost; searches run in parallel, but the paraphrase step is one extra sequential LLM call.</p>
       </div>
 
       <figure class="figure" id="fig-map">
@@ -201,7 +194,7 @@ hits = search(query_vec, top_k=20)   # real documents come back, not the fake on
       </figure>
 
       <div class="prose">
-        <p>Do not over-read the toy. Its purpose is to build the right intuition: every technique is a way of choosing <em>where to search from</em>, and each can move you closer to the target or further away. Rewriting helps in proportion to how good the rewriter is. HyDE decouples you from the vagueness of the question and couples you to the knowledge of the model. Multi-query spreads the risk across several points and charges you in candidates. In real systems, which of these wins depends on your corpus and your question mix, and the only honest answer is to measure on your own queries.</p>
+        <p>Takeaway from the toy: every technique chooses <em>where to search from</em>. Rewriting helps in proportion to rewriter quality. HyDE ignores how vague the question was but depends on the model's knowledge. Multi-query spreads risk and charges you in candidates. Which wins depends on your corpus and questions, so measure on your own.</p>
       </div>
 
       <figure class="figure" id="fig-case">
@@ -214,43 +207,41 @@ hits = search(query_vec, top_k=20)   # real documents come back, not the fake on
 
       <div class="prose">
         <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">A router beats a rule</h4>
-        <p>Because the right transformation depends on the question, mature systems classify the query first and only then choose: an identifier lookup goes straight to keyword search; a follow-up gets condensed; a broad question gets multi-query or decomposition; a short conceptual question against formal documents may get HyDE. A small, cheap model or even a handful of rules can do the routing. This is the first step on the road to agentic retrieval (<a href="a6-agentic-rag.html">A6.3</a>), where the model decides what to search for, in a loop, and a reason to be careful: every added step is latency, cost and another thing to evaluate.</p>
+        <p>The right transformation depends on the question, so classify first: identifier lookup goes to keyword search; follow-up gets condensed; broad question gets multi-query or decomposition; short conceptual question against formal text may get HyDE. A small model or a few rules can route. This is the first step towards agentic retrieval (<a href="a6-agentic-rag.html">A6.3</a>), where every added step costs latency, money and another thing to evaluate.</p>
       </div>
 
       <h3 class="sub" id="m-filter">Metadata filtering: searching a slice, not the whole library</h3>
       <div class="prose">
-        <p>Every chunk in the index should carry <strong>metadata</strong>: where it came from and what it is. A typical bank record has the document ID, title, version and effective date, language, business unit, legal entity (UAE or KSA), document type (policy, procedure, product sheet, circular), classification level, and the access-control list. Chunking (<a href="m3-chunking-strategies.html">M3.5</a>) is where you attach it; parsing (<a href="m3-parsing-messy-pdfs-and-scans.html">M3.9</a>) is where you recover the fields.</p>
-        <p>Metadata filtering means: restrict the search to chunks that satisfy a condition, such as <code>language = "ar" AND entity = "KSA" AND effective_date &lt;= today AND status = "current"</code>. Done well it does three useful things.</p>
+        <p>Every chunk carries <strong>metadata</strong>: document ID, title, version, effective date, language, business unit, legal entity (UAE or KSA), document type, classification and access-control list. Attach it at chunking (<a href="m3-chunking-strategies.html">M3.5</a>); recover it at parsing (<a href="m3-parsing-messy-pdfs-and-scans.html">M3.9</a>). A filter restricts search to chunks matching, e.g. <code>language = "ar" AND entity = "KSA" AND status = "current"</code>. Like searching one shelf instead of the whole library, it gives:</p>
         <ul>
-          <li><strong>Correctness.</strong> A superseded 2022 fee schedule can be the single best semantic match for a question about fees. Without a "current version only" filter, the assistant quotes a tariff that no longer exists.</li>
-          <li><strong>Precision.</strong> If the user is in the KSA retail team, KSA policies are the only ones that apply. Filtering by entity removes plausible but wrong answers.</li>
-          <li><strong>Speed.</strong> A smaller search set is faster to search.</li>
+          <li><strong>Correctness.</strong> A superseded 2022 fee schedule can be the best semantic match. "Current version only" stops the assistant quoting a dead tariff.</li>
+          <li><strong>Precision.</strong> KSA staff need KSA policies; filtering removes plausible but wrong answers.</li>
+          <li><strong>Speed.</strong> A smaller search set.</li>
         </ul>
-        <p>Where does the filter value come from? Three sources, in rising order of risk. From the <em>application context</em> (the logged-in user's entity and role): safe. From the <em>query</em>, by an LLM extracting "KSA" or "2024" out of the user's sentence ("self-querying" retrieval): useful, but the extraction can be wrong, and a wrong filter silently returns an empty or misleading set, so treat it as a soft preference, or fall back to an unfiltered search when it yields nothing. From <em>user-typed text pasted raw into a filter expression</em>: dangerous, because it can inject a clause. Never build a filter by string-concatenating user input.</p>
+        <p>Where the filter value comes from, in rising risk: the <em>application context</em> (logged-in user's entity and role) is safe. An LLM extracting "KSA" from the query ("self-querying") can be wrong and silently return nothing, so treat it as a soft preference and fall back to unfiltered search on empty. <em>Raw user text pasted into a filter</em> can inject a clause. Never build a filter by string-concatenating user input.</p>
       </div>
 
       <h3 class="sub" id="m-perm">Permission-aware retrieval: relevance is not entitlement</h3>
       <div class="prose">
-        <p>Metadata filtering for correctness is a convenience. <strong>Metadata filtering for permissions is a control.</strong> The principle is to apply the user's real entitlements <em>during</em> retrieval, so that documents they may not see are never candidates, never ranked, never passed to the model. This is sometimes called <strong>security trimming</strong>.</p>
-        <p>The standard design has four parts.</p>
+        <p>Filtering for correctness is a convenience. <strong>Filtering for permissions is a control</strong>: apply the user's real entitlements <em>during</em> retrieval so forbidden documents are never candidates, ranked or passed to the model (<strong>security trimming</strong>). Think of a hotel key card: it opens only your floor, rather than a guard hiding things after you walk in. Four parts:</p>
         <ol>
-          <li><strong>Carry the access rule into the index.</strong> At ingestion, every chunk inherits its source document's access-control list (ACL), classification, business unit and legal entity from the system of record (SharePoint, the document management system, the core banking knowledge base), stored as filterable fields.</li>
-          <li><strong>Resolve who is asking, from a trusted source.</strong> The application takes the authenticated identity (from the bank's identity provider, not from the chat message) and expands it into groups, roles, clearance and entity. The language model never sees this and cannot override it.</li>
-          <li><strong>Filter before ranking, inside the search.</strong> The retrieval call includes the permission predicate, so the engine ranks only allowed chunks. This is <em>pre-filtering</em>.</li>
-          <li><strong>Check again at read time, against the source.</strong> The index is a copy. Permissions change after copying, so confirm entitlement against the live system for the few chunks you are about to use. This also gives you an audit record.</li>
+          <li><strong>Carry the rule into the index.</strong> At ingestion each chunk inherits its document's ACL, classification, business unit and entity from the system of record (SharePoint, document management system), as filterable fields.</li>
+          <li><strong>Resolve the asker from a trusted source.</strong> The app takes the authenticated identity from the bank's identity provider, never the chat text, and expands it into groups, roles, clearance and entity. The model never sees or overrides this.</li>
+          <li><strong>Filter before ranking, inside the search.</strong> The engine ranks only allowed chunks (<em>pre-filtering</em>).</li>
+          <li><strong>Re-check at read time against the source.</strong> The index is a copy and permissions change. Confirm entitlement live for the few chunks you will use; this also gives an audit record.</li>
         </ol>
       </div>
 
       <h4 class="sub-h" style="font-family:var(--font-display);font-size:18px;margin:22px 0 6px">Pre-filter, post-filter, and why the difference is large</h4>
       <div class="prose">
-        <p><strong>Post-filtering</strong> means: search everything, take the top <i>k</i>, then drop the ones the user may not see. It looks equivalent and it is not, for three reasons.</p>
+        <p><strong>Post-filtering</strong> searches everything, takes the top <i>k</i>, then drops forbidden results. It looks equivalent but is not:</p>
         <ul>
-          <li><strong>It starves the answer.</strong> Retrieve 5, drop 3, and the model has 2 chunks left, often the weak ones. The user entitled to little gets the worst answers. The remedy, over-fetching a large candidate list, is a guess about how selective the filter will be.</li>
-          <li><strong>The restricted text has already travelled.</strong> It passed through the vector store, a reranker, logs, traces and perhaps a cache before being dropped. Any of those is a place to leak.</li>
-          <li><strong>It fails open.</strong> If the filter step has a bug or a timeout, the default is to show everything. A pre-filter that errors returns nothing, which is a safe failure.</li>
+          <li><strong>It starves the answer.</strong> Retrieve 5, drop 3, and 2 weak chunks remain. Users with narrow access get the worst answers. Over-fetching is a guess at selectivity.</li>
+          <li><strong>Restricted text has already travelled</strong> through the vector store, reranker, logs, traces and perhaps a cache.</li>
+          <li><strong>It fails open.</strong> A buggy or timed-out filter shows everything; a pre-filter that errors returns nothing.</li>
         </ul>
-        <p>Pre-filtering is not free. Approximate nearest-neighbour indexes (HNSW and similar, <a href="m3-chunking-strategies.html">M3.6</a>) are built for unfiltered search. A very selective filter, say one user may see 0.5% of the corpus, can make a naive "search then filter inside the index" return too few results, because the graph walk keeps meeting forbidden nodes. Good engines handle this by filtering during traversal, switching to an exact scan of the small allowed set when the filter is selective enough, or by partitioning the index by tenant or entity. Ask the vendor how filtered search behaves at your selectivity, and test it, because recall under a filter is a number you can measure.</p>
-        <p>Two designs for expressing permissions in the filter also deserve a name. <strong>Group lists</strong> store allowed groups on each chunk (<code>acl_groups: [compliance, legal]</code>) and the query says "chunk's groups intersect the user's groups". This is cheap and scales to many users but is only as fresh as the last sync. <strong>Per-user document lists</strong> pre-compute allowed IDs and are precise but expensive for broad-access users. Most banks mix a coarse index-level filter (entity, classification) with a fine, live check at read time.</p>
+        <p>Pre-filtering has a cost. Approximate nearest-neighbour indexes (HNSW and similar, <a href="m3-chunking-strategies.html">M3.6</a>) are built for unfiltered search. If a user may see 0.5% of the corpus, a naive "search then filter inside the index" returns too few results because the graph walk keeps hitting forbidden nodes. Good engines filter during traversal, switch to exact scan of the small allowed set, or partition by tenant or entity. Ask the vendor, and measure recall under your filter.</p>
+        <p>Two ways to express permissions: <strong>group lists</strong> store allowed groups on each chunk (<code>acl_groups: [compliance, legal]</code>) and match against the user's groups. They are cheap and scale, but only as fresh as the last sync. <strong>Per-user document lists</strong> are precise but expensive for broad-access users. Most banks use a coarse index-level filter (entity, classification) plus a fine live check at read time.</p>
       </div>
       <pre><code># Pre-filter with a trusted, server-built predicate (vendor-neutral sketch)
 user = identity_provider.resolve(session_token)          # never from the chat text
@@ -264,7 +255,7 @@ hits = vector_store.search(query_vec, filter=allowed, top_k=20)
 hits = [h for h in hits if source_system.can_read(user, h.doc_id)]   # live re-check</code></pre>
 
       <div class="prose" style="margin-top:1.2em">
-        <p>The simulation below lets you feel both problems. Pick a user and a question; then compare no filter, post-filter and pre-filter. Finally switch the permission source from "live" to "snapshot": the index remembers who Sara <em>used to be</em>.</p>
+        <p>The simulation below shows both problems. Compare no filter, post-filter and pre-filter, then switch the permission source from "live" to "snapshot": the index remembers who Sara <em>used to be</em>.</p>
       </div>
 
       <figure class="figure" id="fig-perm">
@@ -290,158 +281,48 @@ hits = [h for h in hits if source_system.can_read(user, h.doc_id)]   # live re-c
       </figure>
 
       <div class="prose">
-        <p>Four more pitfalls are worth knowing because they are where real leaks occur, not the textbook one above.</p>
+        <p>Four pitfalls where real leaks occur:</p>
         <ul>
-          <li><strong>Derived data inherits the restriction.</strong> Summaries, extracted entities, knowledge-graph edges, cached answers and the embeddings themselves are all derived from the source. If a restricted document feeds a "frequently asked questions" cache shared across users, you have laundered the restriction away. Cache per entitlement set, not per question.</li>
-          <li><strong>Chunk-level and document-level can disagree.</strong> A document may be broadly readable except one annex. If ACLs are only on documents, the annex is exposed. Inherit at the finest granularity the source supports.</li>
-          <li><strong>Agents are confused deputies.</strong> An agent that calls retrieval tools should call them <em>as the user</em>, with the user's token. If the agent holds a service account that can read everything, any prompt that talks it into a search has the service account's reach (<a href="a3-indirect-prompt-injection.html">A3.1</a>, <a href="a6-agentic-rag.html">A6.5</a>).</li>
-          <li><strong>"No result" must not reveal existence.</strong> Saying "you are not allowed to see the investigation file on customer X" is itself a disclosure. Return the same generic answer you give for "nothing found".</li>
+          <li><strong>Derived data inherits the restriction.</strong> Summaries, extracted entities, graph edges, cached answers and embeddings all derive from the source. A restricted document feeding a shared FAQ cache launders the restriction. Cache per entitlement set, not per question.</li>
+          <li><strong>Chunk-level and document-level can disagree.</strong> A document readable except one annex exposes the annex if ACLs sit only on documents. Inherit at the finest granularity available.</li>
+          <li><strong>Agents are confused deputies.</strong> An agent should call retrieval <em>as the user</em>, with the user's token. A service account that reads everything gives any prompt that persuades the agent its full reach (<a href="a3-indirect-prompt-injection.html">A3.1</a>, <a href="a6-agentic-rag.html">A6.5</a>).</li>
+          <li><strong>"No result" must not reveal existence.</strong> "You are not allowed to see the investigation on customer X" is itself a disclosure. Give the same generic answer as for "nothing found".</li>
         </ul>
-        <p>The OWASP guidance for LLM applications treats sensitive-information disclosure and weaknesses in vector stores and embeddings as top risks, and places missing access control in retrieval squarely in the second. The pattern, "the model is only as private as the context you hand it", is why security people read the retrieval layer as a data-access layer.</p>
+        <p>OWASP's LLM guidance lists sensitive-information disclosure and vector-store weaknesses as top risks. The model is only as private as the context you hand it, so read the retrieval layer as a data-access layer.</p>
       </div>
     </section>
 
-    <!-- ============================== 3. CONNECTS ============================== -->
-    <section class="part" id="connects">
-      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
-      <div class="prose"><p>This pair of topics sits at the front and the gate of a retrieval pipeline. Here is what it links to.</p></div>
-      <div class="links">
-        <div class="link-card"><span class="code">M3.1 · M3.2 · Keyword and dense retrieval</span><span class="t"><a href="m3-keyword-search-and-bm25.html">What the rewritten query is fed to</a></span><p>Rewriting adds vocabulary, which BM25 needs; HyDE exploits a dense embedding's ability to place text by meaning. Know which retriever you have before choosing the trick.</p></div>
-        <div class="link-card"><span class="code">M3.3 · M3.4 · Hybrid search and reranking</span><span class="t"><a href="m3-hybrid-search-and-reciprocal-rank.html">How multi-query results are merged</a></span><p>Reciprocal rank fusion merges phrasings exactly as it merges retrievers. A reranker then corrects relevance, but it must run on already-filtered candidates.</p></div>
-        <div class="link-card"><span class="code">M3.5 · M3.6 · Chunking and vector indexes</span><span class="t"><a href="m3-chunking-strategies.html">Where metadata is attached and filtering is executed</a></span><p>ACL and entity fields are written at chunking time. Filtered approximate search is an index-design question: how the engine behaves when most of the corpus is forbidden.</p></div>
-        <div class="link-card"><span class="code">M3.9 · M3.10 · Parsing and diagnosing failures</span><span class="t"><a href="m3-parsing-messy-pdfs-and-scans.html">Metadata comes from parsing, and failures need triage</a></span><p>You cannot filter by "effective date" if parsing lost it. And when answers are wrong, the first diagnostic question is whether the right chunk was retrieved: the query side, covered here, or the generation side.</p></div>
-        <div class="link-card"><span class="code">M2.1 · Prompting and context engineering</span><span class="t"><a href="m2-prompting-and-context-engineering.html">Rewriters and HyDE are prompts</a></span><p>A rewrite prompt is a production prompt with a contract: copy identifiers verbatim, return structured output, never answer the question. It needs the same discipline as any other.</p></div>
-        <div class="link-card"><span class="code">M2.3 · Prompting, RAG or fine-tuning</span><span class="t"><a href="m2-prompting-versus-rag-versus-fine.html">Why RAG, and what it implies for access</a></span><p>One reason banks pick RAG over fine-tuning is that documents stay outside the weights, so access can be enforced at retrieval time. Fine-tuned weights cannot be "permission-trimmed".</p></div>
-        <div class="link-card"><span class="code">M4.3 · M4.5 · Agent memory and guardrails</span><span class="t"><a href="m4-memory-short-term-long-term.html">Memory is another retrieval path</a></span><p>Conversation memory and long-term memory are retrieved too, and need the same entitlement thinking. Guardrails (<a href="m4-guardrails-and-approval-gates.html">M4.5</a>) are where output checks sit, as a second line behind the filter, never the first.</p></div>
-        <div class="link-card"><span class="code">A6.3 – A6.5 · Agentic RAG and enterprise permissions</span><span class="t"><a href="a6-agentic-rag.html">Where this goes next</a></span><p>Agentic retrieval has the model plan and issue its own searches. It multiplies query rewriting and makes permission design harder: A6.5 treats enterprise-scale entitlements, graphs and delegation.</p></div>
-        <div class="link-card"><span class="code">B7.3 · Internal copilots for staff</span><span class="t"><a href="b7-internal-copilots-for-staff.html">The product this lesson is built for</a></span><p>An internal copilot is a RAG system over the bank's own documents. Permission trimming is what lets it be rolled out to branches, operations and compliance at once.</p></div>
-        <div class="link-card"><span class="code">G1 · G2 · Threats and privacy</span><span class="t"><a href="g1-threat-modelling-an-ai-system.html">Treat retrieval as an attack surface</a></span><p>Filter injection, poisoned documents and over-broad service accounts are threat-model items (G1). Data minimisation and need-to-know (<a href="g2-privacy-basics-minimisation-consent-anonymisation.html">G2.3</a>) are the policy behind the filter.</p></div>
-        <div class="link-card"><span class="code">P1.5 · P2.5 · Lineage and tracing</span><span class="t"><a href="p1-lineage-and-metadata.html">Metadata, lineage and an audit trail</a></span><p>Lineage tells you where a chunk's ACL came from. Tracing (<a href="p2-prompt-versioning-and-llm-tracing.html">P2.5</a>) records what each user retrieved, which is your evidence in an access review, as long as the trace store is itself access-controlled.</p></div>
-        <div class="link-card"><span class="code">F1.1 · F5.6 · Vectors and embeddings</span><span class="t"><a href="f1-vectors-matrices-geometry.html">Why moving a vector changes the neighbours</a></span><p>The meaning map is the geometry of F1.1 in two dimensions. <a href="f5-attention.html">F5.6</a> covers where embeddings get their meaning.</p></div>
-      </div>
-      <div class="prose" style="margin-top:22px">
-        <p>Where it shows up at the bank:</p>
-        <ul>
-          <li><strong>Staff policy and procedures assistants.</strong> Colloquial questions against formal documents, in Arabic and English. Condensing follow-ups and bridging language are the biggest wins; "current version only" filtering prevents quoting superseded policies.</li>
-          <li><strong>Islamic finance and product Q&amp;A.</strong> Vocabulary gaps between customer language and Sharia-product terms. Clarifying and expanding terms matters, and so does catching a rewriter that confuses two structures.</li>
-          <li><strong>Compliance, AML and legal search.</strong> The strictest permission cases: case files, STRs, sanctions hits and legal advice are need-to-know, and tipping-off rules make an accidental disclosure a serious event. Pre-filtering plus live re-checks are the minimum.</li>
-          <li><strong>Call-centre agent assist.</strong> Real-time, so latency budgets rule out HyDE on every turn; a cheap condense-and-route step is usual. The customer's own data adds a second kind of entitlement: the agent should see this customer's records and no other's.</li>
-          <li><strong>UAE and KSA entities in one group.</strong> Entity-based filters stop a UAE staff member getting KSA-only guidance and keep each entity's regulatory material separate. Check with your own data-residency and classification policy: whether one shared index is permitted at all is a governance decision, not a retrieval one, and I cannot state it for any particular bank or regulator.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- ============================== 4. FIELD ============================== -->
-    <section class="part" id="field">
-      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
-      <div class="prose">
-        <p>The techniques are established and widely packaged in frameworks. The live questions are about when they pay off, how to evaluate them honestly, and how to make permission enforcement robust once retrieval becomes agentic.</p>
-      </div>
-      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with two light searches. Items marked (memory) are from my recollection of the papers and were not re-verified; the practitioner sources below are opinion, not measurements.</p>
-      <ol class="timeline" style="margin-top:14px">
-        <li><span class="yr">2022</span><div><div class="t">HyDE</div><p>Instruct an LLM to write a hypothetical document, embed it, and retrieve real documents near it. Competitive with fine-tuned retrievers in zero-shot settings across several tasks, including low-resource languages (memory).</p><div class="src">Gao, Ma, Lin, Callan, "Precise Zero-Shot Dense Retrieval without Relevance Labels", ACL 2023 (arXiv 2212.10496)</div></div></li>
-        <li><span class="yr">2023</span><div><div class="t">Rewrite-Retrieve-Read, Query2doc, step-back</div><p>A family of LLM-assisted query transformations: rewrite the query before retrieval (Ma et al.), generate a pseudo-document for expansion (Wang et al.), and abstract to a higher-level question (Zheng et al.). Early evidence that expansion helps most where the model already knows the domain (memory).</p><div class="src">Ma et al., arXiv 2305.14283; Wang et al., arXiv 2303.07678; Zheng et al., arXiv 2310.06117</div></div></li>
-        <li><span class="yr">2023</span><div><div class="t">Expansion by prompting: mixed results</div><p>Jagerman et al. found LLM query expansion strong for some retrievers and datasets, but that it can hurt when queries are already well formed or when the model lacks the needed knowledge (memory). The practical conclusion, "measure it on your own queries", has held since.</p><div class="src">Jagerman et al., arXiv 2305.03653</div></div></li>
-        <li><span class="yr">2024</span><div><div class="t">RAG-Fusion</div><p>Generate multiple queries and merge with reciprocal rank fusion. Popularised as a recipe; the evidence is largely applied and anecdotal rather than from controlled benchmarks (memory).</p><div class="src">Rackauckas, arXiv 2402.03367</div></div></li>
-        <li><span class="yr">2024–25</span><div><div class="t">Surveys: from retrieval-centric to reasoning-centric</div><p>A survey of query optimisation with LLMs covers rewriting, expansion, decomposition and evaluation, names gaps in benchmarks, and frames the direction as queries that are planned and verified by reasoning models, not just paraphrased.</p><div class="src">arXiv 2412.17558 (search result; I read the abstract summary only)</div></div></li>
-        <li><span class="yr">2025</span><div><div class="t">HyDE is still being studied</div><p>New work revisits feedback models for HyDE and trains rewriters for retrieval metrics, noting that untuned pseudo-documents can hurt sparse retrieval. I saw only abstracts.</p><div class="src">Jedidi and Lin, arXiv 2511.19349; arXiv 2510.17139</div></div></li>
-        <li><span class="yr">2025–26</span><div><div class="t">Access control moves from footnote to requirement</div><p>OWASP's 2025 list for LLM applications includes vector and embedding weaknesses and sensitive-information disclosure. Practitioner write-ups converge on the same advice: tag chunks with ACLs at ingestion, apply a mandatory pre-filter, re-check at read time, log decisions, and run a CI test where a low-clearance user asks questions whose only good sources are restricted, expecting a grounded refusal. These are engineering opinions, not measured leakage rates.</p><div class="src">OWASP GenAI Top 10; tianpan.co (April and May 2026); curiosity.ai blog</div></div></li>
-      </ol>
-      <div class="prose" style="margin-top:22px"><p>How established each practice is, in banking specifically:</p></div>
-      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
-      <div class="table-wrap" style="margin-top:10px">
-        <table class="data">
-          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
-          <tbody>
-            <tr><td><b>Condensing follow-ups into standalone queries</b></td><td>One small LLM call with chat history before retrieval.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Metadata filters: entity, language, current version</b></td><td>Applied from application context, not user text.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Pre-filter by classification and group, with a live read-time check</b></td><td>ACLs inherited at ingestion, user identity resolved server-side, decisions logged.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Multi-query with reciprocal rank fusion</b></td><td>Three to five paraphrases, merged, then reranked.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>HyDE</b></td><td>Fake-answer retrieval for conceptual questions against formal text. Gains depend on the model's domain knowledge.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>Query routing by question type</b></td><td>Identifier to BM25, broad to multi-query, vague to rewrite.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>Rewriters trained on retrieval feedback</b></td><td>A small model optimised for retrieval metrics, using reinforcement-style training.</td><td><span class="status prop">Proposed</span></td></tr>
-            <tr><td><b>Permission regression tests as a release gate</b></td><td>Low-clearance test users must be refused on restricted-only questions before each release.</td><td><span class="status inf">Reported</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Condense follow-ups and filter by trusted metadata always; add rewriting, HyDE or multi-query only where an offline test on your own questions shows recall gains worth the latency; and treat permissions as a pre-filter plus a live check, tested like any security control.</div>
-    </section>
-
-    <!-- ============================== 5. FAILS ============================== -->
+    <!-- ============================== 3. FAILS ============================== -->
     <section class="part" id="fails">
-      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Each one comes with the quickest check.</p></div>
+      <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Rewriter changes the question's meaning</div><p>"Can Gold customers get a waiver?" becomes a question about Platinum, or a follow-up is condensed with the wrong earlier topic. The answer is fluent and about the wrong thing.</p><div class="spot"><b>Spot it</b>Log the original and rewritten query together and review a sample weekly. Check that entities, numbers and negations survive the rewrite.</div></li>
-        <li><div class="t">Identifiers rewritten or hallucinated</div><p>A payment reference, clause number or product code is paraphrased, or HyDE invents a plausible one.</p><div class="spot"><b>Spot it</b>Test with queries that contain exact IDs. If recall drops against the unrewritten baseline, route identifier queries to keyword search and bypass the rewriter.</div></li>
-        <li><div class="t">HyDE hallucination steers the search</div><p>The model does not know the bank's new product, invents a description of a conventional one, and retrieval finds the wrong policy with high similarity.</p><div class="spot"><b>Spot it</b>Compare retrieved chunks with and without HyDE on questions about internal terms. If HyDE pulls different, less relevant chunks, restrict it to topics the model knows or fuse with the original.</div></li>
-        <li><div class="t">Latency and cost nobody budgeted</div><p>Three sequential LLM calls (condense, expand, answer) turn a two-second answer into seven.</p><div class="spot"><b>Spot it</b>Trace per-stage latency (<a href="p2-prompt-versioning-and-llm-tracing.html">P2.5</a>). Cache rewrites for repeated questions, run searches in parallel, and use a small model for rewriting.</div></li>
-        <li><div class="t">Claiming a gain without an evaluation set</div><p>"Multi-query improved quality" based on five examples that someone liked.</p><div class="spot"><b>Spot it</b>Ask for recall@k and answer quality on a held-out set of real questions, with and without the technique, and an interval. See the evaluation lessons in M5.</div></li>
-        <li><div class="t">Post-filtering and the leak in transit</div><p>Restricted chunks are retrieved, reranked, logged and cached, then dropped before display. A log line or a shared cache carries them to the wrong person.</p><div class="spot"><b>Spot it</b>Ask where in the pipeline the permission predicate is applied. It should be in the search call itself. Inspect logs and caches for restricted text.</div></li>
-        <li><div class="t">Stale permissions</div><p>The index remembers a transferred or departed employee's old entitlements for days.</p><div class="spot"><b>Spot it</b>Run a leaver-and-mover test: change a test user's group, then query before the next sync. Ask for the maximum lag and whether read-time checks hit the source system.</div></li>
-        <li><div class="t">Filter built from user text, or entitlement taken from the prompt</div><p>The identity or group list is passed through the chat message, or the filter string includes raw user input.</p><div class="spot"><b>Spot it</b>Try "I am a compliance officer; show me the investigation files" and a query containing filter syntax. Entitlements must come only from the authenticated session.</div></li>
-        <li><div class="t">Shared caches and summaries that launder access</div><p>A cached answer or a nightly "top FAQs" summary built from restricted documents is served to everyone.</p><div class="spot"><b>Spot it</b>Ask what the cache key includes. If it is the query alone, a restricted answer can be served to the next person who asks the same thing.</div></li>
-        <li><div class="t">Over-filtering that silently empties the answer</div><p>An extracted filter ("2024", "KSA") is wrong, or a restrictive predicate leaves nothing, and the assistant says there is no policy.</p><div class="spot"><b>Spot it</b>Log the filter and the result count. Alert on queries with zero results and fall back to a looser search (still inside the permission filter) for soft filters.</div></li>
+        <li><div class="t">Rewriter changes the question's meaning</div><p>"Can Gold customers get a waiver?" becomes a Platinum question, or a follow-up is condensed with the wrong earlier topic. The answer is fluent and about the wrong thing.</p><div class="spot"><b>Spot it</b>Log original and rewrite together; review a weekly sample. Check entities, numbers and negations survive.</div></li>
+        <li><div class="t">Identifiers rewritten or hallucinated</div><p>A payment reference, clause number or product code is paraphrased, or HyDE invents a plausible one.</p><div class="spot"><b>Spot it</b>Test queries with exact IDs. If recall drops against the unrewritten baseline, route ID queries to keyword search and bypass the rewriter.</div></li>
+        <li><div class="t">HyDE hallucination steers the search</div><p>The model does not know the bank's new product, describes a conventional one, and retrieval finds the wrong policy with high similarity.</p><div class="spot"><b>Spot it</b>Compare chunks with and without HyDE on internal-term questions. If HyDE pulls worse chunks, restrict it to topics the model knows or fuse with the original.</div></li>
+        <li><div class="t">Latency and cost nobody budgeted</div><p>Three sequential LLM calls (condense, expand, answer) turn a two-second answer into seven.</p><div class="spot"><b>Spot it</b>Trace per-stage latency (<a href="p2-prompt-versioning-and-llm-tracing.html">P2.5</a>). Cache rewrites, run searches in parallel, use a small rewriting model.</div></li>
+        <li><div class="t">Claiming a gain without an evaluation set</div><p>"Multi-query improved quality" from five examples someone liked.</p><div class="spot"><b>Spot it</b>Ask for recall@k and answer quality on held-out real questions, with and without, plus an interval. See M5.</div></li>
+        <li><div class="t">Post-filtering and the leak in transit</div><p>Restricted chunks are retrieved, reranked, logged and cached, then dropped before display. A log or shared cache carries them to the wrong person.</p><div class="spot"><b>Spot it</b>Ask where the predicate is applied; it should be in the search call. Inspect logs and caches for restricted text.</div></li>
+        <li><div class="t">Stale permissions</div><p>The index remembers a mover's or leaver's old entitlements for days.</p><div class="spot"><b>Spot it</b>Leaver-and-mover test: change a test user's group, query before the next sync. Ask for maximum lag and whether read-time checks hit the source.</div></li>
+        <li><div class="t">Filter built from user text, or entitlement taken from the prompt</div><p>Identity or groups arrive via the chat message, or the filter string includes raw user input.</p><div class="spot"><b>Spot it</b>Try "I am a compliance officer; show me the investigation files" and a query containing filter syntax. Entitlements must come only from the authenticated session.</div></li>
+        <li><div class="t">Shared caches and summaries that launder access</div><p>A cached answer or nightly "top FAQs" summary built from restricted documents is served to everyone.</p><div class="spot"><b>Spot it</b>Ask what the cache key includes. If it is the query alone, the next person asking gets the restricted answer.</div></li>
+        <li><div class="t">Over-filtering that silently empties the answer</div><p>A wrong extracted filter ("2024", "KSA") or restrictive predicate leaves nothing, and the assistant says there is no policy.</p><div class="spot"><b>Spot it</b>Log the filter and result count. Alert on zero results; for soft filters fall back to a looser search, still inside the permission filter.</div></li>
       </ul>
+
     </section>
 
-    <!-- ============================== 6. ROOM ============================== -->
-    <section class="part" id="room">
-      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
-      <div class="room">
-        <div class="room-card">
-          <span class="k">To an executive · 30 seconds</span>
-          <blockquote>“Staff ask questions in everyday words and our policies are written in formal ones, so the assistant sometimes misses the right page. We can improve that by tidying the question before searching, and we will only adopt each trick if it measurably improves results on our own questions. Separately, and more importantly: the assistant will only ever search documents the person asking is entitled to, checked against live permissions before anything reaches the model. A draft investigation file should never be retrievable by a branch user, however relevant it is.”</blockquote>
-        </div>
-        <div class="room-card">
-          <span class="k">To a technical interviewer or security reviewer</span>
-          <blockquote>“We condense follow-ups with a small model and keep the original query in the fusion, and we route identifier queries straight to BM25. HyDE and multi-query are options that must beat that baseline on recall@k and answer quality on a labelled set, within the latency budget. For access, chunks inherit ACLs, classification and entity from the source at ingestion, the user's entitlements come from the identity provider server-side, the predicate is a pre-filter inside the vector search, and we re-check against the source before use. Caches are keyed by entitlement set, agents call tools with the user's token, and we run low-clearance regression tests as a release gate.”</blockquote>
-        </div>
-      </div>
-      <div class="qa">
-        <details class="reveal"><summary>“Should we use HyDE?”</summary><div class="ans"><p>As an experiment, not a default. It helps when questions are short and documents are formal, and the model understands the domain. It hurts on internal jargon, exact lookups and recent changes. I'd test it against the plain query and against fusing both, on a set of real staff questions, and only keep it where recall improves enough to justify an extra model call before the search.</p></div></details>
-        <details class="reveal"><summary>“Why not just feed the whole question to the vector store?”</summary><div class="ans"><p>For clear, specific questions that is fine, and it is the baseline. It fails on follow-ups with no context, on vocabulary gaps such as customer language against Sharia product terms, and on bundled questions. The cheapest fix is condensing follow-ups; the rest should be introduced where a measured failure justifies them.</p></div></details>
-        <details class="reveal"><summary>“We filter the results after retrieval. Isn't that the same as pre-filtering?”</summary><div class="ans"><p>No. Post-filtering still retrieves restricted text, so it passes through rerankers, logs and caches, and it leaves fewer than <i>k</i> useful results for users with narrow access. It also tends to fail open. I'd push the predicate into the search itself, re-check at read time, and confirm that filtered search keeps good recall at our selectivity.</p></div></details>
-        <details class="reveal"><summary>“Can the model be told not to reveal restricted documents?”</summary><div class="ans"><p>Not as the control. Instructions in a prompt are advisory, and prompt injection can override them. The only safe design is that restricted text never enters the context. Prompts and output guardrails are a second line of defence behind the filter.</p></div></details>
-        <details class="reveal"><summary>“How do we know the permissions work?”</summary><div class="ans"><p>We test them. A suite of synthetic users at different levels asks questions whose best answers sit in restricted documents; the expected behaviour is a generic refusal, with no hint the document exists. It runs on every release, plus leaver-and-mover tests for stale entitlements, and audit logs record who retrieved what. I'd report leak counts and sync lag, not just accuracy.</p></div></details>
-        <details class="reveal"><summary>“Multi-query tripled our retrieval cost. Worth it?”</summary><div class="ans"><p>Only if recall or answer quality improved by more than the cost and latency justify. The searches can run in parallel, so latency grows less than cost, but the paraphrase call is sequential. Try two paraphrases rather than five, always merge with the original through reciprocal rank fusion and rerank, and apply it only to broad or ambiguous questions chosen by a router.</p></div></details>
-      </div>
-    </section>
-
-    <!-- ============================== 7. CHECK ============================== -->
+    <!-- ============================== 4. CHECK ============================== -->
     <section class="part" id="check">
-      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
-      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A user types "and what about Business?" in a chat about transfer limits. Why does a plain retrieval fail, and what is the minimal fix?</summary><div class="ans"><p>The text has no topic, so its embedding is vague and matches arbitrary "Business" pages. The topic lives in earlier turns. Condense the turn plus recent history into a standalone question ("What is the daily limit on international transfers for Business accounts?") and search with that, keeping the original in the fusion.</p></div></details>
-        <details class="reveal"><summary>2. Why can HyDE work even though the fake answer contains invented facts?</summary><div class="ans"><p>Because retrieval uses only where the fake answer sits in embedding space. Topic, vocabulary and style survive; specific false details are mostly noise the embedding model smooths away. The facts in the final answer come from the real documents. It breaks when the model's guess about the topic itself is wrong.</p></div></details>
-        <details class="reveal"><summary>3. Two ranked lists for the same question. Document A is rank 1 in list one and absent from list two. Document B is rank 3 in list one and rank 2 in list two. With <i>k</i> = 60, which scores higher under reciprocal rank fusion?</summary><div class="ans"><p>A: 1/61 ≈ 0.01639. B: 1/63 + 1/62 ≈ 0.01587 + 0.01613 = 0.03200. B wins by a wide margin. Documents that several lists agree on beat a single top result.</p></div></details>
-        <details class="reveal"><summary>4. A user is allowed to see 0.5% of a 4-million-chunk index (20,000 chunks). You retrieve the top 20 and post-filter. Roughly how many survive, if relevance has nothing to do with access?</summary><div class="ans"><p>About 20 × 0.005 = 0.1 chunks. In most queries, none. Even if relevance and access are correlated, you get far fewer than 20. Pre-filtering searches the 20,000 allowed chunks and returns a full top 20.</p></div></details>
-        <details class="reveal"><summary>5. A branch user moved teams on Monday. On Wednesday they retrieve a document restricted to their old team. The ACL in the source system was correct. Where did the design fail, and what are two fixes?</summary><div class="ans"><p>The index filtered on a permission snapshot taken before Monday. Fixes: re-check the user's entitlement against the live source system for the documents about to be used, and sync identity and group changes to the index more frequently (and invalidate caches on entitlement change). Also test with leaver-and-mover cases.</p></div></details>
-        <details class="reveal"><summary>6. Your support agent uses a retrieval tool with a service account that can read all departments, because "it is easier". What is the risk?</summary><div class="ans"><p>A confused deputy. Any user, or any text that injects instructions into the agent, can make the agent fetch and reveal documents with the service account's reach, not the user's. The agent should call retrieval with the user's delegated identity so the same pre-filter applies.</p></div></details>
-        <details class="reveal"><summary>7. An assistant answers a question about a sensitive investigation with "You do not have permission to view the investigation into customer X." What is wrong?</summary><div class="ans"><p>It confirms that the investigation exists. In an AML context that can be a tipping-off problem. The refusal should match the normal "I couldn't find information on that" response so existence is not disclosed.</p></div></details>
-        <details class="reveal"><summary>8. Your team claims multi-query improved quality. What do you ask for?</summary><div class="ans"><p>A labelled set of real questions, recall@k and answer-quality scores with and without it (and with the original query kept in the fusion), an interval around the difference, the added latency and cost, and a breakdown by question type, since expansion helps broad questions and can hurt exact lookups.</p></div></details>
+        <details class="reveal"><summary>1. A user types "and what about Business?" in a chat about transfer limits. Why does plain retrieval fail, and what is the minimal fix?</summary><div class="ans"><p>The text has no topic, so it matches arbitrary "Business" pages. Condense it with recent history into a standalone question ("What is the daily limit on international transfers for Business accounts?") and keep the original in the fusion.</p></div></details>
+        <details class="reveal"><summary>2. Why can HyDE work even though the fake answer contains invented facts?</summary><div class="ans"><p>Retrieval uses only where the fake answer sits in embedding space. Topic, vocabulary and style survive; false details are noise the embedding smooths away. Facts come from the real documents. It breaks when the model's guess about the topic itself is wrong.</p></div></details>
+        <details class="reveal"><summary>3. Document A is rank 1 in list one and absent from list two. Document B is rank 3 in list one and rank 2 in list two. With <i>k</i> = 60, which scores higher under reciprocal rank fusion?</summary><div class="ans"><p>A: 1/61 ≈ 0.01639. B: 1/63 + 1/62 ≈ 0.01587 + 0.01613 = 0.03200. B wins by a wide margin: agreement across lists beats a single top result.</p></div></details>
+        <details class="reveal"><summary>4. A user may see 0.5% of a 4-million-chunk index (20,000 chunks). You retrieve the top 20 and post-filter. Roughly how many survive if relevance is unrelated to access?</summary><div class="ans"><p>20 × 0.005 = 0.1 chunks, so usually none. Even with correlation you get far fewer than 20. Pre-filtering searches the 20,000 allowed chunks and returns a full top 20.</p></div></details>
+        <details class="reveal"><summary>5. A user moved teams on Monday. On Wednesday they retrieve a document restricted to their old team, though the source ACL was correct. Where did the design fail, and what are two fixes?</summary><div class="ans"><p>The index filtered on a permission snapshot from before Monday. Fixes: re-check entitlement against the live source for documents about to be used, and sync identity and group changes more often (invalidating caches on change). Add leaver-and-mover tests.</p></div></details>
+        <details class="reveal"><summary>6. Your support agent's retrieval tool uses a service account that reads all departments, "because it is easier". What is the risk?</summary><div class="ans"><p>A confused deputy. Any user, or injected text, can make the agent reveal documents with the service account's reach. Call retrieval with the user's delegated identity so the same pre-filter applies.</p></div></details>
+        <details class="reveal"><summary>7. An assistant answers "You do not have permission to view the investigation into customer X." What is wrong?</summary><div class="ans"><p>It confirms the investigation exists, a possible tipping-off problem in AML. Use the normal "I couldn't find information on that" response.</p></div></details>
+        <details class="reveal"><summary>8. Your team claims multi-query improved quality. What do you ask for?</summary><div class="ans"><p>A labelled set of real questions; recall@k and answer quality with and without it (original kept in the fusion); an interval around the difference; added latency and cost; and a breakdown by question type, since expansion helps broad questions and can hurt exact lookups.</p></div></details>
       </div>
-    </section>
-
-    <!-- ============================== SOURCES ============================== -->
-    <section class="part" id="sources">
-      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
-      <ol class="sources">
-        <li>L. Gao, X. Ma, J. Lin, J. Callan. <a href="https://arxiv.org/abs/2212.10496">Precise Zero-Shot Dense Retrieval without Relevance Labels</a> (HyDE). ACL, 2023.</li>
-        <li>X. Ma, Y. Gong, P. He, H. Zhao, N. Duan. <a href="https://arxiv.org/abs/2305.14283">Query Rewriting for Retrieval-Augmented Large Language Models</a>. EMNLP, 2023.</li>
-        <li>L. Wang, N. Yang, F. Wei. <a href="https://arxiv.org/abs/2303.07678">Query2doc: Query Expansion with Large Language Models</a>. EMNLP, 2023.</li>
-        <li>H. S. Zheng et al. <a href="https://arxiv.org/abs/2310.06117">Take a Step Back: Evoking Reasoning via Abstraction in Large Language Models</a>. ICLR, 2024.</li>
-        <li>R. Jagerman et al. <a href="https://arxiv.org/abs/2305.03653">Query Expansion by Prompting Large Language Models</a>. arXiv, 2023.</li>
-        <li>Z. Rackauckas. <a href="https://arxiv.org/abs/2402.03367">RAG-Fusion: a New Take on Retrieval-Augmented Generation</a>. arXiv, 2024.</li>
-        <li>G. Cormack, C. Clarke, S. Buettcher. <a href="https://dl.acm.org/doi/10.1145/1571941.1572114">Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods</a>. SIGIR, 2009.</li>
-        <li><a href="https://arxiv.org/abs/2412.17558">A survey of query optimisation in large language models</a>. arXiv 2412.17558 (v3).</li>
-        <li>Jedidi, Lin. <a href="https://arxiv.org/abs/2511.19349">Revisiting Feedback Models for HyDE</a>. arXiv 2511.19349, 2025.</li>
-        <li>OWASP. <a href="https://genai.owasp.org/llm-top-10/">OWASP Top 10 for LLM Applications</a> (2025 edition: sensitive information disclosure; vector and embedding weaknesses).</li>
-        <li>Qdrant. <a href="https://qdrant.tech/documentation/concepts/filtering/">Filtering</a>. Documentation on payload filters in vector search; most vector databases have an equivalent page.</li>
-        <li><a href="https://tianpan.co/blog/2026-04-17-vector-store-access-control-rag-rls">Vector Store Access Control: The Row-Level Security Problem Most RAG Teams Skip</a>. Practitioner blog, April 2026 (opinion, not measurement).</li>
-        <li><a href="https://blog.curiosity.ai/blog/permission-aware-retrieval">Permission-aware retrieval: the security question enterprise AI keeps getting wrong</a>. Vendor blog (opinion).</li>
-      </ol>
       <div class="lesson-foot">
         <a href="../index.html">← Back to the curriculum</a>
         <span>Next in M3: Parsing messy PDFs and scans, and diagnosing failures (M3.9, M3.10)</span>
