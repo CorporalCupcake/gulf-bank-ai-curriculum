@@ -77,10 +77,12 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>Two systems come up in almost every AI interview and in the first months of the job. They look nothing alike, and they are built from the same few questions.</p>
-        <p><strong>The fraud scorer.</strong> A customer taps a card at a shop in Dubai Mall. The bank has a fraction of a second to say approve, decline or ask for more proof. The decision must be fast, must work when half the infrastructure is struggling, must be explainable to a customer and a regulator, and will be attacked by people who study it.</p>
-        <p><strong>The RAG assistant.</strong> A relationship manager asks, in Arabic or English, "what is our policy on accepting a Saudi power of attorney for a corporate account?" The assistant must find the right paragraph in thousands of policies, show only documents this person is allowed to see, answer from them, and cite where. Nobody minds if it takes six seconds. Everybody minds if it invents a policy.</p>
-        <p>The fraud scorer is a <em>latency and reliability</em> problem wrapped around a modest model. The RAG assistant is an <em>accuracy and access-control</em> problem wrapped around a large one. Knowing which constraint dominates is most of design.</p>
+        <p>Two systems come up in almost every AI interview. They look nothing alike and are built from the same few questions.</p>
+        <ul>
+          <li><strong>Fraud scorer.</strong> A customer taps a card at Dubai Mall. The bank has a fraction of a second to approve, decline or ask for more proof. It must work when half the infrastructure is struggling, be explainable to a regulator, and survive attackers who study it. Like an airport security gate: fast, with a safe default when the scanner breaks.</li>
+          <li><strong>RAG assistant.</strong> A relationship manager asks "what is our policy on accepting a Saudi power of attorney?" It finds the right paragraph, shows only documents this person may see, answers from them and cites. Six seconds is fine; an invented policy is not. Like a librarian who checks your badge before fetching books.</li>
+        </ul>
+        <p>Fraud is a <em>latency and reliability</em> problem around a modest model. RAG is an <em>accuracy and access-control</em> problem around a large one. Knowing which dominates is most of design.</p>
       </div>
 
       <figure class="figure" id="fig-frame">
@@ -97,7 +99,7 @@
         </table></div>
       </figure>
 
-      <div class="callout key"><span class="k">Hold onto this</span>Open any design answer with four things before drawing a box: the <b>decision</b> being made, the <b>budget</b> (time, cost, error), the <b>worst failure</b> and what the system does when it happens. Interviewers and senior colleagues are mostly checking that you ask these first.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before drawing a box, state four things: the <b>decision</b>, the <b>budget</b> (time, cost, error), the <b>worst failure</b> and what the system does then. Like a pilot's pre-flight checklist, it comes first.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -106,20 +108,20 @@
 
       <h3 class="sub" id="m-fraud-req">Fraud scoring: requirements first (P5.1)</h3>
       <div class="prose">
-        <p>Do not start with "XGBoost on Kafka". Start by writing down what the system has to guarantee. A reasonable set for a card issuer:</p>
+        <p>Write down what the system must guarantee before naming tools. For a card issuer:</p>
         <ul>
-          <li><strong>Latency.</strong> Card networks give the issuer a limited window to respond to an authorisation request. The exact figure is set by the scheme and the processor, so confirm it; designs usually give the fraud decision a small slice, often in the range of tens of milliseconds, at the 99th percentile (p99), not on average.</li>
-          <li><strong>Availability.</strong> If the scorer is down, payments cannot stop. It needs a defined fallback.</li>
-          <li><strong>Throughput.</strong> Peak, not average: salary day, Ramadan evenings, a sale event, a failed-over data centre.</li>
-          <li><strong>Decision types.</strong> Approve, decline, or step-up (a one-time code or in-app confirmation). Three outcomes make the design much better than two.</li>
-          <li><strong>Explainability and audit.</strong> Every decision stores its inputs, score, model version and reason codes, so a dispute or a validator can reconstruct it (F8, G3).</li>
-          <li><strong>Learning.</strong> Labels arrive days or weeks later (<a href="b1-delayed-labels-and-feedback-loops.html">B1.2</a>), and decisions change which labels you get.</li>
+          <li><strong>Latency.</strong> The card scheme and processor set the window (confirm the figure). The fraud decision usually gets a slice of tens of milliseconds at the 99th percentile (p99: the time 99% of requests beat), not on average.</li>
+          <li><strong>Availability.</strong> Payments cannot stop if the scorer is down, so it needs a defined fallback.</li>
+          <li><strong>Throughput.</strong> Plan for peak: salary day, Ramadan evenings, sales, a failed-over data centre.</li>
+          <li><strong>Decision types.</strong> Approve, decline, or step-up (one-time code or in-app confirmation). Three outcomes beat two.</li>
+          <li><strong>Explainability and audit.</strong> Store inputs, score, model version and reason codes for every decision so a dispute or validator can reconstruct it (F8, G3).</li>
+          <li><strong>Learning.</strong> Labels arrive days or weeks late (<a href="b1-delayed-labels-and-feedback-loops.html">B1.2</a>), and decisions change which labels you get.</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-fraud-arch">Fraud scoring: the architecture</h3>
       <div class="prose">
-        <p>The standard shape has a fast path that runs inside the payment, and a slow path that never blocks it. Cheap, certain decisions are made first; expensive models see only the uncertain remainder. Practitioner write-ups describe the same tiered pattern: deterministic rules, then gradient-boosted trees, then heavier models for the ambiguous tail, with one feature definition serving training and serving (<a href="p1-feature-stores-and-online-offline.html">P1.2</a>).</p>
+        <p>Like triage in an emergency room: cheap, certain decisions first; the expensive specialist sees only the unclear cases. A fast path runs inside the payment; a slow path never blocks it. Tiers: deterministic rules, then gradient-boosted trees, then heavier models for the ambiguous tail, with one feature definition for training and serving (<a href="p1-feature-stores-and-online-offline.html">P1.2</a>).</p>
       </div>
       <figure class="figure" id="fig-arch1">
         <div class="fig-head"><span class="fig-title">Fraud scoring: hot path and cold path</span><span class="fig-tag">Diagram</span></div>
@@ -150,29 +152,27 @@
         </svg>
       </figure>
       <div class="prose">
-        <p>The details that make this a real design rather than a picture:</p>
         <ul>
-          <li><strong>Features are the hard part.</strong> The model needs "how many transactions on this card in the last 10 minutes" and "this customer's usual spend at this merchant category". Those come from a streaming job that keeps counters up to date in a low-latency store. The same definitions must be used to build the training table, or the model sees different inputs live than in training (online/offline skew, <a href="f3-leakage-point-in-time.html">F3.1</a>).</li>
-          <li><strong>Context features.</strong> Device, IP, and behavioural signals (<a href="a9-behavioural-biometrics-and-device-intelligence.html">A9</a>) arrive with the request. Graph features such as "this beneficiary has received money from 40 unrelated accounts today" are expensive, so they are computed asynchronously and looked up, not computed inside the payment.</li>
-          <li><strong>Model choice.</strong> Boosted trees remain the workhorse for tabular fraud data: fast to score (microseconds to a few milliseconds), strong, easy to explain with reason codes. Heavier sequence or graph models run on the ambiguous middle only, or offline to produce features.</li>
-          <li><strong>The decision policy is separate from the model.</strong> The model gives a score. A policy layer turns it into approve, step-up or decline using costs, customer segment, amount, and review capacity. Changing a threshold is a policy change you can do in minutes; retraining takes weeks. Keep them apart (<a href="b1-transaction-and-card-fraud-detection.html">B1.1</a>, <a href="f3-imbalanced-data.html">F3.5</a>).</li>
-          <li><strong>Deployment.</strong> The model is served in-process or as a co-located service so there is no extra network hop, and deployed gradually (<a href="p2-deployment-patterns-batch-real-time.html">P2.2</a>).</li>
+          <li><strong>Features are the hard part.</strong> The model needs "transactions on this card in the last 10 minutes" and "usual spend at this merchant category". A streaming job keeps these counters in a low-latency store. The training table must use the same definitions, or the model sees different inputs live (online/offline skew, <a href="f3-leakage-point-in-time.html">F3.1</a>).</li>
+          <li><strong>Context features.</strong> Device, IP and behavioural signals (<a href="a9-behavioural-biometrics-and-device-intelligence.html">A9</a>) arrive with the request. Graph features ("this beneficiary received money from 40 unrelated accounts today") are expensive, so compute them asynchronously and look them up.</li>
+          <li><strong>Model choice.</strong> Boosted trees are the tabular workhorse: microseconds to a few milliseconds to score, strong, easy to explain with reason codes. Heavier sequence or graph models run on the ambiguous middle only, or offline to make features.</li>
+          <li><strong>Decision policy is separate from the model.</strong> The model gives a score; a policy layer turns it into approve, step-up or decline using costs, segment, amount and review capacity. A threshold change takes minutes; retraining takes weeks (<a href="b1-transaction-and-card-fraud-detection.html">B1.1</a>, <a href="f3-imbalanced-data.html">F3.5</a>).</li>
+          <li><strong>Deployment.</strong> Serve in-process or co-located to avoid a network hop, and roll out gradually (<a href="p2-deployment-patterns-batch-real-time.html">P2.2</a>).</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-fraud-tail">Fraud scoring: the latency budget and the tail</h3>
       <div class="prose">
-        <p>A budget is split across steps, and the median of each step is not the number that matters. Customers experience the slow ones. If one request in a hundred is slow, every hundredth payment is late, and at 3,000 payments a second that is thirty late payments every second.</p>
-        <p>The cruel part is fan-out. If the scorer makes <i>k</i> independent lookups and each has probability <i>q</i> of being slow, the chance at least one is slow is</p>
+        <p>Customers feel the slow requests, not the median. If 1 in 100 is slow, at 3,000 payments a second that is 30 late payments every second. Fan-out makes it worse: like a relay team, the race is as slow as its slowest runner. With <i>k</i> independent lookups, each slow with probability <i>q</i>, the chance at least one is slow is</p>
       </div>
       <div class="formula">
         <math display="block"><mi>P</mi><mo stretchy="false">(</mo><mtext>request is slow</mtext><mo stretchy="false">)</mo><mo>=</mo><mn>1</mn><mo>−</mo><msup><mrow><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>q</mi><mo stretchy="false">)</mo></mrow><mi>k</mi></msup></math>
-        <p class="where">With q = 1% and k = 10 parallel lookups, 1 − 0.99<sup>10</sup> = 9.6%: nearly one request in ten hits a slow call, even though each service looks healthy at p99. This is why the number of calls on the hot path is a design variable, and why people say "p99 does not add up".</p>
+        <p class="where">With q = 1% and k = 10, 1 − 0.99<sup>10</sup> = 9.6%: nearly one request in ten hits a slow call, though each service looks healthy at p99. So the number of hot-path calls is a design variable, and "p99 does not add up".</p>
       </div>
 
       <figure class="figure" id="fig-lat">
         <div class="fig-head"><span class="fig-title">Spend the budget, then watch the tail eat it</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> keep the defaults and see the typical (median) path fit with room to spare. Raise the number of lookups to 10: the typical path is still fine but nearly one request in ten is slow. Then cut lookups back by pre-computing features into one record and see the late share collapse.</p>
+        <p class="try"><b>Try:</b> keep the defaults: the typical path fits with room to spare. Raise lookups to 10: typical is still fine but nearly one request in ten is slow. Cut back to one pre-computed record and the late share collapses.</p>
         <div class="chart-wrap" id="lat-chart"></div>
         <div class="legend">
           <span><i class="sq" style="background:var(--neutral);opacity:.6"></i>Typical time per step</span>
@@ -195,16 +195,16 @@
       </figure>
 
       <div class="prose">
-        <p>Four tools bring the tail down. <strong>Fewer calls</strong>: pre-join features into one record per card, so one lookup replaces ten. <strong>Hard timeouts</strong> on every dependency, with a default for each missing feature. <strong>Co-location</strong>: keep the scorer, the key-value store and the model in the same data centre (see <a href="p4-hybrid-and-on-premises-deployment.html">P4.2</a> for where the hosting decision comes from). <strong>Hedging</strong>: if a lookup has not returned in a short time, send a second request to a replica and take whichever answers first. Each trades cost or complexity for the tail.</p>
+        <p>Four tools bring the tail down. <strong>Fewer calls:</strong> pre-join features into one record per card. <strong>Hard timeouts</strong> on every dependency, with a default for each missing feature. <strong>Co-location:</strong> scorer, key-value store and model in the same data centre (<a href="p4-hybrid-and-on-premises-deployment.html">P4.2</a>). <strong>Hedging:</strong> if a lookup is slow, ask a replica too and take the first answer. Each trades cost or complexity for the tail.</p>
       </div>
 
       <h3 class="sub" id="m-fraud-decision">Fraud scoring: three outcomes, fallbacks and the feedback loop</h3>
       <div class="prose">
-        <p>Two cut-offs on the score create three zones. Below the lower cut: approve. Between: step-up, asking for a one-time code or in-app approval. Above the upper cut: decline. A genuine customer pays a small cost for a step-up; a fraudster usually cannot pass it. This is why step-up is often the best use of the uncertain middle, instead of a hard decline that loses a good customer. The price is friction and drop-off, which you must measure rather than assume zero.</p>
+        <p>Two cut-offs make three zones: below the lower, approve; between, step-up (one-time code or in-app approval); above the upper, decline. Like a bag check: most walk through, a few get a second look. A genuine customer pays a small friction cost; a fraudster usually cannot pass. So step-up beats a hard decline for the uncertain middle. The price is friction and drop-off: measure it, do not assume zero.</p>
       </div>
       <figure class="figure" id="fig-zones">
         <div class="fig-head"><span class="fig-title">Place the two cut-offs</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> start with only a decline line (set step-up equal to decline) and note the cost. Then open up a step-up band: the cost falls because uncertain cases are handled cheaply. Press <b>Find the cheapest cuts</b> and compare. Then raise the cost of a false decline and see the optimum move.</p>
+        <p class="try"><b>Try:</b> start with decline only (set step-up equal to decline) and note the cost. Open a step-up band: cost falls. Press <b>Find the cheapest cuts</b>, then raise the cost of a false decline and watch the optimum move.</p>
         <div class="btns" role="group" aria-label="Shortcuts">
           <button class="btn" type="button" id="b-best">Find the cheapest cuts</button>
           <button class="btn" type="button" id="b-nostep">Decline only (no step-up band)</button>
@@ -232,20 +232,20 @@
       </figure>
 
       <div class="prose">
-        <p><strong>Fallbacks.</strong> Decide in advance what happens when each part fails, and test it. If the feature store times out, score with defaults and a more conservative policy. If the model service is unreachable, fall back to a small rules-only or last-known-good model embedded in the scorer. If everything is down, apply a fail-open or fail-closed rule by amount and merchant risk: below a small limit approve, above it step-up. The choice between failing open (payments flow, fraud risk rises) and failing closed (customers blocked) is a business decision and must be written down, not left as a default in code.</p>
-        <p><strong>Feedback and drift.</strong> Every decision, with its features and model version, is logged. Labels come from disputes, analyst reviews and chargebacks, weeks later, and only for what was alerted on (<a href="b1-delayed-labels-and-feedback-loops.html">B1.2</a>). Hold out a small random slice to review, so the next model does not just learn the old model's blind spots. Watch input drift and score distribution daily (<a href="f7-drift-monitoring-psi-ks-and.html">F7.7</a>); watch recall only after labels mature. New models run in shadow first, scoring live traffic without acting, then on a small share of traffic (champion and challenger), with a rollback that is one configuration change.</p>
-        <p><strong>Adversaries.</strong> Fraudsters probe the system. Do not return the score or the reason to the channel; cap how many attempts a device can make; vary rules; and expect fast change when a scam type spreads on instant-payment rails (<a href="a9-scams-on-instant-payment-rails.html">A9.1</a>). In the UAE and Saudi Arabia instant payment rails settle quickly and cannot be easily recalled, so for those the decision must be right before the money moves.</p>
+        <p><strong>Fallbacks.</strong> Decide and test what happens when each part fails. Feature store times out: score with defaults under a more conservative policy. Model service unreachable: use a small rules-only or last-known-good model embedded in the scorer. Everything down: fail open or closed by amount and merchant risk (below a small limit approve, above it step-up). Failing open keeps payments flowing but raises fraud risk; failing closed blocks customers. That is a business decision: write it down, do not leave it as a code default.</p>
+        <p><strong>Feedback and drift.</strong> Log every decision with its features and model version. Labels come weeks later from disputes, analyst reviews and chargebacks, and only for what was alerted on (<a href="b1-delayed-labels-and-feedback-loops.html">B1.2</a>). Review a small random slice so the next model does not just learn the old one's blind spots. Watch input and score drift daily (<a href="f7-drift-monitoring-psi-ks-and.html">F7.7</a>) and recall once labels mature. Run new models in shadow (scoring live traffic without acting), then on a small share as challenger, with rollback as one configuration change.</p>
+        <p><strong>Adversaries.</strong> Fraudsters probe the system. Never return the score or reason to the channel, cap attempts per device, vary rules, and expect fast change when a scam spreads on instant-payment rails (<a href="a9-scams-on-instant-payment-rails.html">A9.1</a>). UAE and Saudi instant rails settle quickly and are hard to recall, so the decision must be right before the money moves.</p>
       </div>
 
       <h3 class="sub" id="m-rag-req">Enterprise RAG: requirements first (P5.2)</h3>
       <div class="prose">
-        <p>RAG (retrieval-augmented generation) means: look up relevant passages in your own documents, give them to a language model, and have it answer using them. For a bank the first questions are not about vector databases.</p>
+        <p>RAG (retrieval-augmented generation) means: look up relevant passages in your own documents, hand them to a language model, and have it answer from them. Like an open-book exam. Ask first:</p>
         <ul>
-          <li><strong>Who asks, about what?</strong> Branch staff on product rules, compliance officers on regulation, operations on procedures. Each has different documents, different languages (Arabic, English, often both in one document) and a different tolerance for error.</li>
-          <li><strong>What must never happen?</strong> A user receives content from a document they are not entitled to read. Or the assistant states a policy that does not exist and someone acts on it.</li>
-          <li><strong>What is the document estate?</strong> Policy PDFs, scanned circulars, SharePoint pages, wikis, emails, product term sheets. Many are stale, duplicated or contradictory, and some are scans (<a href="m3-parsing-messy-pdfs-and-scans.html">M3.5</a>).</li>
-          <li><strong>Where may data go?</strong> Whether text can leave the bank's network, and in which jurisdiction a hosted model runs, is a regulatory and contractual question. I am not going to guess the rules for a given bank or regulator: ask compliance and the data-protection office, and record the answer in the design.</li>
-          <li><strong>How will you know it works?</strong> Before building, collect 100 to 300 real questions with approved answers and the source passages. Without them you cannot compare designs.</li>
+          <li><strong>Who asks, about what?</strong> Branch staff on products, compliance on regulation, operations on procedures. Each has different documents, languages (Arabic, English, often both in one document) and tolerance for error.</li>
+          <li><strong>What must never happen?</strong> Showing a document the user may not read, or stating a policy that does not exist.</li>
+          <li><strong>What is the document estate?</strong> Policy PDFs, scanned circulars, wikis, emails, term sheets. Many are stale, duplicated, contradictory or scans (<a href="m3-parsing-messy-pdfs-and-scans.html">M3.5</a>).</li>
+          <li><strong>Where may data go?</strong> Whether text can leave the network, and where a hosted model runs, is a regulatory question. Ask compliance and the data-protection office and record the answer.</li>
+          <li><strong>How will you know it works?</strong> Collect 100 to 300 real questions with approved answers and source passages first. Without them you cannot compare designs.</li>
         </ul>
       </div>
 
@@ -276,28 +276,27 @@
         </svg>
       </figure>
       <div class="prose">
-        <p>Each stage has its own lesson; here is what a designer must decide at each.</p>
+        <p>What a designer decides at each stage:</p>
         <ul>
-          <li><strong>Parse and chunk.</strong> Most RAG failures begin before the model: a table flattened into nonsense, an Arabic scan read with the wrong character order, a clause cut away from its heading. Chunk by document structure and attach the document title and section path to every chunk (<a href="m3-chunking-strategies.html">M3.3</a>).</li>
-          <li><strong>Metadata.</strong> Store owner, effective date, version, supersedes, language, classification and the access list with every chunk. A "current policy" filter that excludes superseded versions prevents the classic error of quoting last year's rule.</li>
-          <li><strong>Retrieve.</strong> Use keyword search and vector search together, then a reranker. Keywords catch product codes and clause numbers that embeddings blur; vectors catch paraphrases and cross-language matches (<a href="m3-keyword-search-and-bm25.html">M3.1</a>, <a href="m3-hybrid-search-and-reciprocal-rank.html">M3.2</a>). Rewrite follow-up questions into standalone queries (<a href="m3-query-rewriting-hyde-and-multi.html">M3.4</a>).</li>
-          <li><strong>Generate.</strong> Instruct the model to answer only from the supplied passages, to cite them, and to say when they do not contain the answer. Pass retrieved text as data, never as instructions (<a href="a3-indirect-prompt-injection.html">A3.1</a>).</li>
-          <li><strong>Check and log.</strong> Verify each cited passage supports the claim (<a href="a4-hallucination-detection-and-groundedness.html">A4.2</a>), log the question, the documents retrieved, and the answer for audit, and apply guardrails (<a href="m4-guardrails-and-approval-gates.html">M4.3</a>).</li>
+          <li><strong>Parse and chunk.</strong> Most RAG failures start before the model: a table flattened into nonsense, an Arabic scan read in the wrong order, a clause cut from its heading. Chunk by document structure and attach the title and section path to every chunk (<a href="m3-chunking-strategies.html">M3.3</a>).</li>
+          <li><strong>Metadata.</strong> Store owner, effective date, version, supersedes, language, classification and access list with every chunk. A "current policy" filter prevents quoting last year's rule.</li>
+          <li><strong>Retrieve.</strong> Use keyword and vector search together, then a reranker. Keywords catch product codes and clause numbers; vectors catch paraphrases and cross-language matches (<a href="m3-keyword-search-and-bm25.html">M3.1</a>, <a href="m3-hybrid-search-and-reciprocal-rank.html">M3.2</a>). Rewrite follow-ups into standalone queries (<a href="m3-query-rewriting-hyde-and-multi.html">M3.4</a>).</li>
+          <li><strong>Generate.</strong> Answer only from the supplied passages, cite them, say when they lack the answer. Treat retrieved text as data, never as instructions (<a href="a3-indirect-prompt-injection.html">A3.1</a>).</li>
+          <li><strong>Check and log.</strong> Verify each cited passage supports its claim (<a href="a4-hallucination-detection-and-groundedness.html">A4.2</a>), log question, documents and answer for audit, and add guardrails (<a href="m4-guardrails-and-approval-gates.html">M4.3</a>).</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-rag-acl">Enterprise RAG: permissions belong inside retrieval</h3>
       <div class="prose">
-        <p>The most important design rule is also the most often broken: <strong>access control is enforced at retrieval, not by telling the model to behave</strong>. A prompt that says "do not reveal confidential documents" is a request, not a control. If a restricted passage reaches the model's context, you have already lost: it can be paraphrased, summarised, or extracted by a clever question. Sources on enterprise RAG make the same point: evaluate each document's permissions per query, and have the index apply the filter.</p>
-        <p>There are two ways to do it, and they behave very differently.</p>
+        <p><strong>Enforce access control at retrieval, not by telling the model to behave.</strong> "Do not reveal confidential documents" is a request, not a control, like asking a guest not to look in the drawer instead of locking it. Once a restricted passage is in the model's context, it can be paraphrased or extracted by a clever question. Have the index apply the user's permissions on every query. Two ways:</p>
         <ul>
-          <li><strong>Post-filter:</strong> retrieve the top <i>k</i> by similarity, then drop what the user may not see. Simple, but you may be left with few or no passages, and the ranking was done over documents the user cannot use.</li>
-          <li><strong>Pre-filter:</strong> pass the user's groups into the search so the index only ranks permitted chunks. The user gets <i>k</i> useful passages, at the cost of building the permission metadata well and keeping it fresh.</li>
+          <li><strong>Post-filter:</strong> take the top <i>k</i> by similarity, then drop what the user may not see. Simple, but you may be left with few or no passages, because the ranking ran over documents the user cannot use.</li>
+          <li><strong>Pre-filter:</strong> pass the user's groups into the search so only permitted chunks are ranked. The user gets <i>k</i> useful passages, at the cost of good, fresh permission metadata.</li>
         </ul>
       </div>
       <figure class="figure" id="fig-acl">
         <div class="fig-head"><span class="fig-title">Post-filtering starves the answer</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> set the permitted share to 20%, as it might be for a junior employee asking a question whose best matches are in restricted compliance files. With post-filtering and k = 10, the expected number of usable passages is 2, and in one case out of nine there are none. Raise k, and notice it costs more and only partly helps. Pre-filtering gives all k.</p>
+        <p class="try"><b>Try:</b> set the permitted share to 20%, as for a junior employee whose best matches sit in restricted files. Post-filtering with k = 10 leaves 2 usable passages on average, and none in about one case in nine. Raising k costs more and only partly helps. Pre-filtering gives all k.</p>
         <div class="chart-wrap" id="acl-chart"></div>
         <div class="legend">
           <span><i class="sq" style="background:var(--accent)"></i>Passages the user may see</span>
@@ -317,12 +316,12 @@
         <p class="sim-note">Simulated: each of the top-k matches is independently permitted with the share you choose. Real permissions are clustered by department and document type, so real behaviour is lumpier than these expected values. Exact under the independence assumption.</p>
       </figure>
       <div class="prose">
-        <p>Three further points. <strong>Permission changes must propagate:</strong> if someone leaves a project, their access must vanish from the index within an agreed time, so ACL sync is a first-class job with monitoring. <strong>Derived content inherits restrictions:</strong> summaries, caches and chat history stored from restricted sources are as restricted as the originals. <strong>Agents inherit the user's rights, not the service account's:</strong> an agentic assistant that calls tools must act with the asking user's permissions (<a href="a6-agentic-rag.html">A6.2</a>).</p>
+        <p>Three more rules. <strong>Permission changes must propagate:</strong> when someone leaves a project, their access must vanish from the index within an agreed time, so ACL sync is a monitored job. <strong>Derived content inherits restrictions:</strong> summaries, caches and chat history from restricted sources are equally restricted. <strong>Agents act with the asking user's rights,</strong> not the service account's (<a href="a6-agentic-rag.html">A6.2</a>).</p>
       </div>
 
       <h3 class="sub" id="m-rag-chain">Enterprise RAG: a chain is as strong as its weakest link</h3>
       <div class="prose">
-        <p>A RAG answer is correct only if every step worked: the document was parsed, the right chunk was retrieved, the reranker kept it, the model used it faithfully, and the citation points to it. If the steps behave roughly independently, the overall success rate is the product of the stage rates. Five stages at 90% each give 0.9<sup>5</sup> = 59%. That is why "the model is good" and "the demo worked" are both poor evidence.</p>
+        <p>A RAG answer is right only if every step worked: parsed, retrieved, kept by the reranker, used faithfully, cited correctly. Like a relay race, one dropped baton loses it. If stages are roughly independent, the overall rate is the product of the stage rates: five stages at 90% give 0.9<sup>5</sup> = 59%. So "the model is good" and "the demo worked" are both weak evidence. A five-point gain helps most at the weakest stage.</p>
       </div>
       <figure class="figure" id="fig-chain">
         <div class="fig-head"><span class="fig-title">Where should the next week of effort go?</span><span class="fig-tag">Simulation 4 of 4</span></div>
@@ -343,75 +342,15 @@
         <p class="sim-note">Simulated: stage success rates are the sliders, treated as independent so the total is their product. In reality a stage rate depends on the question type (a policy lookup versus a comparison across ten documents), and failures cluster. Five points are added to one stage at a time, capped at 100%.</p>
       </figure>
       <div class="prose">
-        <p><strong>Evaluation is the other half of the design.</strong> Measure retrieval separately from generation: for each test question, was the right passage in the top k? Then, given the right passage, did the model answer correctly? Without the split you cannot tell where to work. Add refusal tests (questions the documents cannot answer), permission tests (a restricted document must never appear for a user outside the group), Arabic and mixed-language tests, and a stale-document test. Keep the question set under version control and run it on every change (<a href="m5-human-evaluation-and-annotator-agreement.html">M5.2</a>, <a href="p2-prompt-versioning-and-llm-tracing.html">P2.3</a>).</p>
-        <p><strong>Cost and latency.</strong> Retrieval and reranking take well under a second. The language model dominates: input tokens grow with the number of passages, and output streams. Choose the smallest model that passes your test set, route simple questions to it, and cache embeddings of documents, not of answers that depend on who asked (<a href="m2-model-choice-cost-and-latency.html">M2.3</a>).</p>
+        <p><strong>Evaluate each stage separately.</strong> For every test question: was the right passage in the top k? Given it, did the model answer correctly? Without this split you cannot tell where to work. Add refusal tests (questions the documents cannot answer), permission tests (a restricted document must never appear for a user outside the group), Arabic and mixed-language tests, and a stale-document test. Keep the question set under version control and run it on every change (<a href="m5-human-evaluation-and-annotator-agreement.html">M5.2</a>, <a href="p2-prompt-versioning-and-llm-tracing.html">P2.3</a>).</p>
+        <p><strong>Cost and latency.</strong> Retrieval and reranking take well under a second; the language model dominates, because input tokens grow with passages and output streams. Use the smallest model that passes your test set, route simple questions to it, and cache document embeddings, not answers that depend on who asked (<a href="m2-model-choice-cost-and-latency.html">M2.3</a>).</p>
       </div>
-    </section>
-
-    <!-- ============================== 3. CONNECTS ============================== -->
-    <section class="part" id="connects">
-      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
-      <div class="prose"><p>System design is where the earlier lessons are used together. These are the links that matter most.</p></div>
-      <div class="links">
-        <div class="link-card"><span class="code">B1.1 · B1.2 · Card fraud and delayed labels</span><span class="t"><a href="b1-transaction-and-card-fraud-detection.html">What the fraud model has to learn</a></span><p>This lesson is the system around that model. The labelling delay and feedback loop shape the retraining loop in the cold path.</p></div>
-        <div class="link-card"><span class="code">P1.2 · Feature stores</span><span class="t"><a href="p1-feature-stores-and-online-offline.html">One definition, two places</a></span><p>The online store is the heart of the hot path. Skew between online and offline features is the most common silent fault.</p></div>
-        <div class="link-card"><span class="code">P2.2 · Deployment patterns</span><span class="t"><a href="p2-deployment-patterns-batch-real-time.html">Shadow, canary, rollback</a></span><p>How a new fraud model reaches live traffic without a bad day.</p></div>
-        <div class="link-card"><span class="code">F3.5 · F7 · Thresholds and drift</span><span class="t"><a href="f3-imbalanced-data.html">The decision policy</a></span><p>Cut-offs come from costs, not from the training mix. <a href="f7-precision-recall-thresholds-calibration.html">F7.1 to F7.4</a> and <a href="f7-drift-monitoring-psi-ks-and.html">F7.7</a> cover measuring and watching them.</p></div>
-        <div class="link-card"><span class="code">M3 · Retrieval</span><span class="t"><a href="m3-hybrid-search-and-reciprocal-rank.html">Keyword, vector and rerank</a></span><p>The retrieval stage of the RAG assistant, in depth. Chunking and parsing decide its ceiling: <a href="m3-chunking-strategies.html">M3.3</a>, <a href="m3-parsing-messy-pdfs-and-scans.html">M3.5</a>.</p></div>
-        <div class="link-card"><span class="code">M4.3 · A3 · G1 · Guardrails and attacks</span><span class="t"><a href="m4-guardrails-and-approval-gates.html">Controls around the model</a></span><p>Prompt injection through documents (<a href="a3-indirect-prompt-injection.html">A3.1</a>) and threat modelling (<a href="g1-threat-modelling-an-ai-system.html">G1.1</a>) apply to both systems.</p></div>
-        <div class="link-card"><span class="code">B7.2 · Internal copilots</span><span class="t"><a href="b7-internal-copilots-for-staff.html">The same assistant, as a product</a></span><p>Adoption, rollout and use cases for the staff assistant you have just designed.</p></div>
-        <div class="link-card"><span class="code">G3 · Model risk</span><span class="t"><a href="g3-ongoing-monitoring-and-periodic-review.html">Monitoring and review</a></span><p>Both systems are models under governance: inventory, validation, monitoring, and change control.</p></div>
-        <div class="link-card"><span class="code">P5.3 · Batch scoring</span><span class="t"><a href="p5-designing-batch-propensity-and-campaign.html">The contrasting design</a></span><p>When nobody is waiting, everything here simplifies: a nightly job, no tail latency, no hot-path features.</p></div>
-      </div>
-      <div class="prose" style="margin-top:22px">
-        <p>Where each shows up at the bank:</p>
-        <ul>
-          <li><strong>Fraud scoring.</strong> Card authorisations, e-commerce, wallet and instant-payment transfers, ATM withdrawals. Each channel has its own budget, features and cost of friction.</li>
-          <li><strong>RAG assistants.</strong> Policy and procedure Q&amp;A for branches and the contact centre, regulatory change tracking for compliance, credit-memo support (<a href="a10-llms-for-credit-memos-and.html">A10.2</a>), trade-finance document checks (<a href="b7-document-ai-for-trade-finance.html">B7.1</a>).</li>
-          <li><strong>Shared plumbing.</strong> Identity, logging, model registry, secrets, approval workflows. Reusing them is faster and easier to defend to security than a bespoke stack.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- ============================== 4. FIELD ============================== -->
-    <section class="part" id="field">
-      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
-      <div class="prose">
-        <p>Both patterns are mature. The live questions are where language models fit around the fraud scorer without entering its hot path, how far agentic retrieval should go, and how to keep permissions correct when an assistant can act as well as answer.</p>
-      </div>
-      <p class="asof" style="margin-top:14px">Checked on 6 November 2026 with two light searches. Sources were mostly vendor and practitioner blogs, so figures are self-reported and I have said so. I found no bank or regulator architecture documents, and no peer-reviewed evidence on LLM agents in live bank fraud systems.</p>
-      <ol class="timeline" style="margin-top:14px">
-        <li><span class="yr">Now</span><div><div class="t">Tiered fraud pipelines are the common pattern</div><p>Practitioner guides describe rules first, then boosted trees, then a deep model for the ambiguous tail, with cheap models clearing most traffic in under ten milliseconds. The online feature store is repeatedly named as the usual latency bottleneck. These are vendor-reported figures.</p><div class="src"><a href="https://hyperverge.co/blog/real-time-fraud-detection/">HyperVerge guide, 2026</a>; <a href="https://handbook-hld.pages.dev/curriculum/case-studies/fraud-detection/">fraud-detection design write-up</a></div></div></li>
-        <li><span class="yr">Now</span><div><div class="t">Streaming stacks at national scale</div><p>A summary of an NPCI talk reports roughly 240,000 requests per second with a 100 ms p99 target in an active-active design, using Kafka-style streaming and low-latency stores. Treat as a secondary report of a talk.</p><div class="src"><a href="https://www.zenml.io/llmops-database/ai-powered-fraud-detection-at-national-payment-infrastructure-scale">ZenML LLMOps database entry</a></div></div></li>
-        <li><span class="yr">Now</span><div><div class="t">LLM agents beside the scorer, not inside it</div><p>Current designs put language-model agents in the investigation step: given a score, its explanation and account context, an agent gathers evidence and drafts a case summary for an analyst. Headline gains quoted in blogs lack methodology. The fast path stays with conventional models.</p><div class="src"><a href="https://tkxel.com/blog/agentic-fraud-detection-poc-production/">Tkxel blog</a> (vendor; claims unverified)</div></div></li>
-        <li><span class="yr">Now</span><div><div class="t">Hybrid retrieval and reranking as the RAG baseline</div><p>Dense vectors plus BM25 with a cross-encoder reranker is described as the production baseline, with agentic loops reserved for hard queries and routing by query complexity. Agentic RAG is reported to use roughly 5 to 20 times the tokens of single-shot RAG.</p><div class="src"><a href="https://ventionteams.com/blog/enterprise-rag-implementation-guide">Vention</a>; <a href="https://www.sphereinc.com/guides/enterprise-rag-guide">Sphere</a> (vendor blogs)</div></div></li>
-        <li><span class="yr">Now</span><div><div class="t">Permission-aware retrieval is treated as non-negotiable</div><p>Guides argue access checks must be applied at retrieval via filtered indexes, not by prompt instruction; one vendor reports missing or inconsistent permission metadata at ingest in 52% of its engagements. That statistic is one firm's self-report.</p><div class="src"><a href="https://www.tarento.com/articles/permission-aware-rag-enterprise-ai-security/">Tarento</a>; <a href="https://www.sphereinc.com/guides/enterprise-rag-guide">Sphere</a></div></div></li>
-        <li><span class="yr">2024</span><div><div class="t">Contextual retrieval</div><p>Prepending a short generated context to each chunk before indexing reduced failed retrievals substantially in Anthropic's tests, especially combined with BM25 and reranking. Cited from memory of the published post; check the numbers before quoting them.</p><div class="src">Anthropic, "Introducing Contextual Retrieval", Sept 2024</div></div></li>
-      </ol>
-      <div class="prose" style="margin-top:22px"><p>How established each practice is, as far as I could tell:</p></div>
-      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research or vendor claims · <span class="status inf">Reported</span> practised, rarely published</p>
-      <div class="table-wrap" style="margin-top:10px">
-        <table class="data">
-          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
-          <tbody>
-            <tr><td><b>Boosted trees with online features, rules and a policy layer</b></td><td>The core of card-fraud scoring at most issuers.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Shadow runs and champion-challenger for new fraud models</b></td><td>New model scores live traffic silently before it acts.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Graph features computed asynchronously</b></td><td>Ring and mule detection feeding the online store.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>LLM agents for case investigation</b></td><td>Evidence gathering and case summaries for analysts, human decides.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>LLM in the real-time decision</b></td><td>Latency and explainability make this rare for authorisation.</td><td><span class="status prop">Proposed</span></td></tr>
-            <tr><td><b>Hybrid retrieval, reranker, citations, permission filters</b></td><td>The usual internal knowledge-assistant design.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Agentic RAG over many sources</b></td><td>Multi-step retrieval for complex questions, with cost controls.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>Bank-specific RAG audit evidence</b></td><td>Public detail on how banks log and validate assistants is thin.</td><td><span class="status inf">Reported</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Keep the model that decides a payment small, fast and explainable, and put the large language models where a human is waiting and can check; in both, spend the design effort on data paths, permissions, failure behaviour and evaluation.</div>
     </section>
 
     <!-- ============================== 5. FAILS ============================== -->
     <section class="part" id="fails">
-      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>These are the failures that sink designs, with the quickest check for each.</p></div>
+      <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
+      <div class="prose"><p>The failures that sink designs, each with a quick check.</p></div>
       <ul class="fails" style="margin-top:18px">
         <li><div class="t">Quoting the average latency</div><p>"The model scores in 5 ms." The p99 of the whole path, with all its lookups, is what customers feel.</p><div class="spot"><b>Spot it</b>Ask for p99 and p99.9 of the end-to-end decision and how many calls are on the hot path.</div></li>
         <li><div class="t">No defined behaviour when a dependency fails</div><p>The feature store slows down and payments queue up behind it.</p><div class="spot"><b>Spot it</b>Ask what happens at each timeout, who approved fail-open versus fail-closed, and when it was last tested.</div></li>
@@ -426,67 +365,26 @@
       </ul>
     </section>
 
-    <!-- ============================== 6. ROOM ============================== -->
-    <section class="part" id="room">
-      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
-      <div class="room">
-        <div class="room-card">
-          <span class="k">Opening a fraud design answer · 45 seconds</span>
-          <blockquote>“Before the boxes, I'd fix four things: the decision is approve, step-up or decline within a latency budget at p99; a missed fraud costs about this much and a false decline about that; if any dependency fails we fall back to a rules-and-small-model path we have tested; and labels arrive weeks late, so we keep a random review slice. Then the shape: rules first, online features from a streaming job, a boosted-tree model, and a separate policy layer so we can change thresholds in minutes. New models run in shadow before they act.”</blockquote>
-        </div>
-        <div class="room-card">
-          <span class="k">Opening a RAG design answer · 45 seconds</span>
-          <blockquote>“I'd start with who asks what, what must never happen, and a set of a few hundred real questions with approved answers. The design is ingestion with good parsing, structure-aware chunks and permission metadata; hybrid retrieval with the user's access applied inside the index; a reranker; a model told to answer only from the passages and cite them; then a grounding check and full logging. I'd measure retrieval and generation separately so we know where to improve, and I would not rely on the prompt for access control.”</blockquote>
-        </div>
-      </div>
-      <div class="qa">
-        <details class="reveal"><summary>“Why not put a large language model in the fraud decision?”</summary><div class="ans"><p>Latency, cost per call, and explainability. An authorisation has a tight budget and must be reproducible for disputes; a boosted-tree model scores in milliseconds with stable reason codes. Where a language model helps is next to it: summarising a case for an analyst, drafting a customer message, or helping investigators query evidence, with a human taking the decision.</p></div></details>
-        <details class="reveal"><summary>“The feature store is slow once a day. What do you do?”</summary><div class="ans"><p>Set a hard timeout on the lookup, score with defaults for the missing features under a stricter policy, and alert. Then find why: fan-out, a hot key, compaction, or a noisy neighbour. Reduce the number of lookups by pre-joining features, and consider a hedged request to a replica. The goal is that a slow dependency changes the quality of a few decisions, not the latency of all of them.</p></div></details>
-        <details class="reveal"><summary>“How do we know the new fraud model is better before we switch?”</summary><div class="ans"><p>Run it in shadow on live traffic, compare score distributions and alert volume with the current one, then review a sample of disagreements. Ship to a small share with the old model as control, and judge on money saved and customer friction, using labels once they have matured. Offline metrics are a gate, not proof.</p></div></details>
-        <details class="reveal"><summary>“How do you stop the assistant showing someone a document they shouldn't see?”</summary><div class="ans"><p>Enforce permissions in the retrieval layer, using the asking user's identity, so restricted chunks never enter the model's context. Keep ACLs synchronised with the source systems, give summaries and caches the same restrictions, and test it with users outside each group as part of the release checks. A prompt instruction is a backup, never the control.</p></div></details>
-        <details class="reveal"><summary>“Our RAG answers are sometimes wrong. Where do you start?”</summary><div class="ans"><p>Split the failures. For each wrong answer, was the right passage retrieved? If not, work on parsing, chunking, metadata and retrieval. If it was and the answer is still wrong, work on the prompt, the model and the grounding check. In a five-stage chain the weakest stage dominates, so measure each rather than guessing.</p></div></details>
-        <details class="reveal"><summary>“Can we host the model and documents outside the country?”</summary><div class="ans"><p>I don't know the answer for our case, and it isn't mine to guess. It depends on the regulator's expectations, our contracts and the classification of the documents. I'd bring it to compliance and data protection with the specific data types and vendors, and design so the model location can change without redoing the pipeline.</p></div></details>
-      </div>
-    </section>
-
     <!-- ============================== 7. CHECK ============================== -->
     <section class="part" id="check">
-      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
-      <div class="prose"><p>Try each one before opening the answer.</p></div>
+      <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
+      <div class="prose"><p>Answer each before opening it.</p></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A scorer makes 8 independent feature lookups; each is slow 0.5% of the time. What share of requests hit a slow lookup? What if you pre-join them into one record?</summary><div class="ans"><p>1 − 0.995<sup>8</sup> = 1 − 0.9607 = about 3.9%. With one lookup, 0.5%. Fewer calls on the hot path shrink the tail almost in proportion.</p></div></details>
-        <details class="reveal"><summary>2. Why is the decision policy kept separate from the model?</summary><div class="ans"><p>Thresholds depend on costs, capacity and the current attack, and need to change in minutes. The model needs weeks to retrain and validate. Separation also lets you add a step-up band or a segment rule without touching the model.</p></div></details>
-        <details class="reveal"><summary>3. What is the point of a step-up outcome, and what does it cost?</summary><div class="ans"><p>It handles the uncertain middle cheaply: a genuine customer confirms in a few seconds and a fraudster usually cannot. It avoids both the loss of approving and the lost goodwill of declining. The cost is friction, drop-off and the fraction of fraud that passes the check, which you must measure.</p></div></details>
-        <details class="reveal"><summary>4. Name three ways the fraud system is kept working when a dependency fails.</summary><div class="ans"><p>Hard timeouts with defaults for missing features; an embedded fallback model or rules set; a written fail-open or fail-closed policy by amount and risk. Also hedged requests, replicas and tested failover.</p></div></details>
+        <details class="reveal"><summary>1. A scorer makes 8 independent feature lookups; each is slow 0.5% of the time. What share of requests hit a slow lookup? What if you pre-join them into one record?</summary><div class="ans"><p>1 − 0.995<sup>8</sup> = about 3.9%. With one lookup, 0.5%. Fewer hot-path calls shrink the tail almost in proportion.</p></div></details>
+        <details class="reveal"><summary>2. Why is the decision policy kept separate from the model?</summary><div class="ans"><p>Thresholds follow costs, capacity and the current attack, so they must change in minutes. The model takes weeks to retrain and validate. Separation also lets you add a step-up band or segment rule without touching the model.</p></div></details>
+        <details class="reveal"><summary>3. What is the point of a step-up outcome, and what does it cost?</summary><div class="ans"><p>It handles the uncertain middle cheaply: a genuine customer confirms in seconds, a fraudster usually cannot. It avoids both the loss from approving and the lost goodwill from declining. The cost is friction, drop-off and the fraud that passes the check; measure all three.</p></div></details>
+        <details class="reveal"><summary>4. Name three ways the fraud system keeps working when a dependency fails.</summary><div class="ans"><p>Hard timeouts with defaults for missing features; an embedded fallback model or rules set; a written fail-open or fail-closed policy by amount and risk. Also hedged requests, replicas and tested failover.</p></div></details>
         <details class="reveal"><summary>5. With 25% of top matches permitted and k = 8, how many usable passages does post-filtering leave, and how often are there none?</summary><div class="ans"><p>Expected 8 × 0.25 = 2. The chance of none is 0.75<sup>8</sup> = about 10%. Pre-filtering would return all 8 if enough permitted chunks exist.</p></div></details>
         <details class="reveal"><summary>6. Five RAG stages succeed 95%, 90%, 90%, 95% and 98% of the time. What is the overall rate, and where would 5 extra points help most?</summary><div class="ans"><p>0.95 × 0.90 × 0.90 × 0.95 × 0.98 = about 71.7%. Adding 5 points to a 90% stage multiplies the total by 0.95/0.90 = 1.056, to about 75.7%; to a 95% stage by 1.0526, about 75.5%. The gain is largest at the weakest stage.</p></div></details>
-        <details class="reveal"><summary>7. Why is "tell the model not to reveal restricted documents" not an access control?</summary><div class="ans"><p>Because the text is already in the model's context, and instructions can be bypassed by rephrasing, injection or extraction. Control means the restricted text never reaches the model, which requires filtering at retrieval using the user's identity.</p></div></details>
-        <details class="reveal"><summary>8. What do you collect before building a RAG assistant, and why?</summary><div class="ans"><p>A few hundred real questions with approved answers and source passages, including some the documents cannot answer. It lets you compare designs, separate retrieval from generation errors, and detect regressions when documents, prompts or models change.</p></div></details>
+        <details class="reveal"><summary>7. Why is "tell the model not to reveal restricted documents" not an access control?</summary><div class="ans"><p>The text is already in the model's context, and instructions can be bypassed by rephrasing, injection or extraction. Real control keeps restricted text out of the context, by filtering at retrieval with the user's identity.</p></div></details>
+        <details class="reveal"><summary>8. What do you collect before building a RAG assistant, and why?</summary><div class="ans"><p>A few hundred real questions with approved answers and source passages, including some the documents cannot answer. They let you compare designs, separate retrieval from generation errors, and catch regressions when documents, prompts or models change.</p></div></details>
       </div>
     </section>
 
-    <!-- ============================== SOURCES ============================== -->
-    <section class="part" id="sources">
-      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
-      <ol class="sources">
-        <li>C. Huyen. <a href="https://www.oreilly.com/library/view/designing-machine-learning/9781098107956/">Designing Machine Learning Systems</a>. O'Reilly, 2022. Online features, deployment, monitoring and feedback loops.</li>
-        <li>J. Dean, L. Barroso. <a href="https://research.google/pubs/the-tail-at-scale/">The Tail at Scale</a>. Communications of the ACM, 2013. Why fan-out turns rare slowness into common slowness, and hedged requests.</li>
-        <li>A. Dal Pozzolo, G. Boracchi, O. Caelen, C. Alippi, G. Bontempi. <a href="https://boracchi.faculty.polimi.it/docs/2017_FraudsTNNLS.pdf">Credit Card Fraud Detection: A Realistic Modeling and a Novel Learning Strategy</a>. IEEE TNNLS, 2018.</li>
-        <li>D. Sculley et al. <a href="https://papers.nips.cc/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html">Hidden Technical Debt in Machine Learning Systems</a>. NeurIPS, 2015.</li>
-        <li>P. Lewis et al. <a href="https://arxiv.org/abs/2005.11401">Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks</a>. NeurIPS, 2020.</li>
-        <li>Anthropic. <a href="https://www.anthropic.com/news/contextual-retrieval">Introducing Contextual Retrieval</a>. 2024.</li>
-        <li>OWASP. <a href="https://genai.owasp.org/llm-top-10/">Top 10 for LLM Applications</a>. Prompt injection, sensitive information disclosure and excessive agency.</li>
-        <li><a href="https://hyperverge.co/blog/real-time-fraud-detection/">Real-Time Fraud Detection: AI-Ready Guide for 2026</a>. HyperVerge (vendor).</li>
-        <li><a href="https://handbook-hld.pages.dev/curriculum/case-studies/fraud-detection/">Design a Fraud Detection System</a>. Practitioner design write-up.</li>
-        <li><a href="https://www.zenml.io/llmops-database/ai-powered-fraud-detection-at-national-payment-infrastructure-scale">AI-Powered Fraud Detection at National Payment Infrastructure Scale</a>. ZenML LLMOps database (secondary summary).</li>
-        <li><a href="https://www.sphereinc.com/guides/enterprise-rag-guide">What Is Enterprise RAG?</a> Sphere (vendor).</li>
-        <li><a href="https://www.tarento.com/articles/permission-aware-rag-enterprise-ai-security/">Permission-aware RAG: the trust layer beneath enterprise generative AI</a>. Tarento (vendor).</li>
-      </ol>
       <div class="lesson-foot">
         <a href="../index.html">← Back to the curriculum</a>
         <span>Next in P5: designing batch propensity and campaign systems (P5.3)</span>
       </div>
-    </section>
   </main>
 </div>
 

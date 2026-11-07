@@ -76,9 +76,12 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>Every chat model you have used works the same way. It reads the text so far, produces one probability table over its vocabulary, picks one token, appends it, and repeats. Fifty tokens of answer means fifty passes through the network, strictly in order. The model cannot go back and rewrite the third word once it has written the tenth, and it cannot write the end before the beginning.</p>
-        <p>That design is called <strong>autoregressive</strong>, and it has two costs. <strong>Speed:</strong> the passes are sequential, so a long answer takes a long time even on a fast chip, and a GPU spends much of that time waiting on memory rather than computing. <strong>Rigidity:</strong> the model commits as it goes. Two further oddities come from the input side: text is first chopped into <strong>tokens</strong> by a fixed tokenizer (M1.1), which treats Arabic, numbers and typos unevenly.</p>
-        <p>This lesson covers three ways of relaxing those rules.</p>
+        <p>Think of a typist who must type each word once, in order, and can never go back. That is how every chat model works. It reads the text so far, produces one probability table over its vocabulary, picks one <strong>token</strong> (a word piece), appends it and repeats. A 50-token answer needs 50 passes through the network. This is called <strong>autoregressive</strong> generation, and it has two costs.</p>
+        <ul>
+          <li><strong>Speed.</strong> Passes are sequential, and the GPU spends much of each one waiting on memory, not computing.</li>
+          <li><strong>Rigidity.</strong> The model commits as it goes. It cannot fix word 3 after writing word 10. Its fixed tokenizer (M1.1) also treats Arabic, numbers and typos unevenly.</li>
+        </ul>
+        <p>Three ideas relax those rules:</p>
       </div>
       <div class="table-wrap" style="margin-top:16px">
         <table class="data">
@@ -93,7 +96,7 @@
 
       <figure class="figure" id="fig-race">
         <div class="fig-head"><span class="fig-title">One sentence, two ways of writing it</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> press <b>Play</b>. The top lane writes one token per pass. The bottom lane starts fully masked and reveals its most confident tokens first, several per pass. Then cut the number of refinement passes to 3 and see how much faster it finishes, and think about what it gave up (Simulation 2).</p>
+        <p class="try"><b>Try:</b> press <b>Play</b>. The top lane writes one token per pass. The bottom lane starts fully masked and reveals its most confident tokens first, several per pass. Then cut the refinement passes to 3: faster, but what did it give up (Simulation 2)?</p>
         <div class="btns" role="group" aria-label="Playback">
           <button class="btn" type="button" id="b-play">Play</button>
           <button class="btn" type="button" id="b-reset">Reset</button>
@@ -113,7 +116,7 @@
         <p class="sim-note">Simulated: a 19-token sentence. The "confidence" of each token is a hand-assigned number (punctuation and function words high, numbers and rare words low), standing in for what a real model's output probabilities would give. Real systems pick positions from the model's own probabilities. Pass counts are exact; wall-clock time is not modelled.</p>
       </figure>
 
-      <div class="callout key"><span class="k">Hold onto this</span>Speed in an LLM is mostly counted in <em>sequential passes</em>, not in arithmetic. Anything that lets one pass settle several tokens at once, or lets a pass be checked rather than recomputed, cuts latency. The three ideas here are three different routes to the same goal, and each hits the same wall: tokens are not independent, so deciding them together risks incoherence.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Speed is counted in <em>sequential passes</em>, not arithmetic. Anything that settles several tokens per pass, or checks a draft instead of recomputing it, cuts latency. All three ideas hit the same wall: tokens are not independent, so deciding them together risks incoherence.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -122,33 +125,31 @@
 
       <h3 class="sub" id="m-diffusion">Diffusion language models: filling in a masked draft</h3>
       <div class="prose">
-        <p>Image diffusion models start from pure noise and remove it step by step. Text is made of discrete tokens, and you cannot add a little Gaussian noise to the word "transfer". The workable text version replaces noise with <strong>masking</strong>. The forward (noising) process takes a real sentence and hides each token independently with probability <i>t</i>, where <i>t</i> runs from 0 (nothing hidden) to 1 (everything is a <code>[MASK]</code>). The model is trained to undo it: given a partly masked sentence, predict the hidden tokens.</p>
-        <p>This is the family called <strong>masked diffusion</strong> (discrete diffusion). LLaDA, the first large open model of this kind, trains it like this: sample <i>t</i> at random for each training sentence, mask that fraction of tokens, and score the model only on predicting the masked ones. The loss is a weighted cross-entropy, and it is a valid bound on the likelihood of the text, which is why people consider it a principled language model and not a trick (Nie et al., 2025; Sahoo et al., 2024).</p>
+        <p>Think of a crossword: you fill the clues you are sure of first, and those answers help with the rest. Masked diffusion works like that. Image diffusion removes Gaussian noise, but you cannot add a little noise to the word "transfer". So text uses <strong>masking</strong> instead. The forward process hides each token independently with probability <i>t</i>, from 0 (nothing hidden) to 1 (all <code>[MASK]</code>). The model learns to undo it: given a partly masked sentence, predict the hidden tokens.</p>
+        <p>LLaDA, the first large open model of this kind, samples <i>t</i> at random per training sentence and scores the model only on the masked tokens. The weighted cross-entropy is a valid bound on the text likelihood, so this is a principled language model, not a trick (Nie et al., 2025; Sahoo et al., 2024).</p>
       </div>
       <div class="formula">
         <math display="block"><mi>ℒ</mi><mo>=</mo><mo>−</mo><msub><mi mathvariant="double-struck">E</mi><mrow><mi>t</mi><mo>,</mo><mi>x</mi><mo>,</mo><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><mo stretchy="false">[</mo><mfrac><mn>1</mn><mi>t</mi></mfrac><munder><mo>∑</mo><mrow><mi>i</mi><mo>:</mo><msub><mi>x</mi><mi>t</mi></msub><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mo>=</mo><mtext>MASK</mtext></mrow></munder><mi>log</mi><msub><mi>p</mi><mi>θ</mi></msub><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">[</mo><mi>i</mi><mo stretchy="false">]</mo><mo>∣</mo><msub><mi>x</mi><mi>t</mi></msub><mo stretchy="false">)</mo><mo stretchy="false">]</mo></math>
-        <p class="where">Take a real text <i>x</i>, hide a random share <i>t</i> of its tokens to get <i>x<sub>t</sub></i>, and ask the model to recover the hidden ones. The 1/<i>t</i> weight keeps lightly masked and heavily masked examples balanced. Compare with the ordinary language-model loss of F1.6: there the model sees only the left context; here it sees <em>all</em> unmasked tokens on both sides.</p>
+        <p class="where">Hide a share <i>t</i> of the tokens of text <i>x</i> to get <i>x<sub>t</sub></i>, then recover them. The 1/<i>t</i> weight balances light and heavy masking. Unlike the ordinary loss of F1.6, the model sees unmasked tokens on <em>both</em> sides.</p>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p><strong>Generation</strong> runs the process backwards. Begin with a block of, say, 256 <code>[MASK]</code> tokens after your prompt. At each of <i>T</i> steps, the model predicts a token for every masked position at once. You keep only some of those predictions, usually the most confident, leave the rest masked, and go again. Some systems also <em>re-mask</em> tokens they had committed to if later steps look inconsistent. After <i>T</i> steps, nothing is masked. If <i>T</i> is much smaller than the length, you needed far fewer sequential passes than an autoregressive model.</p>
-        <p>Three consequences follow from the design, and they explain almost every claim you will read.</p>
+        <p><strong>Generation</strong> runs backwards. Start with, say, 256 <code>[MASK]</code> tokens after the prompt. In each of <i>T</i> steps the model predicts every masked position at once; you keep the most confident predictions and leave the rest masked. Some systems also <em>re-mask</em> committed tokens that later look inconsistent. If <i>T</i> is far below the length, you need far fewer sequential passes. Three consequences:</p>
         <ul>
-          <li><strong>Bidirectional context.</strong> A masked position sees tokens to its left and right. This is why LLaDA handles tasks where order is awkward: the authors reported it beat GPT-4o on a reversal task (completing a poem line given the next line), the so-called reversal curse that trips up left-to-right models (Nie et al., 2025).</li>
-          <li><strong>No simple KV cache.</strong> An autoregressive model reuses the stored keys and values of past tokens (M1.3). In a diffusion model every pass can change the whole sequence, so the cache is not straightforward. Each pass costs more than one autoregressive step. Research on approximate caching and on <em>block diffusion</em>, which writes blocks left to right but fills each block in parallel, narrows the gap (Arriola et al., 2025).</li>
-          <li><strong>Quality-speed dial.</strong> More steps give better text, fewer steps give faster text. That is a knob autoregressive models do not have. It is also how you should read any speed headline: at what number of steps, and what quality?</li>
+          <li><strong>Bidirectional context.</strong> Each position sees both sides. The LLaDA authors reported it beat GPT-4o on a reversal task (completing a poem line from the next line), the "reversal curse" of left-to-right models (Nie et al., 2025).</li>
+          <li><strong>No simple KV cache.</strong> Autoregressive models reuse stored keys and values of past tokens (M1.3). Here every pass can change the whole sequence, so each pass costs more. <em>Block diffusion</em> (blocks written left to right, each filled in parallel) and approximate caching narrow the gap (Arriola et al., 2025).</li>
+          <li><strong>A quality-speed dial.</strong> More steps give better text, fewer give faster text. Read any speed headline as: at how many steps, and what quality?</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-parallel">The wall: tokens decided together are not independent</h3>
       <div class="prose">
-        <p>Here is the central difficulty. When the model fills two masked positions in the same pass, it computes a probability for each position separately, then samples them separately. It does not condition the second on what the first turned out to be. If the two tokens depend on each other, they can clash.</p>
-        <p>Take a question where the answer is either "New York" or "Los Angeles", equally likely. Position 1 is "New" half the time and "Los" half the time. Position 2 is "York" half the time and "Angeles" half the time. Sample both independently and you get "New Angeles" or "Los York" half the time. An autoregressive model never has this problem, because the second word is chosen <em>after</em> the first is fixed.</p>
-        <p>In general, if <i>m</i> equally likely phrasings exist and you fix <i>k</i> positions in one pass, independent sampling produces a coherent phrase with probability <i>m</i><sup>1−<i>k</i></sup>. Only one of the <i>m</i><sup><i>k</i></sup> combinations per phrasing is consistent: <i>m</i> good ones out of <i>m</i><sup><i>k</i></sup>.</p>
+        <p>Two people each name half a city without hearing each other: one says "New" or "Los", the other "York" or "Angeles". Independent choices give "New Angeles" half the time. A diffusion model fixing two positions in one pass does exactly this: it samples each from its own probability table without conditioning on the other. An autoregressive model never clashes, because the second word is chosen <em>after</em> the first.</p>
+        <p>In general, with <i>m</i> equally likely phrasings and <i>k</i> positions fixed in one pass, only <i>m</i> of the <i>m</i><sup><i>k</i></sup> combinations are consistent, so the chance of a coherent phrase is <i>m</i><sup>1−<i>k</i></sup>. With 3 phrasings and 4 tokens that is 1/27.</p>
       </div>
 
       <figure class="figure" id="fig-par">
         <div class="fig-head"><span class="fig-title">How many tokens can you safely fix per pass?</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> start at 4 tokens per pass with 3 alternatives and 30% of chunks being tightly coupled (names, amounts, code syntax). The speed-up looks great, but the chance the whole 64-token answer has no clash falls fast. Set coupling to 0% and the problem vanishes: that is why diffusion works well on loose text and struggles on rigid text.</p>
+        <p class="try"><b>Try:</b> start at 4 tokens per pass with 3 alternatives and 30% of chunks being tightly coupled (names, amounts, code syntax). The speed-up looks great, but the chance of a clash-free 64-token answer falls fast. Set coupling to 0% and the problem vanishes: diffusion suits loose text, not rigid text.</p>
         <div class="chart-wrap" id="par-chart"></div>
         <div class="legend">
           <span><i style="background:var(--bad)"></i>Chance the whole answer has no clash, by tokens per pass</span>
@@ -168,29 +169,28 @@
       </figure>
 
       <div class="prose">
-        <p>Practical decoders therefore choose how many tokens to fix adaptively: commit a position when the model is very sure of it (a confidence threshold), keep uncertain ones masked for later rounds, and sometimes re-mask. Easy stretches, like boilerplate text, go in huge chunks. A bank reference number or an amount, where one wrong digit is a different fact, gets settled slowly. This is also why diffusion models look best on code and templated text, and why reported speeds depend so much on the task.</p>
+        <p>So practical decoders fix tokens adaptively: commit a position only when the model is very sure, keep the rest masked, sometimes re-mask. Boilerplate goes in big chunks. A reference number or amount, where one wrong digit is a different fact, is settled slowly. That is why diffusion looks best on code and templated text, and why speeds vary so much by task.</p>
       </div>
 
       <h3 class="sub" id="m-landscape">Who is building them</h3>
       <div class="prose">
-        <p>Three names recur, and they are different kinds of thing.</p>
         <ul>
-          <li><strong>LLaDA</strong> (Renmin University and Ant Group researchers): an 8-billion-parameter masked diffusion model trained from scratch and released with open weights. Its significance was proof of scale: it was competitive with Llama 3 8B on many benchmarks in the authors' tests, so diffusion was not only a small-model curiosity. Later versions scaled up, with a 100-billion-parameter variant built by converting an existing autoregressive model, a pattern now common.</li>
-          <li><strong>Mercury</strong> (Inception Labs): the first commercial diffusion LLMs, aimed at coding and low-latency use, served through an API, with throughput of the order of a thousand tokens per second reported by the company on modern GPUs.</li>
-          <li><strong>Gemini Diffusion</strong> (Google DeepMind): an experimental model shown in May 2025, reported at roughly 1,500 tokens per second in Google's demonstrations, with quality about that of a small Gemini Flash-class model. Not a general product at the time of writing; treat any figure as vendor-reported.</li>
+          <li><strong>LLaDA</strong> (Renmin University and Ant Group): 8B parameters, trained from scratch, open weights. It proved scale: competitive with Llama 3 8B on many benchmarks in the authors' tests. Later versions include a 100B variant converted from an autoregressive model, now a common pattern.</li>
+          <li><strong>Mercury</strong> (Inception Labs): the first commercial diffusion LLMs, aimed at coding and low latency, via API. The company reports around a thousand tokens per second.</li>
+          <li><strong>Gemini Diffusion</strong> (Google DeepMind): experimental, shown May 2025, about 1,500 tokens per second in demos at roughly a small Flash-class quality. Not a general product at the time of writing.</li>
         </ul>
-        <p>Figures like these are best read as "several times faster than an autoregressive model of similar quality on easy-to-parallelise tasks", not as a universal result.</p>
+        <p>All figures are vendor-reported. Read them as "several times faster than a similar-quality autoregressive model on easy-to-parallelise tasks", not a universal result.</p>
       </div>
 
       <h3 class="sub" id="m-bytes">Tokenizer-free models: reading bytes</h3>
       <div class="prose">
-        <p>A tokenizer (M1.1) is a lookup table learned once, before training, that breaks text into frequent chunks. It is cheap and compresses well, but it is a separate, frozen component with side effects you have seen: a rare word, a typo, an IBAN or an Arabic phrase can shatter into many small pieces; numbers are split inconsistently, which hurts arithmetic; and a model trained mostly on English tokens spends more tokens, and so more cost and context, on other scripts.</p>
-        <p>The tokenizer-free idea is to feed the model <strong>bytes</strong>: the 256 possible values of UTF-8 encoding. There is no vocabulary to be unfair to anyone and no out-of-vocabulary word. The catch is length. In UTF-8, English letters take 1 byte but Arabic letters take 2, so a byte sequence is much longer than a token sequence, and attention cost grows with the square of length (F5.3). Reading everything byte by byte with a full transformer is expensive.</p>
+        <p>A tokenizer (M1.1) is a frozen lookup table that cuts text into frequent chunks, like a dictionary of stock phrases. Anything outside it shatters: rare words, typos, IBANs and Arabic phrases split into many pieces, numbers split inconsistently, and non-English scripts cost more tokens, so more money and context.</p>
+        <p>The tokenizer-free fix is to feed <strong>bytes</strong>, the 256 values of UTF-8. No vocabulary means no out-of-vocabulary word and no built-in language bias. The catch is length: English letters take 1 byte, Arabic letters 2, and attention cost grows with the square of length (F5.3). A full transformer over raw bytes is expensive.</p>
       </div>
 
       <figure class="figure" id="fig-bytes">
         <div class="fig-head"><span class="fig-title">What a byte model has to read</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> pick the English line, then the Arabic line, then the account number. Notice how the byte count rises against the character count for Arabic (each letter is two bytes, shaded). Then raise the patch size: grouping bytes into patches shrinks what the big central model has to attend over, by roughly the square of the patch size. You can also type your own text.</p>
+        <p class="try"><b>Try:</b> pick the English line, then the Arabic line, then the account number. Watch bytes rise against characters for Arabic (two bytes per letter, shaded). Then raise the patch size: patches shrink the central model's attention work by roughly the square of the patch size. You can type your own text.</p>
         <div class="btns" role="group" aria-label="Examples">
           <button class="btn" type="button" data-txt="Please block my card">English</button>
           <button class="btn" type="button" data-txt="من فضلك أوقف بطاقتي">Arabic</button>
@@ -216,24 +216,23 @@
       </figure>
 
       <div class="prose">
-        <p>The modern answer is <strong>hierarchical, patch-based</strong> models. A small, cheap network reads the raw bytes and groups them into patches; a large network works on the patches; a small network turns patches back into bytes. The Byte Latent Transformer from Meta (Pagnoni et al., 2024) makes the patch boundary <em>dynamic</em>, using the entropy of a small byte model (F1.7): where the next byte is easy to predict, such as the rest of a common word, it makes a long patch; where it is uncertain, such as the start of a new word or a number, it makes a short one. Compute is then spent where the text is surprising. The authors reported matching tokenizer-based Llama 3 models at up to 8 billion parameters while using up to about half the inference compute, and showed better robustness to noisy input. Other lines of work include MegaByte, MambaByte (state-space models handle long byte sequences cheaply) and H-Net (Hwang et al., 2025), which learns the chunking end to end.</p>
-        <p>For a Gulf bank, the appeal is concrete: one model over Arabic, English and mixed text without a tokenizer that favours English, and robustness to the noise real data contains (OCR errors, transliterated names, typos in free-text fields). That is the pitch, not the present reality. See Part 4.</p>
+        <p>The modern answer is <strong>hierarchical, patch-based</strong> models: a small network groups bytes into patches, a large network works on patches, a small network turns them back into bytes. Meta's Byte Latent Transformer (Pagnoni et al., 2024) sizes patches <em>dynamically</em> by the entropy (F1.7) of a small byte model. Easy stretches, like the rest of a common word, get long patches; surprising ones, like a new word or number, get short ones. Compute goes where the text is surprising. The authors reported matching tokenised Llama 3 models up to 8B parameters with up to about half the inference compute, and better robustness to noisy input. Related work: MegaByte, MambaByte and H-Net (Hwang et al., 2025), which learns chunking end to end.</p>
+        <p>For a Gulf bank the pitch is one model over Arabic, English and mixed text, robust to OCR errors, transliterated names and typos. That is the pitch, not today's reality: no bank-grade supported byte-level product has been confirmed.</p>
       </div>
 
       <h3 class="sub" id="m-mtp">Multi-token prediction: guess ahead, then check</h3>
       <div class="prose">
-        <p>Standard training asks the model one question per position: what is the next token? <strong>Multi-token prediction</strong> (MTP) adds extra output heads that also predict the token two, three or four steps ahead, all from the same internal state. Gloeckle et al. (2024) found that this improved code and reasoning-style tasks at larger model sizes, and gave a model whose extra heads can be used at inference. DeepSeek-V3 adopted a variant: one extra module predicting one more token, used during training to give a denser signal (DeepSeek-AI, 2024).</p>
-        <p>The inference trick is <strong>speculative decoding</strong> (Leviathan et al., 2023). Cheaply draft a few next tokens, then run the full model once over the draft to check all of them in parallel. Keep the drafted tokens up to the first one the full model disagrees with, and take the model's own token there. The output is the same as if the full model had written it alone, but several tokens may arrive for one full pass. With MTP the model drafts for itself, with no separate small model.</p>
-        <p>If each drafted token is accepted with probability <i>a</i>, and a token can only be accepted if the ones before it were, then with <i>k</i> drafted tokens the expected number of tokens per full pass is:</p>
+        <p>Think of a chess player who plans two moves ahead, then checks the plan. Standard training asks one question per position: what is the next token? <strong>Multi-token prediction</strong> (MTP) adds output heads that also predict tokens two, three or four steps ahead from the same internal state. Gloeckle et al. (2024) found this helped code and reasoning at larger sizes. DeepSeek-V3 used a variant with one extra module for a denser training signal (DeepSeek-AI, 2024).</p>
+        <p>At inference the extra heads become drafts for <strong>speculative decoding</strong> (Leviathan et al., 2023): draft a few tokens cheaply, run the full model once to check them all in parallel, keep drafts up to the first disagreement and take the model's own token there. The output is identical to the full model alone, but several tokens may arrive per full pass. With MTP the model drafts for itself.</p>
+        <p>If each draft is accepted with probability <i>a</i>, and each needs the earlier ones accepted, then with <i>k</i> drafts the expected tokens per full pass is:</p>
       </div>
       <div class="formula">
         <math display="block"><mi>E</mi><mo>=</mo><mn>1</mn><mo>+</mo><mi>a</mi><mo>+</mo><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><mo>…</mo><mo>+</mo><msup><mi>a</mi><mi>k</mi></msup><mo>=</mo><mfrac><mrow><mn>1</mn><mo>−</mo><msup><mi>a</mi><mrow><mi>k</mi><mo>+</mo><mn>1</mn></mrow></msup></mrow><mrow><mn>1</mn><mo>−</mo><mi>a</mi></mrow></mfrac></math>
-        <p class="where">The leading 1 is the token you always get. The first draft adds <i>a</i> on average, the second adds <i>a</i><sup>2</sup> (it needs the first to be right too), and so on. With <i>a</i> = 0.87 and one extra token (<i>k</i> = 1) this is 1.87 tokens per pass, close to the 1.8 times speed-up DeepSeek reported with acceptance rates of 85 to 90% on its second token.</p>
+        <p class="where">The leading 1 is the token you always get; draft <i>j</i> adds <i>a<sup>j</sup></i>. With <i>a</i> = 0.87 and <i>k</i> = 1 this is 1.87 tokens per pass, close to the roughly 1.8 times speed-up DeepSeek reported at 85 to 90% acceptance. Reading it: going from 0.87 to 0.60 acceptance cuts this to 1.60, and later drafts add little.</p>
       </div>
-
       <figure class="figure" id="fig-mtp">
         <div class="fig-head"><span class="fig-title">How many drafts are worth having?</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> set acceptance to 87% and one draft: about 1.8 times faster, DeepSeek's reported range. Raise the drafts and see the curve flatten, because each later draft needs every earlier one to be right. Then lower acceptance to 60% (an unfamiliar topic or a hard passage) and watch more drafts stop paying for themselves.</p>
+        <p class="try"><b>Try:</b> set acceptance to 87% and one draft: about 1.8 times faster, DeepSeek's reported range. Raise the drafts: the curve flattens because each needs all earlier ones right. Then drop acceptance to 60% (unfamiliar or hard text) and watch extra drafts stop paying.</p>
         <div class="chart-wrap" id="mtp-chart"></div>
         <div class="legend">
           <span><i style="background:var(--accent)"></i>Net speed-up by number of drafted tokens</span>
@@ -254,149 +253,51 @@
       </figure>
 
       <div class="prose">
-        <p>Notice what is shared. Diffusion, speculative decoding and MTP all trade <em>more arithmetic per pass</em> for <em>fewer sequential passes</em>, which suits modern GPUs, where memory traffic rather than arithmetic is the bottleneck. They differ in whether the output is guaranteed identical: speculative decoding with verification is lossless; diffusion with fewer steps is a different (and possibly worse) sampler.</p>
-      </div>
-    </section>
-
-    <!-- ============================== 3. CONNECTS ============================== -->
-    <section class="part" id="connects">
-      <div class="part-head"><span class="num">Part 3</span><h2>How it connects</h2></div>
-      <div class="prose"><p>These ideas sit on the language-model pipeline at three different points: the input (tokenizer), the training objective, and the decoding loop.</p></div>
-      <div class="links">
-        <div class="link-card"><span class="code">M1.1 – M1.2 · Tokens and the transformer</span><span class="t"><a href="m1-tokenisation.html">What the tokenizer does and where it hurts</a></span><p>The baseline this lesson departs from. Token fertility on Arabic and numbers is the practical motivation for byte-level models.</p></div>
-        <div class="link-card"><span class="code">M1.3 · Context windows and the KV cache</span><span class="t"><a href="m1-context-windows-and-the-kv.html">Why diffusion lacks a simple cache</a></span><p>The KV cache is why autoregressive decoding is cheap per token. Understanding it explains why diffusion passes are heavier and why block diffusion exists.</p></div>
-        <div class="link-card"><span class="code">M1.4 · Pretraining then post-training</span><span class="t"><a href="m1-pretraining-then-post-training.html">Where a new objective plugs in</a></span><p>LLaDA-style models are pretrained with a masked objective and then instruction-tuned. Converting an existing autoregressive model is a pretraining shortcut.</p></div>
-        <div class="link-card"><span class="code">F5.3 · Attention</span><span class="t"><a href="f5-attention.html">Why length is expensive</a></span><p>Attention scales with the square of sequence length, so byte sequences are costly and patching is not cosmetic. Diffusion uses attention without a causal mask.</p></div>
-        <div class="link-card"><span class="code">F1.6 – F1.7 · Likelihood and entropy</span><span class="t"><a href="f1-likelihood-entropy.html">Cross-entropy and surprise</a></span><p>The masked loss is a likelihood bound. Entropy-based patching sends compute to high-surprise bytes.</p></div>
-        <div class="link-card"><span class="code">R1.1 – R1.2 · Mixture-of-experts and challengers</span><span class="t"><a href="r1-mixture-of-experts-at-scale.html">Other routes to cheaper inference</a></span><p>MoE saves arithmetic per token; this lesson saves passes. They combine, and the next lesson asks whether reasoning needs tokens at all.</p></div>
-        <div class="link-card"><span class="code">R1.5 · Reasoning in latent space</span><span class="t"><a href="r1-reasoning-in-latent-space-coconut.html">Another departure from token-by-token</a></span><p>Coconut-style models think in continuous vectors instead of written tokens: a different way of loosening the same rule.</p></div>
-        <div class="link-card"><span class="code">A5 · Inference economics</span><span class="t"><a href="a5-why-inference-got-cheap-moe.html">Why inference got cheap</a></span><p>Speculative decoding and MTP are part of the serving toolbox. See also <a href="a5-reasoning-models-and-test-time.html">reasoning models and test-time compute</a>, where long outputs make latency painful.</p></div>
-        <div class="link-card"><span class="code">M2.3 · Model choice, cost and latency</span><span class="t"><a href="m2-model-choice-cost-and-latency.html">Where this shows up in a buying decision</a></span><p>Latency per token is a vendor feature you can ask about. Diffusion APIs sell on it.</p></div>
-        <div class="link-card"><span class="code">A14 · Arabic LLMs</span><span class="t"><a href="a14-arabic-llms-jais-allam-falcon.html">Arabic and tokenization fairness</a></span><p>Byte-level and tokenizer-light designs speak directly to the Arabic cost and quality gap.</p></div>
-      </div>
-      <div class="prose" style="margin-top:22px">
-        <p>Where it shows up at the bank:</p>
+        <p>All three trade <em>more arithmetic per pass</em> for <em>fewer sequential passes</em>, which suits GPUs limited by memory traffic. They differ on guarantees: speculative decoding with verification is lossless; diffusion with fewer steps is a different, possibly worse, sampler.</p>
+        <p><strong>Where this lands at the bank.</strong> Status: speculative decoding and MTP are live in serving stacks, usually invisibly; commercial diffusion is a pilot-stage option needing your own evaluation; open-weight diffusion and byte-level models are research. None has displaced autoregressive transformers as the frontier default, and I know of no CBUAE or SAMA guidance on architecture, so treat them as any other model under model-risk rules. Practical uses:</p>
         <ul>
-          <li><strong>Contact-centre and chat assistants.</strong> Latency is felt directly. A faster decoder, whether diffusion or an MTP-enabled model, is a customer-experience feature, and speculative decoding is already a vendor-side setting to ask about.</li>
-          <li><strong>Code assistants.</strong> Diffusion's early strength is code and structured output, the exact use in analytics and engineering teams (A15).</li>
-          <li><strong>Arabic and mixed-script documents.</strong> Names, IBANs, amounts and OCR noise are where tokenizers fragment. Byte-level robustness is the research answer; today the practical answer is to test your chosen model on your own Arabic text.</li>
-          <li><strong>Structured extraction.</strong> Tasks that fill a fixed schema from a document suit parallel filling, and also expose the "one wrong digit" risk. Validate extracted fields independently.</li>
-          <li><strong>Procurement.</strong> When a vendor claims "10x faster", you now know to ask: at what quality, which task, how many steps, which hardware, and is the output guaranteed identical?</li>
+          <li><strong>Chat and contact-centre latency.</strong> Faster decoding is a customer-experience feature; ask vendors about speculative decoding.</li>
+          <li><strong>Code assistants.</strong> Diffusion's early strength is code and structured output (A15).</li>
+          <li><strong>Arabic and mixed-script documents.</strong> Names, IBANs and OCR noise fragment tokenizers. Today, test your chosen model on your own Arabic text.</li>
+          <li><strong>Structured extraction.</strong> Parallel filling suits fixed schemas but exposes the one-wrong-digit risk. Validate fields independently.</li>
+          <li><strong>Procurement.</strong> For "10x faster", ask: at what quality, which task, how many steps, which hardware, and is the output guaranteed identical?</li>
         </ul>
       </div>
     </section>
 
-    <!-- ============================== 4. FIELD ============================== -->
-    <section class="part" id="field">
-      <div class="part-head"><span class="num">Part 4</span><h2>Where the field is now</h2></div>
-      <div class="prose">
-        <p>The honest summary: all three are real and shipped in some form, but none has displaced the autoregressive transformer as the default for frontier general-purpose models. Multi-token prediction is the most deployed, diffusion the most hyped, byte-level models the least mature commercially.</p>
-      </div>
-      <p class="asof" style="margin-top:14px">Research checked on 6 November 2026 with two web searches. Throughput figures come from vendor claims and secondary write-ups; items marked from memory are older papers I did not re-check.</p>
-      <ol class="timeline" style="margin-top:14px">
-        <li><span class="yr">2021</span><div><div class="t">Discrete diffusion for text</div><p>D3PM defined diffusion over discrete tokens, including a masking variant. The seed of later work.</p><div class="src">Austin et al., NeurIPS 2021 (from memory)</div></div></li>
-        <li><span class="yr">2022–23</span><div><div class="t">Byte-level and hierarchical models; speculative decoding</div><p>ByT5 showed token-free models work but cost more compute. MegaByte introduced patches. Leviathan and colleagues showed lossless speed-ups from draft-and-verify decoding.</p><div class="src">Xue et al., TACL 2022; Yu et al., 2023; Leviathan et al., ICML 2023 (from memory)</div></div></li>
-        <li><span class="yr">2024</span><div><div class="t">Masked diffusion gets a clean recipe; MTP becomes practical</div><p>Simple masked-diffusion language models closed much of the gap to autoregressive models on likelihood. Gloeckle et al. showed multi-token prediction helps code at scale, and DeepSeek-V3 used MTP in a frontier-class open model, reporting about a 1.8 times decoding speed-up from the extra module with 85–90% second-token acceptance.</p><div class="src">Sahoo et al., 2024; Gloeckle et al., ICML 2024; DeepSeek-AI, 2024</div></div></li>
-        <li><span class="yr">Dec 2024</span><div><div class="t">Byte Latent Transformer</div><p>Entropy-based dynamic patches; matched Llama 3-style tokenised models up to 8B parameters with up to about half the inference compute in the authors' tests.</p><div class="src">Pagnoni et al., Meta, arXiv 2412.09871 (from memory)</div></div></li>
-        <li><span class="yr">2025</span><div><div class="t">Diffusion LLMs reach scale and product</div><p>LLaDA (8B, open weights) matched Llama 3 8B on many benchmarks in its authors' tests. Inception Labs launched Mercury, the first commercial diffusion LLM, and Google showed Gemini Diffusion at I/O in May 2025. Block diffusion and caching methods began to close the efficiency gap.</p><div class="src">Nie et al., arXiv 2502.09992; Khanna et al. (Mercury), arXiv 2506.17298; Arriola et al., ICLR 2025 (from memory)</div></div></li>
-        <li><span class="yr">2026</span><div><div class="t">Scaling up by conversion, and MTP in shipped models</div><p>The dominant pattern for diffusion LLMs is to start from a pretrained autoregressive model and continue training with the diffusion objective; LLaDA reached a 100B-parameter version this way. Inception's Mercury 2 launched on 24 February 2026, with a reported ~1,000 tokens per second on a single Blackwell GPU (secondary reports differ, up to around 1,200). NVIDIA released a model that unifies autoregressive, diffusion and self-speculation decoding in one set of weights. MTP heads appear in recent open models for self-speculative decoding, for example Nemotron 3 Super.</p><div class="src">Secondary reports, arXiv 2607.05722; arXiv 2604.12374. Throughput claims not independently verified.</div></div></li>
-        <li><span class="yr">2026</span><div><div class="t">Active research</div><p>Papers address training-inference mismatch in diffusion LMs, retrofitting linear attention into them, training-free multi-token prediction on frozen models, and multi-byte prediction for hierarchical byte models. Read these as signs of direction, not settled results.</p><div class="src">arXiv 2605.11854, 2608.06628, 2603.17942, 2608.15454 (abstract-level only)</div></div></li>
-      </ol>
-      <div class="prose" style="margin-top:22px"><p>How established each practice is, for a bank:</p></div>
-      <p class="asof" style="margin-top:8px"><span class="status live">Live</span> standard in real use · <span class="status pilot">Pilot</span> used by some teams · <span class="status prop">Proposed</span> research results · <span class="status inf">Reported</span> practised, rarely published</p>
-      <div class="table-wrap" style="margin-top:10px">
-        <table class="data">
-          <thead><tr><th>Practice</th><th>What it looks like</th><th>Status</th></tr></thead>
-          <tbody>
-            <tr><td><b>Speculative decoding / MTP in serving stacks</b></td><td>Providers and inference engines use drafting to cut latency, usually invisibly. Lossless when verified.</td><td><span class="status live">Live</span></td></tr>
-            <tr><td><b>Commercial diffusion LLM via API</b></td><td>Low-latency coding and short-answer use cases. Needs your own evaluation; available vendor data is largely self-reported.</td><td><span class="status pilot">Pilot</span></td></tr>
-            <tr><td><b>Open-weight diffusion LLMs for experiments</b></td><td>LLaDA-family models in research and internal labs. Tooling and serving support are thinner than for autoregressive models.</td><td><span class="status prop">Proposed</span></td></tr>
-            <tr><td><b>Byte-level / patch models in production</b></td><td>Strong research results; few if any bank-grade, supported products I could confirm.</td><td><span class="status prop">Proposed</span></td></tr>
-            <tr><td><b>Regulated use of diffusion or byte models</b></td><td>No specific guidance I know of. Treated as any other model under model-risk rules; I am not aware of CBUAE or SAMA statements on architecture.</td><td><span class="status inf">Reported</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="callout key" style="margin-top:20px"><span class="k">The current consensus, in one line</span>Autoregressive transformers remain the default; speculative decoding and MTP are already improving serving speed; diffusion is a credible fast, editable alternative for latency-sensitive and structured tasks; byte-level models are a promising answer to tokenizer problems that has not yet reached products a bank can buy.</div>
-    </section>
-
-    <!-- ============================== 5. FAILS ============================== -->
+    <!-- ============================== 3. FAILS ============================== -->
     <section class="part" id="fails">
-      <div class="part-head"><span class="num">Part 5</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Mostly these are failures of interpretation: of speed claims, of benchmark comparisons and of what "tokenizer-free" buys.</p></div>
+      <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Quoting tokens per second without quality or steps</div><p>"1,000 tokens per second" for a diffusion model at few steps says nothing about whether it answers as well as a slower model.</p><div class="spot"><b>Spot it</b>Ask for the benchmark score at that speed, the number of denoising steps, the hardware, the batch size and the prompt length.</div></li>
-        <li><div class="t">Incoherence at fixed positions</div><p>Parallel decoding yields mismatched pairs: a name from one candidate and a surname from another, a currency from one clause and an amount from another.</p><div class="spot"><b>Spot it</b>Test on structured outputs with dependent fields. Check consistency between related fields automatically.</div></li>
-        <li><div class="t">Digit and identifier errors</div><p>One wrong digit in an IBAN or amount is a different fact, and parallel filling plus weak numeric reasoning makes this likelier than the headline accuracy suggests.</p><div class="spot"><b>Spot it</b>Round-trip tests: extract, re-render, compare with the source; checksum IBANs; reconcile totals.</div></li>
-        <li><div class="t">Comparing against a weak autoregressive baseline</div><p>A diffusion model beats "a similar-size model" that is older or untuned.</p><div class="spot"><b>Spot it</b>Check the baseline's release date, size and training tokens. Prefer a head-to-head on your own tasks.</div></li>
-        <li><div class="t">Assuming bytes mean no language bias</div><p>Byte-level models remove tokenizer bias but not data bias. A model trained on 95% English data still does worse in Arabic.</p><div class="spot"><b>Spot it</b>Evaluate per language and per dialect, including Gulf Arabic, on your own content.</div></li>
-        <li><div class="t">Ignoring the longer sequences</div><p>The byte-level model looks free of tokenizer cost, until the latency and memory bill for sequences several times longer arrives.</p><div class="spot"><b>Spot it</b>Ask for compute per character or per byte of text, not per token, when comparing.</div></li>
-        <li><div class="t">MTP acceptance that collapses off-distribution</div><p>Draft acceptance measured on chat falls on rare legal Arabic or numeric tables, and the promised speed-up shrinks.</p><div class="spot"><b>Spot it</b>Measure tokens per pass on your own prompts, not the vendor's.</div></li>
-        <li><div class="t">Assuming lossless when it is not</div><p>Speculative decoding with verification gives the same distribution; reducing diffusion steps or loosening acceptance thresholds does not.</p><div class="spot"><b>Spot it</b>Ask: is the output guaranteed identical to the base model, or only usually similar?</div></li>
+        <li><div class="t">Quoting tokens per second without quality or steps</div><p>"1,000 tokens per second" at few steps says nothing about answer quality.</p><div class="spot"><b>Spot it</b>Ask for the benchmark score at that speed, the steps, hardware, batch size and prompt length.</div></li>
+        <li><div class="t">Incoherence at fixed positions</div><p>Parallel decoding gives mismatched pairs: a name from one candidate and a surname from another, a currency from one clause and an amount from another.</p><div class="spot"><b>Spot it</b>Test structured outputs with dependent fields. Check consistency automatically.</div></li>
+        <li><div class="t">Digit and identifier errors</div><p>One wrong digit in an IBAN or amount is a different fact. Parallel filling plus weak numeric reasoning makes this likelier than headline accuracy suggests.</p><div class="spot"><b>Spot it</b>Round-trip tests (extract, re-render, compare), IBAN checksums, reconciled totals.</div></li>
+        <li><div class="t">Comparing against a weak autoregressive baseline</div><p>A diffusion model beats "a similar-size model" that is older or untuned.</p><div class="spot"><b>Spot it</b>Check the baseline's release date, size and training tokens. Prefer a head-to-head on your tasks.</div></li>
+        <li><div class="t">Assuming bytes mean no language bias</div><p>Bytes remove tokenizer bias, not data bias. A model trained on 95% English still does worse in Arabic.</p><div class="spot"><b>Spot it</b>Evaluate per language and dialect, including Gulf Arabic, on your content.</div></li>
+        <li><div class="t">Ignoring the longer sequences</div><p>A byte model looks free of tokenizer cost until the latency and memory bill for much longer sequences arrives.</p><div class="spot"><b>Spot it</b>Compare compute per character or byte of text, not per token.</div></li>
+        <li><div class="t">MTP acceptance that collapses off-distribution</div><p>Acceptance measured on chat falls on rare legal Arabic or numeric tables, and the speed-up shrinks.</p><div class="spot"><b>Spot it</b>Measure tokens per pass on your own prompts.</div></li>
+        <li><div class="t">Assuming lossless when it is not</div><p>Verified speculative decoding keeps the same distribution; fewer diffusion steps or looser acceptance thresholds do not.</p><div class="spot"><b>Spot it</b>Ask: is the output guaranteed identical to the base model, or only usually similar?</div></li>
       </ul>
     </section>
 
-    <!-- ============================== 6. ROOM ============================== -->
-    <section class="part" id="room">
-      <div class="part-head"><span class="num">Part 6</span><h2>What to say in the room</h2></div>
-      <div class="room">
-        <div class="room-card">
-          <span class="k">To an executive · 30 seconds</span>
-          <blockquote>“Today's chatbots write one word at a time, so long answers are slow. Newer designs write many words at once, like refining a draft, and vendors report several times the speed. That helps live customer chat and coding tools. But writing words together can make them inconsistent, and in banking one wrong digit matters. So we would pilot them on low-risk, latency-sensitive tasks and test accuracy on our own documents before trusting any speed claim.”</blockquote>
-        </div>
-        <div class="room-card">
-          <span class="k">To a technical interviewer or validator</span>
-          <blockquote>“Masked diffusion language models train a bidirectional denoiser with a weighted masked cross-entropy, then decode by iteratively unmasking high-confidence positions. They cut sequential passes but lose the KV cache and decide tokens in parallel, so there is a coherence cost for coupled tokens; block diffusion and adaptive thresholds mitigate it. Byte-level models such as BLT use entropy-based patching to avoid the quadratic cost of long byte sequences. MTP adds heads for future tokens and doubles as a self-draft for lossless speculative decoding. I'd evaluate each on task accuracy at matched latency, not on tokens per second alone.”</blockquote>
-        </div>
-      </div>
-      <div class="qa">
-        <details class="reveal"><summary>“Will diffusion models replace GPT-style models?”</summary><div class="ans"><p>Not on current evidence. They have matched autoregressive models at small and mid sizes and are very fast on easy-to-parallelise tasks, and the 2026 trend is to convert existing models. But the ecosystem, tooling, long-context behaviour and frontier reasoning are all autoregressive-first. The likelier future is both: diffusion or hybrid decoders for latency-critical and editing tasks, autoregressive for the rest.</p></div></details>
-        <details class="reveal"><summary>“Why can't a diffusion model just write everything in one step?”</summary><div class="ans"><p>Because tokens depend on each other. Fixing every position at once from independent probabilities produces clashes, like "New Angeles". The more steps, the more each token can condition on already-fixed neighbours. Fewer steps means faster and less coherent. Good decoders fix only tokens they are very sure of.</p></div></details>
-        <details class="reveal"><summary>“Is a tokenizer-free model better for Arabic?”</summary><div class="ans"><p>In principle it removes a source of unfairness, since a fixed vocabulary built mostly from English splits Arabic into more pieces. In practice quality still depends on training data, and byte sequences for Arabic are about twice as long as the characters, so you need patching to keep cost sane. I would test on our own Arabic and mixed-script documents rather than assume it.</p></div></details>
-        <details class="reveal"><summary>“Does speculative decoding change the answers?”</summary><div class="ans"><p>Not when done correctly with verification: the accepted output has the same distribution as the base model. What changes is how many tokens you get per full pass. It is therefore one of the few speed-ups with no quality trade-off, which is why it is widely used in serving.</p></div></details>
-        <details class="reveal"><summary>“A vendor says their diffusion model is ten times faster. What do you ask?”</summary><div class="ans"><p>Faster than what, at what quality, on which task. Number of steps, hardware, batch size, prompt and output length. Benchmark results at that setting, ideally our own test set, including Arabic and numeric extraction. And whether the output is guaranteed equal to a reference model or only similar.</p></div></details>
-      </div>
-    </section>
-
-    <!-- ============================== 7. CHECK ============================== -->
+    <!-- ============================== 4. CHECK ============================== -->
     <section class="part" id="check">
-      <div class="part-head"><span class="num">Part 7</span><h2>Self-check</h2></div>
-      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the formulas in Part 2.</p></div>
+      <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A model writes a 256-token answer. How many sequential passes does an autoregressive model need, and a diffusion model run for 32 steps? What is the ideal speed-up, and why might the real one be smaller?</summary><div class="ans"><p>256 against 32: an ideal 8 times. Real speed-up is smaller because each diffusion pass processes the whole sequence without a simple KV cache, so it costs more than one autoregressive step, and because quality may force more steps.</p></div></details>
-        <details class="reveal"><summary>2. Four tokens in a chunk are fixed in one pass and there are 3 equally likely coupled phrasings. What is the chance the chunk is coherent?</summary><div class="ans"><p>m<sup>1−k</sup> = 3<sup>−3</sup> = 1/27, about 3.7%. Only the 3 consistent combinations out of 3<sup>4</sup> = 81 count. This is why adaptive, confidence-based unmasking matters.</p></div></details>
-        <details class="reveal"><summary>3. Why does masked diffusion see "both sides" of a position, and what task does this help?</summary><div class="ans"><p>The model predicts masked tokens given all unmasked tokens, left and right, without a causal mask. It helps tasks like infilling and reversal-type questions that left-to-right models handle poorly, such as completing a line given the line after it.</p></div></details>
-        <details class="reveal"><summary>4. An Arabic sentence has 19 characters including 3 spaces. How many UTF-8 bytes does it have, and what does that say about byte-level models?</summary><div class="ans"><p>16 letters at 2 bytes plus 3 spaces at 1 byte is 35 bytes, so about 1.8 bytes per character against 1 for English. Byte sequences for Arabic are longer, so a naive byte model spends more compute on Arabic; patching is how modern byte-level models contain that.</p></div></details>
-        <details class="reveal"><summary>5. With patches of 4 bytes instead of raw bytes, roughly how much does attention work over the central model fall?</summary><div class="ans"><p>Sequence length falls by 4, attention work by about 4<sup>2</sup> = 16 times, to about 6% of the byte-by-byte cost. This ignores the small byte-level encoder and decoder that still run.</p></div></details>
-        <details class="reveal"><summary>6. MTP with one drafted token and 88% acceptance. How many tokens per full pass, and what if the drafting costs 5% of a pass?</summary><div class="ans"><p>E = 1 + 0.88 = 1.88 tokens per pass. Net speed-up = 1.88 ÷ 1.05 ≈ 1.79 times, consistent with the roughly 1.8 times DeepSeek reported.</p></div></details>
-        <details class="reveal"><summary>7. What is the difference between speculative decoding and running a diffusion model with fewer steps, in terms of output quality guarantees?</summary><div class="ans"><p>Speculative decoding verifies drafts with the full model and keeps only what it would have produced, so the output distribution is unchanged. Fewer diffusion steps is a different sampler whose quality falls as steps drop. One is lossless; the other is a dial.</p></div></details>
+        <details class="reveal"><summary>1. A model writes a 256-token answer. How many sequential passes does an autoregressive model need, and a diffusion model run for 32 steps? What is the ideal speed-up, and why might the real one be smaller?</summary><div class="ans"><p>256 against 32: an ideal 8 times. Real gains are smaller because each diffusion pass handles the whole sequence without a simple KV cache, and quality may force more steps.</p></div></details>
+        <details class="reveal"><summary>2. Four tokens in a chunk are fixed in one pass and there are 3 equally likely coupled phrasings. What is the chance the chunk is coherent?</summary><div class="ans"><p>m<sup>1−k</sup> = 3<sup>−3</sup> = 1/27, about 3.7%: 3 consistent combinations out of 3<sup>4</sup> = 81. Hence adaptive, confidence-based unmasking.</p></div></details>
+        <details class="reveal"><summary>3. Why does masked diffusion see "both sides" of a position, and what task does this help?</summary><div class="ans"><p>It predicts masked tokens from all unmasked tokens, left and right, with no causal mask. This helps infilling and reversal-type questions, such as completing a line given the line after it.</p></div></details>
+        <details class="reveal"><summary>4. An Arabic sentence has 19 characters including 3 spaces. How many UTF-8 bytes does it have, and what does that say about byte-level models?</summary><div class="ans"><p>16 letters at 2 bytes plus 3 spaces at 1 byte is 35 bytes, about 1.8 per character against 1 for English. A naive byte model spends more compute on Arabic; patching contains that.</p></div></details>
+        <details class="reveal"><summary>5. With patches of 4 bytes instead of raw bytes, roughly how much does attention work over the central model fall?</summary><div class="ans"><p>Length falls 4 times, attention work about 4<sup>2</sup> = 16 times, to about 6% of the byte-by-byte cost. This ignores the small byte-level encoder and decoder.</p></div></details>
+        <details class="reveal"><summary>6. MTP with one drafted token and 88% acceptance. How many tokens per full pass, and what if the drafting costs 5% of a pass?</summary><div class="ans"><p>E = 1 + 0.88 = 1.88 tokens per pass. Net speed-up = 1.88 ÷ 1.05 ≈ 1.79 times, consistent with DeepSeek's roughly 1.8 times.</p></div></details>
+        <details class="reveal"><summary>7. What is the difference between speculative decoding and running a diffusion model with fewer steps, in terms of output quality guarantees?</summary><div class="ans"><p>Speculative decoding verifies drafts with the full model, so the output distribution is unchanged. Fewer diffusion steps is a different sampler whose quality falls as steps drop. One is lossless; the other is a dial.</p></div></details>
       </div>
     </section>
 
-    <!-- ============================== SOURCES ============================== -->
-    <section class="part" id="sources">
-      <div class="part-head"><span class="num">Further reading</span><h2>Sources</h2></div>
-      <ol class="sources">
-        <li>S. Nie et al. <a href="https://arxiv.org/abs/2502.09992">Large Language Diffusion Models</a> (LLaDA). arXiv, 2025.</li>
-        <li>S. Sahoo et al. <a href="https://arxiv.org/abs/2406.07524">Simple and Effective Masked Diffusion Language Models</a>. NeurIPS, 2024.</li>
-        <li>J. Austin et al. <a href="https://arxiv.org/abs/2107.03006">Structured Denoising Diffusion Models in Discrete State-Spaces</a>. NeurIPS, 2021.</li>
-        <li>M. Arriola et al. <a href="https://arxiv.org/abs/2503.09573">Block Diffusion: Interpolating Between Autoregressive and Diffusion Language Models</a>. ICLR, 2025.</li>
-        <li>Inception Labs. <a href="https://arxiv.org/abs/2506.17298">Mercury: Ultra-Fast Language Models Based on Diffusion</a>. arXiv, 2025.</li>
-        <li>Google DeepMind. <a href="https://deepmind.google/models/gemini-diffusion/">Gemini Diffusion</a>. Experimental model page, 2025.</li>
-        <li>A. Pagnoni et al. <a href="https://arxiv.org/abs/2412.09871">Byte Latent Transformer: Patches Scale Better Than Tokens</a>. arXiv, 2024.</li>
-        <li>L. Yu et al. <a href="https://arxiv.org/abs/2305.07185">MEGABYTE: Predicting Million-byte Sequences with Multiscale Transformers</a>. NeurIPS, 2023.</li>
-        <li>L. Xue et al. <a href="https://arxiv.org/abs/2105.13626">ByT5: Towards a Token-Free Future with Pre-trained Byte-to-Byte Models</a>. TACL, 2022.</li>
-        <li>S. Hwang, B. Wang, A. Gu. <a href="https://arxiv.org/abs/2507.07955">Dynamic Chunking for End-to-End Hierarchical Sequence Modeling</a> (H-Net). arXiv, 2025.</li>
-        <li>F. Gloeckle et al. <a href="https://arxiv.org/abs/2404.19737">Better &amp; Faster Large Language Models via Multi-token Prediction</a>. ICML, 2024.</li>
-        <li>DeepSeek-AI. <a href="https://arxiv.org/abs/2412.19437">DeepSeek-V3 Technical Report</a>. 2024. Section on multi-token prediction and acceptance rates.</li>
-        <li>Y. Leviathan, M. Kalman, Y. Matias. <a href="https://arxiv.org/abs/2211.17192">Fast Inference from Transformers via Speculative Decoding</a>. ICML, 2023.</li>
-        <li>NVIDIA. <a href="https://arxiv.org/abs/2607.05722">Nemotron-Labs-Diffusion: A Tri-Mode Language Model Unifying Autoregressive, Diffusion, and Self-Speculation Decoding</a>. arXiv, 2026 (preprint).</li>
-        <li>NVIDIA. <a href="https://arxiv.org/abs/2604.12374">Nemotron 3 Super</a>. arXiv, 2026 (shared-head multi-token prediction).</li>
-      </ol>
-      <div class="lesson-foot">
-        <a href="../index.html">← Back to the curriculum</a>
-        <span>Next in R1: Reasoning in latent space (R1.5)</span>
-      </div>
-    </section>
+    <div class="lesson-foot">
+      <a href="../index.html">← Back to the curriculum</a>
+      <span>Next in R1: Reasoning in latent space (R1.5)</span>
+    </div>
   </main>
 </div>
 
