@@ -73,9 +73,8 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>You will <em>read</em> far more code than you write: colleagues' notebooks, inherited scripts, and above all code an assistant produced in seconds. Checking is now the bottleneck.</p>
-        <p>A crash is cheap. Code that runs cleanly and prints a plausible number is expensive: a join that quietly duplicated 8% of transactions looks just like success. It is like a smoke alarm that never sounds.</p>
-        <p>So fluent reading means knowing <strong>where the quiet failures live</strong>: joins, the split, what is fitted on what, the target and the reported metric. The second half applies the same skill to <em>results</em>: an analysis is hollow when the data was random, the text does not match the output, or the metric was computed on rows the model had already seen.</p>
+        <p>You will <em>read</em> far more code than you write, and checking is now the bottleneck. A crash is cheap. Code that runs cleanly and prints a plausible number is expensive, like a smoke alarm that never sounds.</p>
+        <p>So fluent reading means knowing <strong>where the quiet failures live</strong>: joins, the split, what is fitted on what, the target and the metric. The same skill applies to <em>results</em>: an analysis is hollow when the data was random, the text does not match the output, or the metric was computed on rows the model had already seen.</p>
       </div>
 
       <figure class="figure" id="fig-read">
@@ -90,7 +89,7 @@
         <p class="sim-note">Illustrative: the file names, columns and the script are made up. The issues are common patterns, not a claim about any real system. Nothing is run; the explanations are written by hand.</p>
       </figure>
 
-      <div class="callout key"><span class="k">Hold onto this</span>Read for the few lines that can silently change the answer. The rest is plumbing. If you distrust a line, ask for the row count or printed output that settles it.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Read for the few lines that can silently change the answer. If you distrust a line, ask for the row count or printed output that settles it.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -99,39 +98,19 @@
 
       <h3 class="sub" id="m-python">F10.1 · Reading Python fluently</h3>
       <div class="prose">
-        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">A reading order that finds bugs early</h4>
         <p>Read like a building inspector: check the load-bearing parts first.</p>
         <ol>
-          <li><strong>The grain.</strong> After each load or join, one row is what: a transaction, a customer, a customer-month? What should the row count be, and where is it printed?</li>
-          <li><strong>The target.</strong> Where is <code>is_fraud</code> built, and as of which date? A feature known only after the outcome (a chargeback amount, a "closed" status) is leakage (F3.1).</li>
-          <li><strong>The split, then every fit.</strong> Each scaler, imputer and feature selector must come <em>after</em> the split and see only training rows. Then check the metric: probabilities or labels, test or training rows?</li>
+          <li><strong>The grain.</strong> After each load or join, one row is what? What should the row count be, and where is it printed?</li>
+          <li><strong>The target.</strong> Where is <code>is_fraud</code> built, and as of which date? A feature known only after the outcome is leakage.</li>
+          <li><strong>The split, then every fit.</strong> Each scaler, imputer and selector must come after the split and see only training rows. Then check the metric: scores or labels, test or training rows?</li>
         </ol>
-        <h4 style="font-family:var(--font-display);font-size:18px">Reading the idioms</h4>
-      </div>
-<pre><code># Named aggregation: one row per customer.
-per_cust = df.groupby("customer_id").agg(n=("txn_id", "count"), total=("amount", "sum"))
-
-# transform keeps the original rows: each row gets its group's value.
-df["vs_cust_mean"] = df.amount / df.groupby("customer_id").amount.transform("mean")</code></pre>
-      <div class="prose">
-        <p><code>agg</code> <em>shrinks</em> to one row per group; <code>transform</code> keeps every row. Always ask "how many rows come out?".</p>
-        <h4 style="font-family:var(--font-display);font-size:18px">The traps that run silently</h4>
-        <p>None of these raises an error. Five matter most.</p>
-      </div>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <thead><tr><th>Trap</th><th>What actually happens</th><th>The check</th></tr></thead>
-          <tbody>
-            <tr><td><b>Join fan-out</b><br><code>tx.merge(cust, on="customer_id")</code></td><td>If the right table has two rows for a key, each matching transaction is duplicated. Counts and AED totals inflate.</td><td>Compare <code>len</code> before and after; use <code>validate="m:1"</code>.</td></tr>
-            <tr><td><b>Chained assignment</b><br><code>df[df.x &gt; 0]["y"] = 1</code></td><td>Writes to a temporary copy, so <code>df</code> may never change.</td><td>Use <code>df.loc[mask, "y"] = 1</code>.</td></tr>
-            <tr><td><b>Index alignment</b><br><code>df["score"] = scores</code></td><td>pandas matches by index label, not position, so values land on the wrong rows after a sort or filter.</td><td>Use <code>.to_numpy()</code> for position.</td></tr>
-            <tr><td><b>Labels, not scores</b><br><code>roc_auc_score(y, model.predict(X))</code></td><td><code>predict</code> returns hard 0 or 1, so AUC is far below the real ranking quality.</td><td>Use <code>predict_proba(X)[:, 1]</code>.</td></tr>
-            <tr><td><b>Dates</b><br><code>pd.to_datetime("03/04/2026")</code></td><td>Parsed month-first unless told otherwise. Gulf sources are usually day-first.</td><td>Pass <code>dayfirst=True</code>; check min and max.</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="prose" style="margin-top:1.4em">
+        <p>Then watch for traps that run silently:</p>
+        <ul>
+          <li><strong>Join fan-out.</strong> If the right table has two rows for a key, matching transactions are duplicated. Compare row counts, or use <code>validate="m:1"</code>.</li>
+          <li><strong>Labels, not scores.</strong> <code>predict</code> returns hard 0 or 1, so AUC is understated. Use <code>predict_proba</code>.</li>
+          <li><strong>Index alignment and chained assignment.</strong> pandas matches by label, not position, and <code>df[mask]["y"] = 1</code> writes to a copy.</li>
+          <li><strong>Dates.</strong> Parsed month-first unless told otherwise, but Gulf sources are usually day-first.</li>
+        </ul>
         <p>The join is the costliest at a bank: customer and account tables are rarely one row per key (joint accounts, re-issued cards). It is like a guest list with some names written twice.</p>
       </div>
 
@@ -154,15 +133,15 @@ df["vs_cust_mean"] = df.amount / df.groupby("customer_id").amount.transform("mea
       </figure>
 
       <div class="prose">
-        <p>Two habits catch this class of error. <strong>Assert shapes</strong>: after a join, <code>assert len(df) == len(tx)</code>. <strong>Reconcile to something known</strong>: AED total against the finance ledger. A tie-out beats any amount of reading.</p>
-        <p>Assistant-written code is fluent, confident and over-complete. When a comment and the code disagree, the code wins. Ask for the smallest version that works, and read that.</p>
+        <p>Two habits catch this class of error. <strong>Assert shapes</strong>: after a join, <code>assert len(df) == len(tx)</code>. <strong>Reconcile to something known</strong>, such as the AED total against the finance ledger.</p>
+        <p>Assistant-written code is fluent and over-complete. When a comment and the code disagree, the code wins.</p>
       </div>
 
       <h3 class="sub" id="m-hollow">F10.2 · Spotting hollow or fabricated analyses</h3>
       <div class="prose">
-        <p>A hollow analysis has a conclusion that the computation does not support. Three flavours.</p>
+        <p>A hollow analysis has a conclusion that the computation does not support. There are three flavours.</p>
         <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">1. Metrics on the wrong split</h4>
-        <p>It is like marking an exam after the student has seen the answer sheet. Take a target of pure noise and thousands of candidate features. Pick the 20 most correlated with the target, then cross-validate. Accuracy comes out well above chance, because selection already saw the labels of the rows you "tested" on.</p>
+        <p>It is like marking an exam after the student has seen the answer sheet. Pick the 20 features most correlated with a noise target, then cross-validate, and accuracy beats chance because selection already saw the test labels.</p>
       </div>
 
       <figure class="figure" id="fig-leak">
@@ -183,22 +162,10 @@ df["vs_cust_mean"] = df.amount / df.groupby("customer_id").amount.transform("mea
       </figure>
 
       <div class="prose">
-        <p>Any step that touches labels does the same: target encoding, SMOTE (<a href="f3-imbalanced-data.html">F3.5</a>), threshold tuning. So does <strong>tuning on the test set</strong>: try twenty settings, report the best test score, and the test set has become a training set (see <a href="f4-cross-validation-including-temporal-splits.html">cross-validation and temporal splits</a>, <a href="f4-hyperparameter-tuning-grid-random-and.html">hyperparameter tuning</a>).</p>
-
+        <p>Any step that touches labels does the same, such as target encoding, SMOTE or threshold tuning. So does <strong>tuning on the test set</strong>: try twenty settings, report the best, and the test set has become a training set.</p>
         <h4 style="font-family:var(--font-display);font-size:18px">2. Random or synthetic data passed off as real</h4>
-        <p>An AI-written notebook may fill a missing file with simulated numbers and carry on. Real bank data has texture that generators lack. You rarely need a test: plot the column and look.</p>
+        <p>An AI-written notebook may fill a missing file with simulated numbers and carry on. Real bank amounts are right-skewed, spike at round values like AED 100 or 500, and give a modest AUC (0.7 to 0.9) that took work. Generated data is flat or bell-shaped, has no round-number spikes, and scores either 0.50 or 0.99. Plot the column and look.</p>
       </div>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <thead><tr><th>Property</th><th>Real banking data</th><th>Generator output</th></tr></thead>
-          <tbody>
-            <tr><td><b>Amount shape</b></td><td>Right-skewed with a long tail; median far below mean</td><td>Flat or symmetric bell; median near mean</td></tr>
-            <tr><td><b>Round numbers</b></td><td>Spikes at AED 100, 200, 500, 1,000</td><td>Almost none</td></tr>
-            <tr><td><b>The signal</b></td><td>Modest AUC (0.7 to 0.9) that took work to reach</td><td>Either 0.50, or a planted rule recovered at 0.99</td></tr>
-          </tbody>
-        </table>
-      </div>
-
       <figure class="figure" id="fig-fake">
         <div class="fig-head"><span class="fig-title">Which column of transaction amounts is real?</span><span class="fig-tag">Simulation 4 of 4</span></div>
         <p class="try"><b>Try:</b> three columns of 4,000 card amounts in AED. Two came from a random-number generator. Look at the shapes, then choose the one you believe is real. Press <b>Reshuffle</b> for a new draw and a new order.</p>
@@ -216,39 +183,21 @@ df["vs_cust_mean"] = df.amount / df.groupby("customer_id").amount.transform("mea
 
       <div class="prose">
         <h4 style="font-family:var(--font-display);font-size:18px">3. Text that contradicts the output</h4>
-        <p>The prose says one thing, the output another, usually because the narrative was written without looking at the numbers or the notebook was not re-run. Match each sentence to the output line it relies on.</p>
-      </div>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <thead><tr><th>The write-up says</th><th>The output shows</th><th>The problem</th></tr></thead>
-          <tbody>
-            <tr><td>"Recall improved to 86%"</td><td><code>recall: 0.79</code> in the cell above</td><td>Narrative from an earlier run or invented. Re-run and compare.</td></tr>
-            <tr><td>"Generalises well (AUC 0.91 on held-out data)"</td><td>The cell computes AUC on <code>X_train</code></td><td>Wrong split. The number is a training score.</td></tr>
-            <tr><td>"Top features: tenure, salary"</td><td>Importance plot headed by <code>account_status_code</code></td><td>The story is plausible; the plot shows a likely leak.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>The general test: <strong>could I regenerate every number in the text from the code and data, today?</strong> Three cheap checks help:</p>
-        <ul>
-          <li>A <em>trivial baseline</em> (predict the average): does the model clear it?</li>
-          <li>A <em>shuffled-label run</em>: permute the target and re-run everything. Still scoring well means a leak.</li>
-          <li>A look at the <em>five worst errors</em>, by eye.</li>
-        </ul>
+        <p>The write-up says recall improved to 86%, but the cell above prints 0.79. Or it claims "AUC 0.91 on held-out data" while the cell scores <code>X_train</code>. Usually the narrative was written without looking at the numbers, or the notebook was not re-run.</p>
+        <p>The general test: <strong>could I regenerate every number in the text from the code and data, today?</strong> Three cheap checks help: a trivial baseline, a shuffled-label run (still scoring well means a leak), and a look at the five worst errors.</p>
       </div>
     </section>
 
     <!-- ============================== 5. FAILS ============================== -->
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>These are failures of the <em>reviewer</em>, each with its quickest check.</p></div>
+
       <ul class="fails" style="margin-top:18px">
         <li><div class="t">Trusting code because it ran</div><p>Most bugs here raise no error.</p><div class="spot"><b>Spot it</b>Ask what output would differ if the code were wrong. If nothing, add a check that would.</div></li>
         <li><div class="t">Reviewing plumbing, not pivots</div><p>Comments on naming while the split sits above the scaler.</p><div class="spot"><b>Spot it</b>Before any style comment, say where the split, target and metric are.</div></li>
         <li><div class="t">Metrics too good for the problem</div><p>AUC 0.99 on fraud.</p><div class="spot"><b>Spot it</b>Treat it as a bug report: check top features for post-outcome columns and run the shuffled-label test.</div></li>
         <li><div class="t">Row counts never printed</div><p>The notebook shows head() but never shape.</p><div class="spot"><b>Spot it</b>Ask: rows in, rows out, what was dropped and why?</div></li>
         <li><div class="t">Narrative first, or synthetic data left in</div><p>The text matches no cell, or placeholder data was reported as findings.</p><div class="spot"><b>Spot it</b>Restart, run all, diff against the text. Search for <code>np.random</code>, <code>faker</code>, <code>make_classification</code>.</div></li>
-        <li><div class="t">Many tries, or trusting a second assistant</div><p>Twenty models tried and only the best reported; "another AI said it is correct".</p><div class="spot"><b>Spot it</b>Ask how many variants were tried. Demand line numbers and evidence, not a verdict.</div></li>
       </ul>
     </section>
 
@@ -257,13 +206,11 @@ df["vs_cust_mean"] = df.amount / df.groupby("customer_id").amount.transform("mea
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="prose"><p>Answer before opening.</p></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A merge of 500,000 transactions with a customer table returns 541,000 rows. What happened, and which two things would you add to the code?</summary><div class="ans"><p>Some customers appear twice in the customer table, so their transactions were duplicated. Add <code>validate="m:1"</code> and a row-count assert.</p></div></details>
-        <details class="reveal"><summary>2. What is wrong with <code>df[df.risk == "high"]["flag"] = 1</code>, and what do you write instead?</summary><div class="ans"><p>Chained assignment: the first indexing returns a temporary copy, so <code>df</code> may not change. Write <code>df.loc[df.risk == "high", "flag"] = 1</code>.</p></div></details>
-        <details class="reveal"><summary>3. A script scales the features, selects the 30 best by correlation with the label, then runs 5-fold cross-validation. The labels are pure noise. Is the CV accuracy at chance?</summary><div class="ans"><p>No, above chance. Selection saw every label, including held-out ones. Put scaling and selection in a pipeline, refitted within each training fold.</p></div></details>
-        <details class="reveal"><summary>4. <code>roc_auc_score(y_test, model.predict(X_test))</code> prints 0.71 for a model whose probabilities would score about 0.90. Why?</summary><div class="ans"><p><code>predict</code> returns hard 0/1 labels; AUC needs scores that rank rows. Use <code>predict_proba(X_test)[:, 1]</code>.</p></div></details>
-        <details class="reveal"><summary>5. You are handed amounts that are evenly spread from AED 1 to 1,000 with no repeated values, and 100% complete. What do you suspect?</summary><div class="ans"><p>A random-number generator. Real amounts are right-skewed, spike at round values and repeat. Ask for source and lineage.</p></div></details>
-        <details class="reveal"><summary>6. A notebook says "AUC on the held-out set: 0.93" but the cell computes <code>roc_auc_score(y_train, p_train)</code>. What do you do?</summary><div class="ans"><p>Unsupported: it is a training score. Re-run on held-out rows, ideally forward in time, and correct the text from the output.</p></div></details>
-        <details class="reveal"><summary>7. Name three cheap checks you can add to any result you rely on.</summary><div class="ans"><p>A trivial baseline; a shuffled-label run, which should score at chance; the five worst errors. Row-count assertions after joins help too.</p></div></details>
+        <details class="reveal"><summary>1. A merge of 500,000 transactions with a customer table returns 541,000 rows. What happened, and what do you add?</summary><div class="ans"><p>Some customers appear twice in the customer table, so their transactions were duplicated. Add <code>validate="m:1"</code> and a row-count assert.</p></div></details>
+        <details class="reveal"><summary>2. Scaling and feature selection run before 5-fold cross-validation, on pure-noise labels. Is accuracy at chance?</summary><div class="ans"><p>No, it is above chance. Selection saw every label, including held-out ones. Put both steps in a pipeline refitted within each training fold.</p></div></details>
+        <details class="reveal"><summary>3. <code>roc_auc_score(y_test, model.predict(X_test))</code> prints 0.71 where probabilities would give 0.90. Why?</summary><div class="ans"><p><code>predict</code> returns hard 0/1 labels, but AUC needs scores that rank rows. Use <code>predict_proba(X_test)[:, 1]</code>.</p></div></details>
+        <details class="reveal"><summary>4. Amounts are evenly spread from AED 1 to 1,000, with no repeats and no gaps. What do you suspect?</summary><div class="ans"><p>A random-number generator. Real amounts are right-skewed, spike at round values and repeat. Ask for source and lineage.</p></div></details>
+        <details class="reveal"><summary>5. Name three cheap checks to add to any result you rely on.</summary><div class="ans"><p>A trivial baseline, a shuffled-label run (which should score at chance), and a look at the five worst errors.</p></div></details>
       </div>
     </section>
 
