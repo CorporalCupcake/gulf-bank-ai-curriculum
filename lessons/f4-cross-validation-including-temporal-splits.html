@@ -63,7 +63,7 @@
         <span>About 40 minutes</span>
       </div>
       <h1>Honest Validation and Honest Segments: Cross-Validation, Time Splits and Clustering</h1>
-      <p class="dek">How to estimate future performance without borrowing from the future, why random folds fail on bank data, and what a customer segment really is.</p>
+      <p class="dek">How to estimate future performance honestly, and what a customer segment really is.</p>
     </header>
 
     <div class="mobile-toc">
@@ -76,14 +76,13 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A model scored on data it learned from may simply have memorised it. So hold some data back, train on the rest, and score on what the model has not seen. Cross-validation (CV) repeats this so every row takes a turn as unseen data.</p>
-        <p>It is honest only if <em>the held-out data resembles the future the model will face</em>. Bank data breaks this three ways: it is ordered in time, it comes in clumps (one customer or card makes many rows), and its labels arrive late. A random shuffle ignores all three, so the notebook score looks good and production disappoints.</p>
-        <p>Think of an exam that repeats the textbook's questions: the mark shows memory, not understanding. If a card's 14:02 purchase is in training and its 14:05 purchase is in test, the model scores well by recognising a neighbour. Tomorrow's transactions have none.</p>
+        <p>A model scored on data it learned from may simply have memorised it. So hold some data back, train on the rest and score on what the model has not seen. Cross-validation (CV) repeats this so every row takes a turn as unseen data.</p>
+        <p>It is honest only if the held-out data resembles the future. Bank data is ordered in time, clumped by customer and slow to get labels, and a random shuffle ignores all three. The notebook score looks good and production disappoints.</p>
       </div>
 
       <figure class="figure" id="fig-schemes">
         <div class="fig-head"><span class="fig-title">What each validation scheme lets the model see</span><span class="fig-tag">Simulation 1 of 3</span></div>
-        <p class="try"><b>Try:</b> pick <b>Random 5-fold</b> and step through the folds. Note how many test rows share a customer with training, and how many training rows come <em>after</em> the test rows. Then switch to <b>Group</b> and <b>Expanding window</b>: both numbers fall to zero. The gap variant adds a buffer for label delay.</p>
+        <p class="try"><b>Try:</b> pick <b>Random 5-fold</b> and note how many test rows share a customer with training, and how many training rows come <em>after</em> the test rows. <b>Group</b> and <b>Expanding window</b> bring those to zero.</p>
         <div class="btns" role="group" aria-label="Validation scheme" id="sch-btns">
           <button class="btn" type="button" data-s="rand" aria-pressed="true">Random 5-fold</button>
           <button class="btn" type="button" data-s="group" aria-pressed="false">Group 5-fold</button>
@@ -107,17 +106,13 @@
           <div class="stat" id="st1-f-b"><div class="k">Training rows dated after the first test row</div><div class="v" id="st1-f"></div><div class="s">information from the future</div></div>
         </div>
         <p class="verdict" id="s1-verdict"></p>
-        <p class="sim-note">Simulated: 50 transactions in time order across 10 customers. No model is trained; this shows only what each scheme lets into training.</p>
+        <p class="sim-note">Simulated: 50 transactions across 10 customers. No model is trained.</p>
       </figure>
 
       <div class="prose">
-        <p>Two ideas to carry through.</p>
-        <ul>
-          <li><strong>The split is part of the model.</strong> A good scheme answers "how well will this do on <em>new</em> data of the kind we will meet?"</li>
-          <li><strong>Segments are a different question.</strong> Clustering has no label to score against. An algorithm always hands you segments, and even real segments describe without explaining.</li>
-        </ul>
+        <p>Segments are a different question: clustering has no label to score against, and even real segments describe without explaining.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Finish this sentence before any CV: "In production the model will be scored on ___ that arrives ___ after the training data, for customers who ___." Build the folds to match it.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before any CV, finish this sentence: "In production the model will be scored on ___ that arrives ___ after the training data, for customers who ___." Build the folds to match.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -126,44 +121,25 @@
 
       <h3 class="sub" id="m-kfold">K-fold cross-validation: what it estimates</h3>
       <div class="prose">
-        <p>Split rows into K folds. For each fold, train on the other K−1, score on that fold, then average the K scores. With 100,000 rows and K = 5, each fit trains on 80,000 and scores 20,000, and every row is scored once by a model that never saw it.</p>
-        <ul>
-          <li><strong>It estimates a procedure, not the final model.</strong> The K fitted models are discarded and you ship a refit on all data. The score says how well "this algorithm, these settings" tends to do.</li>
-          <li><strong>Fold spread understates uncertainty.</strong> Training sets overlap heavily, so read "mean ± sd" as a rough guide and use repetition or a bootstrap (F2.2) when it matters.</li>
-          <li><strong>Everything learned from data happens inside the fold.</strong> Scaling, imputing, feature selection, target encoding, SMOTE (F3.5): fit on the training part only, using a pipeline. Fitting a scaler on all rows leaks the test mean into training (F3.1).</li>
-        </ul>
-      </div>
-<pre><code>from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.model_selection import cross_val_score, TimeSeriesSplit
-
-model = make_pipeline(StandardScaler(), HistGradientBoostingClassifier())
-cv = TimeSeriesSplit(n_splits=5, gap=14)          # 14-day gap for label delay
-scores = cross_val_score(model, X, y, cv=cv, scoring="average_precision")</code></pre>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Two variants matter for banking. <strong>Stratified</strong> K-fold keeps the positive rate equal in each fold, so a fold with three frauds does not give nonsense (<a href="f3-imbalanced-data.html#m-split">F3.5</a>). <strong>Group</strong> K-fold keeps all rows of one entity together (next section).</p>
+        <p>Split the rows into K folds, train on K&minus;1 of them, score on the held-out fold, repeat and average. It estimates how well a procedure (algorithm plus settings) does, not the final model, which you refit on all the data.</p>
+        <p>Everything learned from data, such as scaling, imputing or SMOTE, must happen inside the fold, using a pipeline. Otherwise test information leaks into training. Stratified K-fold keeps the positive rate equal in each fold, which matters for rare fraud.</p>
       </div>
 
       <h3 class="sub" id="m-groups">Groups: the same customer on both sides</h3>
       <div class="prose">
-        <p>If a customer has 40 transactions and folds are random, the other 39 are likely in training when row 40 is scored. The model can learn "this card, this device" instead of "what fraud looks like". Production also meets <em>new</em> customers, and a new fraudster is by definition not in training. It is like testing pupils on the exact worksheets they practised.</p>
-        <p>The rule: <strong>split at the level at which you will generalise.</strong> Scoring new customers: hold out whole customers. Scoring tomorrow's transactions: hold out time. Often both. Simulation 1 shows the "customers on both sides" counter dropping to zero under Group 5-fold.</p>
+        <p>If a customer has 40 transactions and folds are random, the other 39 are likely in training when row 40 is scored. The model learns "this card" instead of "what fraud looks like", yet production meets new customers.</p>
+        <p>Split at the level at which you will generalise. For new customers, hold out whole customers. For tomorrow's transactions, hold out time. Often both.</p>
       </div>
 
       <h3 class="sub" id="m-temporal">Temporal splits: train on the past, test on the future</h3>
       <div class="prose">
-        <p>The deployed model predicts forwards, so validate forwards, like a forecaster scored only on tomorrow. <strong>Expanding-window</strong> (walk-forward) validation trains on everything up to a date, tests on the next block, then moves the date on. A <strong>rolling window</strong> keeps a fixed length of history, which suits data where old behaviour stops mattering.</p>
-        <ul>
-          <li><strong>Add a gap (embargo) for label delay.</strong> If a fraud label is trusted only after 45 days, then on the day you would have trained, the last 45 days had no reliable labels, so training must stop 45 days before the test block. Rolling-average features need the same buffer (scikit-learn's <code>gap</code>). See <a href="b1-delayed-labels-and-feedback-loops.html">B1</a> for delayed labels.</li>
-          <li><strong>Avoid "blocked" K-fold</strong> (contiguous blocks, training on both sides). It still trains on the future: a model trained on November and tested on October knows a pattern that did not yet exist.</li>
-        </ul>
-        <p>Even a crude "model" that averages the nearest training days looks excellent when it may interpolate between past <em>and</em> future neighbours.</p>
+        <p>The deployed model predicts forwards, so validate forwards. Expanding-window validation trains on everything up to a date, tests on the next block, then moves the date on.</p>
+        <p>Add a gap for label delay. If fraud labels are trusted only after 45 days, training must stop 45 days before the test block (see <a href="b1-delayed-labels-and-feedback-loops.html">B1</a>). Avoid "blocked" K-fold, which still trains on the future.</p>
       </div>
 
       <figure class="figure" id="fig-drift">
         <div class="fig-head"><span class="fig-title">Random folds borrow from the future; forward folds do not</span><span class="fig-tag">Simulation 2 of 3</span></div>
-        <p class="try"><b>Try:</b> set persistence near 0.95 (things change slowly, like balances). Random 5-fold promises an error far below what the model really delivers on the future (black bar); the forward window lands close. At persistence 0 all bars agree, so random folds are fine there. Raise the gap: label delay makes the truth worse, and only the forward scheme with a matching gap sees it.</p>
+        <p class="try"><b>Try:</b> set persistence near 0.95. Random 5-fold promises an error far below the real one (black bar); the forward window lands close. At persistence 0 all bars agree.</p>
         <div class="chart-wrap" id="ser-chart"></div>
         <div class="chart-wrap" id="drift-chart"></div>
         <div class="controls">
@@ -177,50 +153,30 @@ scores = cross_val_score(model, X, y, cv=cv, scoring="average_precision")</code>
           <div class="stat" id="st2-o-b"><div class="k">Random folds understate error by</div><div class="v" id="st2-o"></div><div class="s">relative to the real error</div></div>
         </div>
         <p class="verdict" id="s2-verdict"></p>
-        <p class="sim-note">Simulated: 240 days of a drifting level plus noise. The "model" averages the three nearest training days. Folds use days 0 to 199; the real future is days 200 to 239. Bars average 30 random series; the line chart shows the first.</p>
+        <p class="sim-note">Simulated: 240 days of a drifting level plus noise. The real future is days 200 to 239.</p>
       </figure>
 
       <div class="prose">
-        <p>Random folds are harmless only when rows are exchangeable, meaning shuffling changes nothing. Transactions, balances, rates and defaults are not: they have time order, drift and repeating entities.</p>
-        <p>No scheme fixes a true regime change, such as a new instant-payments rule. Temporal validation measures how well the past predicts next month, not the next crisis. That is the job of <a href="f7-drift-monitoring-psi-ks-and.html">drift monitoring</a> (F7).</p>
+        <p>Random folds are harmless only when rows are exchangeable, meaning shuffling changes nothing. Transactions, balances and defaults are not. No scheme fixes a true regime change; that is the job of <a href="f7-drift-monitoring-psi-ks-and.html">drift monitoring</a> (F7).</p>
       </div>
 
       <h3 class="sub" id="m-select">Tuning and selection: nested CV and the final test set</h3>
       <div class="prose">
-        <p>CV also chooses between models and settings (<a href="f4-hyperparameter-tuning-grid-random-and.html">F4.7, tuning</a>), and here lies a trap. Try 200 settings and report the best CV score, and the number is biased upwards because you picked it for being high.</p>
-        <p>The remedy is <strong>nested CV</strong>: an inner loop picks settings, and an outer loop scores the whole "tune then fit" procedure on data the inner loop never saw. It is costly, so the usual production equivalent is a time-ordered three-way split: <strong>train</strong> (fit), <strong>validation</strong> (choose settings), <strong>test</strong> (the final months, touched once). Peek at the test set to decide anything and it becomes another validation set.</p>
-        <p>Compare models on the <em>same folds</em> and look at the paired difference per fold. When two settings are close, prefer the simpler one.</p>
-      </div>
-      <div class="table-wrap" style="margin-top:16px">
-        <table class="data">
-          <thead><tr><th>Situation</th><th>Scheme</th><th>Why</th></tr></thead>
-          <tbody>
-            <tr><td><b>Card or payment fraud, live scoring</b></td><td>Expanding or rolling window, grouped by card, gap equal to label delay</td><td>Tactics drift, cards repeat, chargebacks arrive late.</td></tr>
-            <tr><td><b>Retail credit application scorecard</b></td><td>Out-of-time test on the latest vintages, stratified inside training</td><td>Each applicant appears once; the economy changes between vintages; default labels take 12+ months.</td></tr>
-            <tr><td><b>Complaint or KYC text classifier</b></td><td>Group by customer or case, check time; stratified by language</td><td>One customer writes many near-identical messages; Arabic and English may behave differently.</td></tr>
-          </tbody>
-        </table>
+        <p>Try 200 settings (<a href="f4-hyperparameter-tuning-grid-random-and.html">F4.7</a>) and report the best CV score, and the number is biased upwards because you picked it for being high. Nested CV fixes this, but it is costly. The usual equivalent is a time-ordered train, validation and test split, with the test set touched once. Peek at it to decide anything and it becomes another validation set.</p>
       </div>
 
       <h3 class="sub" id="m-cluster">Clustering: finding groups when nobody told you the answer</h3>
       <div class="prose">
-        <p>Clustering is unsupervised: no label, just a table of customers and a wish to group similar ones. The standard method is <strong>k-means</strong>: pick k, place k centres, assign each customer to the nearest centre, move each centre to the average of its customers, and repeat until nothing moves.</p>
-      </div>
-      <div class="prose" style="margin-top:0">
-        <p>The aim is tight groups, but tightness always improves as k grows, so it cannot choose k. Results depend on the starting centres, so use k-means++ seeding and several restarts. It finds round blobs of similar size and is sensitive to units.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Three things decide whether segments mean anything.</p>
+        <p>Clustering has no label, just customers you wish to group by similarity. In k-means you pick k, place k centres, assign each customer to the nearest, move each centre to the average of its customers and repeat. Two things decide whether the result means anything.</p>
         <ul>
-          <li><strong>Scaling is a modelling choice.</strong> If one feature is monthly spend (0 to 40,000 AED) and another is tenure (0 to 15 years), raw distance is almost all spend, like ranking runners when one is timed in milliseconds. Standardise so each feature counts equally, and take a log of heavy-tailed money amounts first. Simulation 3 carves the same customers two ways.</li>
-          <li><strong>You choose k, and the data will not object.</strong> k-means returns k groups for any k, even on a featureless cloud. Check the <em>silhouette</em>, which scores each customer from −1 to 1: near 1 means clearly inside its group, near 0 on the border, negative probably in the wrong group. An average near 0.7 is strong and near 0.4 is weak. Also check <em>stability</em>: do you get the same groups on a different sample? A high silhouette still does not say the groups are useful.</li>
-          <li><strong>Other algorithms answer other questions.</strong> Hierarchical clustering gives a tree to cut at any height, DBSCAN/HDBSCAN find dense regions of any shape and label the rest noise, and for text you embed first (<a href="f1-vectors-matrices-geometry.html">F1.1</a>) then cluster. With hundreds of features distances blur, so reduce first.</li>
+          <li><strong>Scaling is a modelling choice.</strong> If spend runs to 40,000 AED and tenure to 15 years, distance is almost all spend. Standardise first, and take a log of heavy-tailed money amounts.</li>
+          <li><strong>You choose k, and the data will not object.</strong> k-means returns k groups even on a featureless cloud. The <em>silhouette</em> runs from &minus;1 to 1: about 0.7 is strong, about 0.4 weak. Also check <em>stability</em>, meaning the same groups on a different sample.</li>
         </ul>
       </div>
 
       <figure class="figure" id="fig-cluster">
         <div class="fig-head"><span class="fig-title">k-means will give you groups. Are they there?</span><span class="fig-tag">Simulation 3 of 3</span></div>
-        <p class="try"><b>Try:</b> with <b>Three real groups</b> and k = 3, silhouette and stability are both high and fall away from 3. On <b>One continuous cloud</b> k-means still draws tidy regions, but the silhouette is only about 0.4 with no peak. On <b>Two groups split by tenure</b> with k = 2, toggle <b>standardise</b>: raw, the silhouette looks excellent yet the split just cuts by spend; standardised, tenure is found.</p>
+        <p class="try"><b>Try:</b> on <b>One continuous cloud</b>, k-means still draws tidy regions but the silhouette stays near 0.4 with no peak. On <b>Two groups split by tenure</b> with k = 2, toggle <b>standardise</b>: raw, the split just cuts by spend.</p>
         <div class="btns" role="group" aria-label="Dataset" id="ds-btns">
           <button class="btn" type="button" data-d="A" aria-pressed="true">Three real groups</button>
           <button class="btn" type="button" data-d="B" aria-pressed="false">One continuous cloud</button>
@@ -242,32 +198,25 @@ scores = cross_val_score(model, X, y, cv=cv, scoring="average_precision")</code>
           <span><i style="background:var(--warn)"></i>Stability for each k</span>
         </div>
         <p class="verdict" id="s3-verdict"></p>
-        <p class="sim-note">Simulated: 240 customers with monthly spend (AED) and tenure (years). k-means uses k-means++ seeding and 3 restarts. Stability is the average adjusted Rand index (1 means identical groupings) over subsamples. All computed in your browser.</p>
+        <p class="sim-note">Simulated: 240 customers with monthly spend (AED) and tenure (years), computed in your browser.</p>
       </figure>
 
       <h3 class="sub" id="m-describe">Segments describe; they do not explain</h3>
       <div class="prose">
-        <p>A cluster label such as "young high spenders" summarises how the algorithm grouped the columns you chose. It is not a cause. It is like sorting a wardrobe by colour: the piles are real, but they say nothing about why you bought the clothes.</p>
-        <ul>
-          <li><strong>Change the features, change the segments.</strong> Cluster on spend and you get spend segments; add products and you get different people.</li>
-          <li><strong>A segment does not tell you what to do.</strong> Customers who look alike need not respond alike to a promotion. Run an experiment (F3.6) or estimate the treatment effect (<a href="f9-causal-inference.html">F9.2</a>).</li>
-          <li><strong>Segments drift and can proxy protected traits.</strong> Re-fit and track segments over time, and check each segment's composition before it drives pricing or access (<a href="g2-fairness-definitions-and-their-trade.html">G2</a>).</li>
-        </ul>
-        <p>Judge a segment on four tests: <em>actionable</em>, <em>stable</em>, <em>distinct</em> (describable in one sentence) and <em>sizeable</em>.</p>
+        <p>A label such as "young high spenders" summarises how the algorithm grouped the columns you chose. It is not a cause, like sorting a wardrobe by colour. Change the features and the segments change.</p>
+        <p>Customers who look alike need not respond alike to a promotion, so use an experiment (F3.6) for that. Segments can also proxy protected traits, so check their make-up before they drive pricing (<a href="g2-fairness-definitions-and-their-trade.html">G2</a>). A useful segment is actionable, stable, distinct and sizeable.</p>
       </div>
     </section>
 
     <!-- ============================== 5. FAILS ============================== -->
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Each failure comes with its quickest check.</p></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Leakage across time or entity</div><p>Shuffled K-fold on time-ordered data, or one customer, card or device on both sides. Neat folds, strong score, then a weaker first quarter live.</p><div class="spot"><b>Spot it</b>Score the most recent months using only earlier training data, and count IDs shared between train and test. A big drop or a non-zero count means the split was borrowing.</div></li>
-        <li><div class="t">Preprocessing fitted on all rows</div><p>A scaler, imputer, encoder, feature selector or SMOTE fitted before the split.</p><div class="spot"><b>Spot it</b>Ask whether it is inside a pipeline. A feature selector run on all data before CV can produce high scores on pure noise.</div></li>
-        <li><div class="t">Ignoring label delay</div><p>Training includes rows whose labels were not yet known at the time.</p><div class="spot"><b>Spot it</b>Ask "on the day this model would have been trained, which labels existed?" Look for a gap equal to the maturation period.</div></li>
-        <li><div class="t">Reporting the best score from a big search</div><p>The tuned CV number, or a test score looked at repeatedly, presented as expected performance.</p><div class="spot"><b>Spot it</b>Ask how many configurations were tried and how many times the test set was scored. After a few, the test set has become a validation set.</div></li>
-        <li><div class="t">Choosing k, or scaling, to make a nice story</div><p>"Our customers fall into five segments," with the five picked by taste, or segments that are really "big balance" versus "small balance".</p><div class="spot"><b>Spot it</b>Ask for silhouette and stability at several k and the cluster centres per feature. No peak, or one feature explaining everything, means the groups are conventions.</div></li>
-        <li><div class="t">Treating clusters as causes, or proxies for protected traits</div><p>"Segment 3 churns because they are digital-first," or a cluster that is 90% one nationality and gets worse terms.</p><div class="spot"><b>Spot it</b>Ask what was manipulated; without an experiment say "associated with". Tabulate segment composition by sensitive attributes before use.</div></li>
+        <li><div class="t">Leakage across time or entity</div><p>Shuffled folds on time-ordered data, or one customer on both sides. Strong score, weaker live.</p><div class="spot"><b>Spot it</b>Score the latest months using only earlier data, and count IDs shared between train and test.</div></li>
+        <li><div class="t">Preprocessing fitted on all rows</div><p>A scaler, selector or SMOTE fitted before the split.</p><div class="spot"><b>Spot it</b>Ask whether it sits inside a pipeline.</div></li>
+        <li><div class="t">Ignoring label delay</div><p>Training includes rows whose labels were not yet known.</p><div class="spot"><b>Spot it</b>Ask which labels existed on the day the model would have been trained.</div></li>
+        <li><div class="t">Reporting the best score from a big search</div><p>The tuned CV number presented as expected performance.</p><div class="spot"><b>Spot it</b>Ask how many configurations were tried and how often the test set was scored.</div></li>
+        <li><div class="t">Choosing k to make a nice story, or reading clusters as causes</div><p>"Five segments" picked by taste, or "segment 3 churns because it is digital-first".</p><div class="spot"><b>Spot it</b>Ask for silhouette and stability at several k. Without an experiment, say "associated with".</div></li>
       </ul>
     </section>
 
@@ -275,14 +224,11 @@ scores = cross_val_score(model, X, y, cv=cv, scoring="average_precision")</code>
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. After 5-fold CV, why do you still refit on all the data, and what does the CV score describe?</summary><div class="ans"><p>The five fold models are discarded. The CV score describes how well this algorithm with these settings tends to do on data like the folds. You ship one refit on all rows.</p></div></details>
-        <details class="reveal"><summary>2. A card model uses 14-day rolling counts; chargebacks confirm after 45 days. You test on March. Where does training end?</summary><div class="ans"><p>At least 45 days before March starts, since those labels were not reliable yet. The gap must cover the larger of the label delay and the feature window.</p></div></details>
-        <details class="reveal"><summary>3. AUC is 0.97 in shuffled 10-fold CV and 0.83 on the last two months. Name three explanations and a check for each.</summary><div class="ans"><p>(a) Time leakage or drift: re-run with forward folds. (b) Same customers on both sides: count shared IDs, re-run with group folds. (c) Preprocessing outside the fold: move it into a pipeline.</p></div></details>
-        <details class="reveal"><summary>4. Why does nested CV exist, and what do large-data teams do instead?</summary><div class="ans"><p>Picking the best of many settings inflates the score you pick, so you need a score from data the tuning never touched. Nested CV does that but multiplies the number of fits. Large-data teams use a time-ordered train, validation and test split instead.</p></div></details>
-        <details class="reveal"><summary>5. Why can k-means on a featureless cloud still look decent?</summary><div class="ans"><p>It always cuts space into k regions. The tell is a modest silhouette (about 0.4) with no peak at any k, against about 0.7 for real groups. Stability alone is not enough: a blob split along its long axis can be repeatable.</p></div></details>
-        <details class="reveal"><summary>6. What does a silhouette near 1, near 0 and negative say about a customer?</summary><div class="ans"><p>Near 1: clearly inside its group. Near 0: on the border between two groups. Negative: closer to another group than its own, so probably misassigned.</p></div></details>
-        <details class="reveal"><summary>7. You cluster on monthly spend (AED) and age without scaling. Which dominates?</summary><div class="ans"><p>Spend: it spans tens of thousands while age spans about 60, so squared distance is nearly all spend. Standardise, or log spend then standardise.</p></div></details>
-        <details class="reveal"><summary>8. Why is "segment 2 churns more because it is young" unsupported by clustering alone?</summary><div class="ans"><p>Clusters only group by features. Young customers may differ in income, products or channel, and any could drive churn. A cause needs an experiment or causal design (F3.6, F9.2).</p></div></details>
+        <details class="reveal"><summary>1. After 5-fold CV, why refit on all the data, and what does the CV score describe?</summary><div class="ans"><p>The fold models are discarded. The score describes how well this algorithm with these settings tends to do on data like the folds.</p></div></details>
+        <details class="reveal"><summary>2. Chargebacks confirm after 45 days and you test on March. Where does training end?</summary><div class="ans"><p>At least 45 days before March starts, since later labels were not reliable yet.</p></div></details>
+        <details class="reveal"><summary>3. AUC is 0.97 in shuffled CV and 0.83 on the last two months. What are the likely causes?</summary><div class="ans"><p>Time leakage or drift, the same customers on both sides, or preprocessing outside the fold. Re-run with forward folds, group folds and a pipeline.</p></div></details>
+        <details class="reveal"><summary>4. Why does k-means on a featureless cloud still look decent?</summary><div class="ans"><p>It always cuts space into k regions. The tell is a modest silhouette with no peak at any k.</p></div></details>
+        <details class="reveal"><summary>5. Why is "segment 2 churns more because it is young" unsupported?</summary><div class="ans"><p>Clusters only group by features. Income, products or channel may drive churn instead, and a cause needs an experiment.</p></div></details>
       </div>
     </section>
 
