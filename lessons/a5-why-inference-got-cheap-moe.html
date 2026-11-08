@@ -54,31 +54,31 @@
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Serving a language model is limited by moving memory, not by arithmetic, so the cheap-inference tricks all avoid moving or recomputing things (use only some of the weights, verify several tokens per pass, reuse the prefix, give easy questions to a small model), and the same cost logic decides whether a system should read everything, retrieve what it needs, or remember a summary.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Serving a model is limited by moving memory, not arithmetic, so the cheap-inference tricks avoid moving or recomputing things (use some of the weights, verify several tokens per pass, reuse the prefix, give easy questions to a small model), and the same logic decides whether a system should read everything, retrieve, or remember.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>Picture a bank assistant answering 200,000 questions a day. Every call carries the same 6,000-word instruction block, so 95% of the input is identical, and most questions are "what is my card limit". Paying full price as if each call were new is like refuelling from empty before every taxi trip.</p>
-        <p>The key fact: <strong>generating text is memory-bound</strong>. For each token the chip reads every active weight from memory and does very little arithmetic with it. Like a chef who spends the shift walking to the pantry, it mostly waits. Anything that reads fewer weights per token, gets more tokens per read, or avoids repeat work cuts the cost. Prices fell by large factors over a few years because these levers stacked, not because of one miracle.</p>
+        <p>Picture a bank assistant answering 200,000 questions a day. Every call carries the same 6,000-word instruction block. Paying full price each time is like refuelling from empty before every taxi trip.</p>
+        <p>The key fact: <strong>generating text is memory-bound</strong>. For each token the chip reads every active weight from memory and does very little arithmetic with it, like a chef who spends the shift walking to the pantry. Anything that reads fewer weights, gets more tokens per read, or avoids repeat work cuts the cost. Prices fell because these levers stacked.</p>
       </div>
       <div class="table-wrap">
         <table class="data">
           <thead><tr><th>Trick</th><th>What it avoids</th><th>Does it change the answer?</th></tr></thead>
           <tbody>
-            <tr><td><b>Mixture of experts (MoE)</b></td><td>Reading and multiplying most of the weights for each token</td><td>Different model; quality is its own</td></tr>
-            <tr><td><b>Speculative decoding</b></td><td>Running the big model once per token</td><td>No. The output distribution is provably the same</td></tr>
-            <tr><td><b>Prompt caching</b></td><td>Re-reading and re-processing a repeated prefix</td><td>No (apart from numerical noise)</td></tr>
+            <tr><td><b>Mixture of experts (MoE)</b></td><td>Using most of the weights per token</td><td>Different model</td></tr>
+            <tr><td><b>Speculative decoding</b></td><td>One big-model pass per token</td><td>No</td></tr>
+            <tr><td><b>Prompt caching</b></td><td>Re-processing a repeated prefix</td><td>No</td></tr>
             <tr><td><b>Routing and cascades</b></td><td>Using a big model on an easy question</td><td>Yes. Measure it</td></tr>
-            <tr><td><b>Retrieval or memory instead of stuffing</b></td><td>Paying to read the whole corpus on every call</td><td>Yes. It changes what the model can see</td></tr>
+            <tr><td><b>Retrieval or memory instead of stuffing</b></td><td>Reading the whole corpus every call</td><td>Yes</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Sort the tricks by the last column. Speculative decoding and caching are free lunches. Routing, smaller experts and retrieval trade quality for money, so they need evaluation. A good engineer knows which is which; a good manager asks.</p>
+        <p>Sort the tricks by the last column. Speculative decoding and caching are free lunches. Routing, smaller experts and retrieval trade quality for money, so they need evaluation.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Price per token is about memory traffic and utilisation, not clever mathematics. When a vendor cuts a price, ask which of the five levers moved. When your own bill is high, check the same five.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>When a vendor cuts a price, or your own bill is high, ask which of the five levers moved.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -87,15 +87,12 @@
 
       <h3 class="sub" id="m-moe">Mixture of experts: a big model that only uses a slice per token</h3>
       <div class="prose">
-        <p>Think of a hospital. A dense model sends every patient past every specialist. An MoE has a triage nurse who sends each patient to the best few. Technically, a dense transformer passes every token through every weight, mostly in the feed-forward block of each layer (see <a href="f5-attention.html">attention</a> for the other half). An MoE replaces that block with <i>E</i> parallel blocks, called experts, plus a <strong>router</strong>: a small linear layer that scores the experts for each token and sends it to the top <i>k</i> (often 1 to a handful), mixing their outputs. Attention and embeddings stay shared. Two numbers separate what the model <em>is</em> from what it <em>costs</em>:</p>
-      </div>
-      <div class="formula">
-        <math display="block"><msub><mi>N</mi><mtext>total</mtext></msub><mo>=</mo><msub><mi>N</mi><mtext>shared</mtext></msub><mo>+</mo><mi>E</mi><mo>·</mo><msub><mi>N</mi><mtext>expert</mtext></msub><mspace width="2em"></mspace><msub><mi>N</mi><mtext>active</mtext></msub><mo>=</mo><msub><mi>N</mi><mtext>shared</mtext></msub><mo>+</mo><mi>k</mi><mo>·</mo><msub><mi>N</mi><mtext>expert</mtext></msub></math>
-        <p class="where">Total parameters set the memory you must hold and, loosely, what the model can store. Active parameters set the arithmetic per token. Example: 600 billion total and 35 billion active stores like a huge model and computes like a mid-sized one. Common misreading: "only 35 billion active, so it is small to host". Hosting memory follows the total.</p>
+        <p>Think of a hospital. A dense model sends every patient past every specialist. A mixture of experts (MoE) has a triage nurse, the <strong>router</strong>, who sends each token to the best few of many parallel "expert" blocks. Two numbers matter: <strong>total parameters</strong>, which is what you must store in memory, and <strong>active parameters</strong>, which is what each token actually uses and so sets the compute. 600 billion total and 35 billion active stores like a huge model and computes like a mid-sized one.</p>
+        <p>Common misreading: "only 35 billion active, so it is small to host". Hosting memory follows the total.</p>
       </div>
       <figure class="figure" id="fig-moe">
         <div class="fig-head"><span class="fig-title">Total versus active parameters</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> start at 64 experts and top-4. Raise the experts to 256 and see the total balloon while the active slice barely moves. Then raise <i>k</i>: that is what you pay per token. Look at the GPU count: the memory bill arrives even though the compute bill does not.</p>
+        <p class="try"><b>Try:</b> raise the experts to 256: the total balloons while the active slice barely moves. Then raise <i>k</i>, which is what you pay per token. Note the GPU count: the memory bill arrives even though the compute bill does not.</p>
         <div class="chart-wrap" id="moe-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-E">Experts per layer <output for="s-E"></output></label><input type="range" id="s-E" min="8" max="256" step="8" value="64"></div>
@@ -108,35 +105,25 @@
           <div class="stat"><div class="k">Compute per token vs a dense model of the same total size</div><div class="v" id="m-ratio"></div><div class="s">lower is cheaper</div></div>
         </div>
         <p class="verdict" id="m-verdict"></p>
-        <p class="sim-note">Simulated and illustrative: a fixed 8 billion shared parameters and 2 billion per expert, summed over all layers. Real models split sizes differently. Weights only; no KV cache or overhead.</p>
+        <p class="sim-note">Simulated and illustrative: 8 billion shared parameters, 2 billion per expert. Weights only.</p>
       </figure>
       <div class="prose">
         <p>Cheaper, but not free:</p>
         <ul>
-          <li><strong>The router is hard to train.</strong> Left alone it favours a few experts and the rest never learn. Training adds a load-balancing loss (Shazeer et al., 2017; Fedus et al., 2021), or in some recent designs an adjusted bias term. Production systems also cap tokens per expert per batch.</li>
-          <li><strong>Memory does not shrink.</strong> All experts sit in fast memory across several accelerators, with tokens shipped between them. The cost is network traffic and GPU count. Under heavy traffic every expert gets work and the saving is real; a single user at small batch wastes the idle experts.</li>
-          <li><strong>Experts are not subject specialists.</strong> They tend to specialise on syntax or token patterns, not "banking" or "French". You cannot hand-pick an "Arabic expert".</li>
-          <li><strong>Quality sits between active and total.</strong> An MoE performs like a dense model larger than its active count but smaller than its total. It is a trade, not a loophole. See <a href="r1-mixture-of-experts-at-scale.html">Mixture-of-experts at scale</a> for the research frontier.</li>
+          <li><strong>Memory does not shrink.</strong> All experts sit in fast memory across several accelerators. The saving is real under heavy traffic, less so for a single user.</li>
+          <li><strong>Quality sits between active and total.</strong> An MoE performs like a dense model larger than its active count but smaller than its total. See <a href="r1-mixture-of-experts-at-scale.html">Mixture-of-experts at scale</a>.</li>
+          <li><strong>Experts are not subject specialists.</strong> They split on token patterns, not "banking" or "French".</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-spec">Speculative decoding: verify many tokens for the price of one</h3>
       <div class="prose">
-        <p>Checking is cheaper than writing. A teacher marks a whole page of answers in one pass, though the pupil wrote them one at a time. Likewise, reading the weights once can verify many tokens at once, as when a model scores a whole prompt in parallel (Leviathan et al., 2023; Chen et al., 2023).</p>
-        <ol>
-          <li>A small <strong>draft</strong> model proposes γ tokens, say 4.</li>
-          <li>The big <strong>target</strong> model scores all of them in one forward pass.</li>
-          <li>Walk from the left. Each draft token is accepted with a probability based on how closely draft and target agree. At the first rejection, discard the rest and sample a corrected token from the target.</li>
-        </ol>
-        <p>You gain at least one token per big-model pass, often several. The rule makes the text follow <strong>exactly the target model's distribution</strong>: a speed trick, not a quality trade. A useless draft wastes time, never accuracy. With average acceptance probability α per token (assumed independent, only roughly true), the expected tokens per pass is:</p>
-      </div>
-      <div class="formula">
-        <math display="block"><mi>E</mi><mo stretchy="false">[</mo><mtext>tokens</mtext><mo stretchy="false">]</mo><mo>=</mo><mfrac><mrow><mn>1</mn><mo>−</mo><msup><mi>α</mi><mrow><mi>γ</mi><mo>+</mo><mn>1</mn></mrow></msup></mrow><mrow><mn>1</mn><mo>−</mo><mi>α</mi></mrow></mfrac><mspace width="2em"></mspace><mtext>speed-up</mtext><mo>=</mo><mfrac><mrow><mi>E</mi><mo stretchy="false">[</mo><mtext>tokens</mtext><mo stretchy="false">]</mo></mrow><mrow><mi>γ</mi><mi>c</mi><mo>+</mo><mn>1</mn></mrow></mfrac></math>
-        <p class="where"><i>c</i> is one draft token's cost relative to one big-model pass (0.1 means a tenth). Reading it: α is how predictable the text is; speed-up above 1× means drafting pays. Example: α = 0.8, γ = 4, c = 0.1 gives (1 − 0.8<sup>5</sup>) ÷ 0.2 = 3.36 tokens per pass at a cost of 1.4 passes, a <strong>2.4× speed-up</strong>.</p>
+        <p>Checking is cheaper than writing. A teacher marks a whole page in one pass, though the pupil wrote it one word at a time. A small <strong>draft</strong> model guesses the next few tokens; the big <strong>target</strong> model checks them all in one pass, keeps those it agrees with, and corrects the first it does not. Every pass yields at least one token, often several.</p>
+        <p>The check makes the output follow <strong>exactly the big model's distribution</strong>: a speed trick, not a quality trade. A useless draft wastes time, never accuracy. Templated letters speed up a lot; creative text much less. A draft right about 80% of the time, at a tenth of the big model's cost, gives roughly a 2.4x speed-up.</p>
       </div>
       <figure class="figure" id="fig-spec">
         <div class="fig-head"><span class="fig-title">How far can drafting go?</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> the curve rises, peaks, then falls. Raise the acceptance rate (easy, predictable text such as templated letters) and the best draft length moves right. Lower it (creative or unusual text) and long drafts waste time. Make the draft expensive and the whole benefit disappears.</p>
+        <p class="try"><b>Try:</b> the curve rises, peaks, then falls. Raise the acceptance rate (predictable text) and longer drafts pay. Lower it and long drafts waste time. Make the draft expensive and the benefit disappears.</p>
         <div class="chart-wrap" id="spec-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-a">Acceptance rate per draft token (α) <output for="s-a"></output></label><input type="range" id="s-a" min="0.3" max="0.95" step="0.01" value="0.8"></div>
@@ -149,36 +136,35 @@
           <div class="stat"><div class="k">Best draft length here</div><div class="v" id="p-best"></div><div class="s" id="p-best-s"></div></div>
         </div>
         <p class="verdict" id="p-verdict"></p>
-        <p class="sim-note">Simulated: exact evaluation of the formula above, assuming independent acceptance with the same α at every position and ignoring batching and overhead. Measure acceptance on your own traffic.</p>
+        <p class="sim-note">Simulated: ignores batching and overhead. Measure acceptance on your own traffic.</p>
       </figure>
       <div class="prose">
-        <p>Variants: heads attached to the target itself (Medusa, EAGLE), self-speculation that skips layers, and multi-token prediction, which trains the model to predict ahead and reuses that as a free draft. All use the same verify-in-one-pass logic. The benefit is biggest for single-user latency. On a saturated server with large batches there is no spare capacity for verification, so it shrinks.</p>
+        <p>The benefit is biggest for single-user latency. On a saturated server there is no spare capacity for verification, so it shrinks.</p>
       </div>
 
       <h3 class="sub" id="m-cache">Caching, and the KV cache behind it</h3>
       <div class="prose">
-        <p>The KV cache is the model's notes on what it has already read. While reading a prompt, the model computes a key and a value vector per token and layer that later tokens attend to (see <a href="m1-context-windows-and-the-kv.html">context windows and the KV cache</a>). Within a request, the stored notes avoid recomputing the past for every new token. Across requests they enable <strong>prefix caching</strong>: if a new prompt starts with exactly the same tokens as a recent one, the server reuses the notes and processes only the new tail. Like a bookmark, you resume rather than re-read from page one.</p>
+        <p>The KV cache is the model's notes on what it has already read (see <a href="m1-context-windows-and-the-kv.html">context windows and the KV cache</a>). Within a request, the notes avoid recomputing the past for every new token. Across requests they enable <strong>prefix caching</strong>: if a new prompt starts with exactly the same tokens as a recent one, the server reuses the notes and processes only the new tail. It is a bookmark: you resume rather than re-read.</p>
         <ul>
-          <li><strong>Order matters.</strong> The match is on an exact prefix. Put stable material first (system prompt, policies, tool definitions, examples) and the varying part last (the customer's question). One changed token at the front, such as a timestamp, breaks the whole cache.</li>
-          <li><strong>Pricing reflects the saving.</strong> Providers typically charge a fraction of the input price for cache reads, sometimes a small extra for the first write, and caches expire after minutes to hours. Terms change often, so read the current pricing page. The simulation uses clearly labelled illustrative numbers.</li>
-          <li><strong>Memory is the limit.</strong> KV cache per token is large and grows with context. Serving engines page it in blocks like virtual memory (vLLM's PagedAttention, Kwon et al., 2023), fitting many more concurrent requests. That utilisation gain is as big a part of falling prices as any model trick.</li>
-          <li><strong>Governance.</strong> Cached prefixes are tied to an account or tenant. Ask your provider how isolation works before putting customer data in cached prompts.</li>
+          <li><strong>Order matters.</strong> The match is on an exact prefix. Put stable material first (system prompt, policies, examples) and the varying part last (the customer's question). One changed token at the front, such as a timestamp, breaks the whole cache.</li>
+          <li><strong>Pricing reflects the saving.</strong> Providers charge a fraction of the input price for cache reads, and caches expire after minutes to hours.</li>
+          <li><strong>Governance.</strong> Ask your provider how tenant isolation works before putting customer data in cached prompts.</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-route">Model routing and cascades</h3>
       <div class="prose">
-        <p>A router is a hospital front desk: colds go to the nurse, chest pain to the consultant. Model prices differ by an order of magnitude or more and most questions are easy, so a router picks which model sees each request. Three designs:</p>
+        <p>A router is a hospital front desk: colds go to the nurse, chest pain to the consultant. Prices differ by an order of magnitude and most questions are easy, so a router picks the model. Three designs:</p>
         <ul>
-          <li><strong>Cascade.</strong> Always try the cheap model; escalate if its answer looks unreliable (Chen et al., 2023, FrugalGPT). Costs the cheap call every time, plus the expensive call on escalations.</li>
-          <li><strong>Pre-router.</strong> A small classifier reads only the query and picks a model first (Ong et al., 2024, RouteLLM). Cheaper than a cascade, but blind to answer quality.</li>
-          <li><strong>Rules.</strong> Balance enquiries go to the small model; credit memos and complaint-flagged cases go to the big one. Boring and often the best start.</li>
+          <li><strong>Cascade.</strong> Always try the cheap model; escalate if its answer looks unreliable.</li>
+          <li><strong>Pre-router.</strong> A small classifier reads only the query and picks a model first. Cheaper, but blind to answer quality.</li>
+          <li><strong>Rules.</strong> Balance enquiries go to the small model; credit memos and complaint-flagged cases go to the big one. Often the best start.</li>
         </ul>
-        <p>Everything depends on <strong>how well you can tell easy from hard</strong>. A cascade needs a confidence signal: token probabilities, a self-reported score, agreement among samples, or a small verifier. Self-reported confidence is often overconfident, so calibrate it against labelled examples (F7.4). The simulation shows two overlapping score distributions: the better they separate, the cheaper the cascade at a given quality.</p>
+        <p>Everything depends on <strong>how well you can tell easy from hard</strong>. A cascade needs a confidence signal, and self-reported confidence is often overconfident, so calibrate it against labelled examples (F7.4).</p>
       </div>
       <figure class="figure" id="fig-casc">
         <div class="fig-head"><span class="fig-title">A cascade: cost against quality</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> keep separation at 2 and slide the threshold. A low bar accepts everything the cheap model says: cheap, but hard questions slip through wrongly. A high bar escalates nearly everything: accurate, but you pay for both models. At separation 0.5 (a poor signal) no threshold gives a good deal.</p>
+        <p class="try"><b>Try:</b> slide the bar. Low: cheap, but hard questions slip through wrongly. High: accurate, but you pay for both models. At separation 0.5 (a poor signal) no bar gives a good deal.</p>
         <div class="chart-wrap" id="casc-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-d">How well confidence separates easy from hard <output for="s-d"></output></label><input type="range" id="s-d" min="0" max="3.5" step="0.1" value="2"></div>
@@ -192,32 +178,32 @@
           <div class="stat" id="c-lost-b"><div class="k">Wrong answers the cheap model got through</div><div class="v" id="c-lost"></div><div class="s">per 1,000 questions</div></div>
         </div>
         <p class="verdict" id="c-verdict"></p>
-        <p class="sim-note">Simulated: cheap model costs AED 2 per 1,000 questions and is right 96% on easy and 50% on hard; the big model costs AED 30 and is right 98% on easy and 86% on hard. Confidence is normal with unit spread, centred at the separation value for easy questions and zero for hard. All figures are made up.</p>
+        <p class="sim-note">Simulated: cheap model AED 2 per 1,000 questions, right 96% on easy and 50% on hard; big model AED 30, right 98% and 86%. All figures are made up.</p>
       </figure>
       <div class="prose">
-        <p>The cost saving is certain; the accuracy loss you must <em>measure</em>, per category, on labelled data from your own traffic. For regulated decisions, route by <strong>risk</strong> as well as difficulty: a cheap model should not be the sole author of an adverse decision reaching a customer.</p>
+        <p>The cost saving is certain; the accuracy loss you must <em>measure</em>, per category, on your own labelled data. For regulated decisions, route by <strong>risk</strong> as well as difficulty: a cheap model should not be the sole author of an adverse decision reaching a customer.</p>
       </div>
 
       <h3 class="sub" id="m-know">Long context, retrieval or memory: choosing how a system knows things</h3>
       <div class="prose">
-        <p>A model knows three kinds of things: what training baked into its weights (stale, unauditable), what is in its context now, and what the system fetches or stores for it. It is the difference between reading the whole library, using the catalogue to fetch a few books, and keeping a notebook. Three designs cover the last two.</p>
+        <p>A model knows what training baked into its weights (stale, unauditable), what is in its context now, and what the system fetches or stores for it. Think of reading the whole library, using the catalogue to fetch a few books, or keeping a notebook.</p>
       </div>
       <div class="table-wrap">
         <table class="data">
           <thead><tr><th>Design</th><th>How it works</th><th>Strengths</th><th>Weaknesses</th></tr></thead>
           <tbody>
-            <tr><td><b>Long context ("stuff it all in")</b></td><td>Whole document or corpus in the prompt.</td><td>Simple. Reasons across documents.</td><td>Pays to read it all every call (unless cached). Slower. Evidence in the middle is under-used (Liu et al., 2023; Hsieh et al., 2024). Capped by the window. Access is all-or-nothing.</td></tr>
-            <tr><td><b>Retrieval (RAG)</b></td><td>Search an index, put only the best few chunks in the prompt. See <a href="m3-chunking-strategies.html">chunking</a> and <a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a>.</td><td>Cheap per call. Scales to any corpus. Cites sources. Per-user permissions.</td><td>A missed passage is never seen. Needs chunking, an index, evaluation. Weak at "summarise everything".</td></tr>
-            <tr><td><b>Memory</b></td><td>System stores preferences, case notes, summaries and reloads them. See <a href="m4-memory-short-term-long-term.html">memory</a>.</td><td>Continuity across sessions. Compact.</td><td>Summaries lose detail and can fix in errors. Stale facts persist. Privacy and retention duties apply.</td></tr>
+            <tr><td><b>Long context</b></td><td>Whole document or corpus in the prompt.</td><td>Simple. Reasons across documents.</td><td>Pays to read it all every call. Slower. Middle evidence under-used. Capped by the window.</td></tr>
+            <tr><td><b>Retrieval (RAG)</b></td><td>Search an index, put only the best few chunks in the prompt. See <a href="m3-chunking-strategies.html">chunking</a>.</td><td>Cheap. Scales. Cites sources. Per-user permissions.</td><td>A missed passage is never seen. Weak at "summarise everything".</td></tr>
+            <tr><td><b>Memory</b></td><td>System stores preferences, case notes and summaries and reloads them. See <a href="m4-memory-short-term-long-term.html">memory</a>.</td><td>Continuity across sessions. Compact.</td><td>Summaries lose detail and can fix in errors. Privacy duties apply.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Rule of thumb: <strong>long context for one-off analysis of a bounded document, retrieval for a large or changing corpus with permissions and citations, memory for continuity about a person or case</strong>. Real systems mix them. Caching makes repeated long contexts cheaper, and <a href="a6-agentic-rag.html">agentic RAG</a> lets the model decide what to look up. Prompting versus RAG versus fine-tuning is in <a href="m2-prompting-versus-rag-versus-fine.html">M2</a>.</p>
+        <p>Rule of thumb: <strong>long context for one-off analysis of a bounded document, retrieval for a large or changing corpus with permissions and citations, memory for continuity about a person or case</strong>. Real systems mix them (see <a href="a6-agentic-rag.html">agentic RAG</a>).</p>
       </div>
       <figure class="figure" id="fig-know">
         <div class="fig-head"><span class="fig-title">What each design costs per question</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> a 400-page credit policy is about 200,000 tokens. Stuffing it in costs thousands of times more than retrieval per call. Now push the cache hit rate to 95%: stuffing becomes affordable but is still well above retrieval. Slide the corpus past 1 million tokens and stuffing stops being possible at all.</p>
+        <p class="try"><b>Try:</b> a 400-page credit policy is about 200,000 tokens, and stuffing it in costs far more than retrieval per call. Push the cache hit rate to 95% and it is still well above retrieval. Slide the corpus past 1 million tokens and stuffing is impossible.</p>
         <div class="chart-wrap" id="know-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-corp">Size of the knowledge base <output for="s-corp"></output></label><input type="range" id="s-corp" min="4" max="8" step="0.05" value="5.3"></div>
@@ -231,10 +217,10 @@
           <div class="stat"><div class="k">Stuffing vs retrieval, per day</div><div class="v" id="k-day"></div><div class="s" id="k-day-s"></div></div>
         </div>
         <p class="verdict" id="k-verdict"></p>
-        <p class="sim-note">Simulated, illustrative prices: input AED 10 per million tokens, cached input 10% of that, output ignored (equal across designs). Context window assumed 1 million tokens. Retrieval uses 5 chunks of 500 tokens plus 1,000 for the instructions; memory adds an 800-token summary. Cost only. Sliders are logarithmic.</p>
+        <p class="sim-note">Simulated, illustrative prices: input AED 10 per million tokens, cached input 10% of that, output ignored. Window 1 million tokens. Cost only; sliders are logarithmic.</p>
       </figure>
       <div class="prose">
-        <p>Cost is one axis of three. A cached stuffed prompt can still lose to retrieval on <em>accuracy</em> (the model gets distracted), <em>latency</em> (reading 200,000 tokens takes seconds) and <em>access control</em> (a customer-facing assistant cannot hold documents the customer must not see). Retrieval loses when the answer needs the whole document, such as "find every clause that contradicts this one". Build an evaluation set (<a href="a4-statistics-for-evals.html">statistics for evals</a>) and compare all three.</p>
+        <p>Cost is one axis of three. Stuffing can also lose on <em>accuracy</em> (the model gets distracted), <em>latency</em> and <em>access control</em> (a customer-facing assistant cannot hold documents the customer must not see). Retrieval loses when the answer needs the whole document. Build an evaluation set (<a href="a4-statistics-for-evals.html">statistics for evals</a>) and compare all three.</p>
       </div>
     </section>
 
@@ -242,15 +228,10 @@
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Judging an MoE by its total parameter count</div><p>"600 billion parameters, so as good as a 600 billion dense model", or "35 billion active, so cheap to host."</p><div class="spot"><b>Spot it</b>Ask for both numbers. Quality sits between active and total; hosting memory follows total.</div></li>
-        <li><div class="t">Expecting speculative decoding to help a saturated server</div><p>The saving shows on a single request; at full batch the spare compute is gone.</p><div class="spot"><b>Spot it</b>Benchmark at your real concurrency.</div></li>
-        <li><div class="t">Breaking the cache by accident</div><p>A timestamp, user name or random ID near the top makes every call a miss. The bill stays high and nobody knows why.</p><div class="spot"><b>Spot it</b>Check the cache-hit field in the API usage output. Move variable text to the end.</div></li>
-        <li><div class="t">Caching customer data across users</div><p>Personal data placed in a shared prefix.</p><div class="spot"><b>Spot it</b>Review cached prefixes; keep personal data after the cache boundary and confirm tenant isolation with the provider.</div></li>
-        <li><div class="t">A router that sends hard cases to the cheap model</div><p>Confidence is miscalibrated, so the model is sure and wrong. Complaints, edge cases and rare products look unfamiliar.</p><div class="spot"><b>Spot it</b>Measure accuracy of accepted answers by category, oversampling rare ones. Watch escalation rate over time.</div></li>
-        <li><div class="t">Measuring the saving but not the loss</div><p>The dashboard shows cost per question falling and no one checks quality.</p><div class="spot"><b>Spot it</b>Pair every cost metric with a quality metric and an interval (a 2-point drop on 200 test cases is noise).</div></li>
-        <li><div class="t">Trusting the advertised context window</div><p>The window is how much fits, not how much the model uses well.</p><div class="spot"><b>Spot it</b>Test on your documents with evidence in the middle, at your planned length.</div></li>
-        <li><div class="t">RAG that silently misses</div><p>The right clause is not in the top five; the model answers confidently from the wrong one.</p><div class="spot"><b>Spot it</b>Measure retrieval recall separately from answer quality.</div></li>
-        <li><div class="t">Memory that stores mistakes</div><p>A wrongly summarised preference or outdated fact persists and is stated as truth.</p><div class="spot"><b>Spot it</b>Let staff and customers view and correct memory; log writes; set expiry.</div></li>
+        <li><div class="t">Judging an MoE by one parameter count</div><p>"600 billion parameters, so as good as a 600 billion dense model", or "35 billion active, so cheap to host."</p><div class="spot"><b>Spot it</b>Ask for both numbers. Quality sits between active and total; hosting memory follows total.</div></li>
+        <li><div class="t">Breaking the cache by accident</div><p>A timestamp, user name or random ID near the top makes every call a miss, and the bill stays high.</p><div class="spot"><b>Spot it</b>Check the cache-hit field in the usage output. Move variable text to the end and confirm tenant isolation.</div></li>
+        <li><div class="t">A router that sends hard cases to the cheap model</div><p>Confidence is miscalibrated, so the model is sure and wrong. Complaints and rare products look unfamiliar.</p><div class="spot"><b>Spot it</b>Measure accuracy of accepted answers by category, oversampling rare ones. Pair every cost metric with a quality metric.</div></li>
+        <li><div class="t">Memory that stores mistakes</div><p>A wrongly summarised fact persists and is stated as truth.</p><div class="spot"><b>Spot it</b>Let staff and customers view and correct memory; set expiry.</div></li>
       </ul>
     </section>
 
@@ -259,13 +240,13 @@
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="prose"><p>Try each before opening the answer.</p></div>
       <div class="qa">
-        <details class="reveal"><summary>1. An MoE has 16 billion shared parameters and 128 experts of 4 billion each, with top-2 routing. What are its total and active counts, and how many 80 GB GPUs do the weights need at 8 bits?</summary><div class="ans"><p>Total = 16 + 128 × 4 = 528 billion. Active = 16 + 2 × 4 = 24 billion. At 1 byte each that is 528 GB, so at least 7 GPUs (528 ÷ 80 = 6.6), before KV cache and overhead. Compute per token is about 24 ÷ 528 = 4.5% of a dense model of the same total size.</p></div></details>
-        <details class="reveal"><summary>2. With α = 0.7, γ = 3 and c = 0.1, what is the speed-up from speculative decoding?</summary><div class="ans"><p>Tokens per pass = (1 − 0.7<sup>4</sup>) ÷ 0.3 = 2.53. Time per iteration = 3 × 0.1 + 1 = 1.3. Speed-up = 2.53 ÷ 1.3 ≈ <strong>1.9×</strong>.</p></div></details>
-        <details class="reveal"><summary>3. Why does speculative decoding not change outputs, while a cascade does?</summary><div class="ans"><p>In speculative decoding a rule accepts or corrects every token so the result follows the target's distribution exactly; the small model only proposes. In a cascade the cheap model's answer is final when accepted, so the output comes from a different model.</p></div></details>
-        <details class="reveal"><summary>4. Your prompt is a 5,000-token policy followed by the customer's message, but the header begins "Today is 6 November 2026, 14:03:22". Cache hit rate is zero. Why, and what is the fix?</summary><div class="ans"><p>Prefix caching needs an identical beginning. The timestamp changes every second, so nothing matches from the first tokens onward. Move the timestamp and any user-specific text after the stable policy block, or drop the seconds.</p></div></details>
-        <details class="reveal"><summary>5. A cascade accepts 60% of questions at the cheap model (AED 2 per 1,000); the big model costs AED 30. What is the cost per 1,000?</summary><div class="ans"><p>The cheap model runs on all: 2. The 40% escalated add 0.4 × 30 = 12. Total AED 14 per 1,000 against AED 30 for the big model alone (53% saving). The quality of the accepted 60% is still to be measured.</p></div></details>
-        <details class="reveal"><summary>6. A 300,000-token policy library is queried 50,000 times a day at AED 10 per million input tokens. What does stuffing cost per day without caching, against retrieval at 3,500 tokens per call?</summary><div class="ans"><p>Stuffing: 300,000 × 10 ÷ 1,000,000 = AED 3 per call, so AED 150,000 per day. Retrieval: 3,500 × 10 ÷ 1,000,000 = AED 0.035 per call, so AED 1,750 per day, about 86 times cheaper. A 90% cache hit rate at a 10% read price cuts stuffing to about 19% of the original, roughly AED 28,500 per day, still over 16 times retrieval.</p></div></details>
-        <details class="reveal"><summary>7. Name two situations where long context beats retrieval and two where retrieval wins.</summary><div class="ans"><p>Long context wins for one bounded document understood as a whole (a contract and its amendments) and for questions needing every part, such as "find contradictions". Retrieval wins for a large, changing corpus, and wherever users may see different documents or answers must cite a source.</p></div></details>
+        <details class="reveal"><summary>1. A model is described as "600 billion parameters, 35 billion active". Which number drives the compute per token, which drives the hosting memory, and why is it not simply "small"?</summary><div class="ans"><p>Active (35 billion) drives compute per token; total (600 billion) drives memory, because every expert must be loaded even if a given token uses only a few. It computes like a mid-sized model but needs the hardware of a huge one.</p></div></details>
+        <details class="reveal"><summary>2. Speculative decoding is run with a draft model that is often wrong. What happens to the speed, and what happens to the answers?</summary><div class="ans"><p>Speed suffers, since most drafts are rejected and the draft effort is wasted; with a poor enough draft it can be slower than plain decoding. The answers do not change at all, because the big model checks and corrects every token.</p></div></details>
+        <details class="reveal"><summary>3. Why does speculative decoding not change outputs, while a cascade does?</summary><div class="ans"><p>In speculative decoding every token is checked or corrected by the big model; the small one only proposes. In a cascade an accepted cheap answer is final, so the output comes from a different model.</p></div></details>
+        <details class="reveal"><summary>4. Your prompt is a 5,000-token policy followed by the customer's message, but the header begins "Today is 6 November 2026, 14:03:22". Cache hit rate is zero. Why, and what is the fix?</summary><div class="ans"><p>Prefix caching needs an identical beginning, and the timestamp changes every second. Move the timestamp after the stable policy block.</p></div></details>
+        <details class="reveal"><summary>5. A cascade accepts 60% of questions at the cheap model (AED 2 per 1,000); the big model costs AED 30. Why is the cost not simply 40% of the big model's, and what is still unknown?</summary><div class="ans"><p>The cheap model runs on every question, then the 40% escalated also pay the big price: about AED 14 per 1,000 against AED 30 for the big model alone. What is still unknown is the quality of the accepted 60%, which you must measure.</p></div></details>
+        <details class="reveal"><summary>6. A 300,000-token policy library is queried 50,000 times a day. Why does stuffing it into every call cost far more than retrieval, and does caching close the gap?</summary><div class="ans"><p>Each stuffed call pays to read all 300,000 tokens, against about 3,500 for retrieval: nearly 90 times more input, which at the simulation's prices is roughly AED 150,000 a day against AED 1,750. A 90% cache hit rate cuts stuffing to about a fifth, but it is still over 16 times retrieval.</p></div></details>
+        <details class="reveal"><summary>7. Name two situations where long context beats retrieval and two where retrieval wins.</summary><div class="ans"><p>Long context wins for one bounded document read as a whole, or questions needing every part. Retrieval wins for a large, changing corpus, or where users see different documents or answers must cite a source.</p></div></details>
       </div>
     </section>
 
