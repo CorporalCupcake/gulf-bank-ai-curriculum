@@ -97,7 +97,8 @@
       <h3 class="sub" id="m-linear">R5.3 · Linear representations</h3>
       <div class="prose">
         <p>The <strong>linear representation hypothesis</strong> says concepts such as sentiment or truthfulness correspond to directions in activation space. Word vectors show it (king − man + woman lands near queen), and layers read activations through linear maps, so a direction is easy to extract.</p>
-        <p>It is an approximation. Some features are circles, not lines (days of the week), and a direction mixes many neurons (superposition, R5.1).</p>
+        <p>It suits transformers. Each layer adds its output to a running sum (the residual stream) and later layers read it through linear maps, so a feature stored as a direction is easy for the model itself to pick up. That is why a plain dot product often recovers it.</p>
+        <p>It is an approximation, with three limits. Some features are circles, not lines (days of the week), so one direction cannot say "Tuesday". A direction mixes many neurons, because models pack more features than dimensions (superposition, R5.1). And a direction found on one kind of input can drift across topics, languages or formats.</p>
       </div>
 
       <figure class="figure" id="fig-geo">
@@ -129,14 +130,16 @@
       </figure>
 
       <div class="prose">
-        <p><strong>The concept direction is not the direction of greatest variation.</strong> The biggest axes are often mundane (position, language). The simplest estimate uses labels: the difference of class means. A trained probe tilts the line to avoid noisy axes and does slightly better.</p>
+        <p><strong>The concept direction is not the direction of greatest variation.</strong> The biggest axes are often mundane (position, language). The simplest estimate uses labels: the difference of class means. A trained probe (usually logistic regression, a linear classifier) tilts the line to avoid noisy axes and does slightly better.</p>
+        <p>Either way you need labels or <strong>contrast pairs</strong>, inputs that differ only in the concept. Pairs are cleaner than raw labels, because everything else cancels when you subtract.</p>
       </div>
 
       <h3 class="sub" id="m-probe">R5.3 · Probing: reading a concept</h3>
       <div class="prose">
-        <p>A <strong>probe</strong> is a small classifier trained on frozen activations to predict a property of the input. Read an accuracy of 0.9 as "the information is present", nothing more. Three questions separate a finding from a mirage.</p>
+        <p>A <strong>probe</strong> is a small classifier trained on frozen activations to predict a property of the input, like a thermometer in the model. The model's weights never change. You pick a layer and a token position, collect activations for labelled examples, train, and test on held-out ones. Sweeping the layer is informative: if a probe works at layer 20 but not layer 2, the information became linearly available in between.</p>
+        <p>Keep the probe simple. A deep network as a probe can learn the task itself, so the score then tells you about the probe, not the model. Read an accuracy of 0.9 as "the information is present", nothing more. Three questions separate a finding from a mirage.</p>
         <ol>
-          <li><strong>Could it find this in noise?</strong> A probe with more dimensions than examples can fit random labels. The gap against that control, called selectivity, is what counts.</li>
+          <li><strong>Could it find this in noise?</strong> A probe with more dimensions than examples can fit random labels. A <em>control task</em> gives the same inputs random labels; the gap between real and control accuracy, called selectivity, is what counts. Regularisation (a penalty on large weights) and more examples both help.</li>
           <li><strong>Decodable, or used?</strong> Present is not relied on. Remove the direction and check whether behaviour changes.</li>
           <li><strong>The concept, or a correlate?</strong> A fraud probe may be reading one word. Test in another language or phrasing.</li>
         </ol>
@@ -168,14 +171,15 @@
       </figure>
 
       <div class="prose">
-        <p>When you hear "we probed the model and found X", ask what the control was, how many examples against how many dimensions, and whether anyone intervened.</p>
+        <p>When you hear "we probed the model and found X", ask what the control was, how many examples against how many dimensions, and whether anyone intervened. Probing is cheap and has found real structure, such as the board state inside a model trained only on Othello moves, so the point is not to distrust it but to ask for the controls.</p>
       </div>
 
       <h3 class="sub" id="m-steer">R5.3 · Steering: writing a concept</h3>
       <div class="prose">
         <p>If a direction represents a concept, adding it to the activations pushes the model towards that concept. This is <strong>activation steering</strong>, part of <strong>representation engineering</strong>. A typical recipe averages the activation difference over many contrast pairs (behaviour present versus absent), then adds that vector, scaled by a strength you dial, while the model generates.</p>
+        <p>Two early recipes set the pattern. <strong>ActAdd</strong> subtracts the activations of two prompts such as "Love" and "Hate" at one layer and adds the scaled difference. <strong>Contrastive activation addition</strong> averages differences over hundreds of A/B answer pairs (one shows the behaviour, one does not) and adds that average at every token position. The knobs are the layer, the strength and the number and quality of pairs. Middle layers are the usual starting point, and each concept needs its own sweep. The same direction can be used to read (a probe) or to write (a steer); only the use differs.</p>
         <p>Refusal in open chat models is mediated by a single direction; remove it and the model stops refusing. For a bank that cuts both ways: behaviour can be inspected, and anyone with the weights can edit safety behaviour out.</p>
-        <p>Think of a radio dial: too little does nothing, too much gives distortion. Few contrast pairs give a noisy vector that drags side effects with it.</p>
+        <p>Think of a radio dial: too little does nothing, too much gives distortion. Few contrast pairs give a noisy vector that drags side effects with it. Too large a push moves activations outside anything the model saw in training, so later layers handle them badly and the text turns repetitive.</p>
       </div>
 
       <figure class="figure" id="fig-steer">
@@ -211,6 +215,7 @@
       <div class="prose">
         <p>Given "Pay Al Noor Trading AED 500. Pay Al Ameen Exchange AED 500. Pay Al", a model picks a name from earlier in the prompt. The mechanism is the <strong>induction head</strong>: if the current token appeared before, predict what followed it last time.</p>
         <p>It takes two attention heads. A previous-token head writes "my predecessor was Al" into the representation at "Noor". A later induction head matches the current "Al" against that record and copies "Noor". They copy rather than understand: at position 8 below the rule gives the wrong answer.</p>
+        <p>Because the second head reads what the first wrote, induction needs at least two attention layers. The usual test is a sequence of random tokens repeated: loss is at chance on the first pass and drops sharply on the repeat only if the model can copy. Induction heads appear suddenly during training, as a short bump in the loss curve, and are close to what first lets a model use its context. Some are fuzzy, matching approximate meaning rather than exact tokens.</p>
       </div>
 
       <figure class="figure" id="fig-ind">
@@ -245,6 +250,42 @@
       <h3 class="sub" id="m-icl">R5.4 · In-context learning</h3>
       <div class="prose">
         <p><strong>In-context learning</strong> is a model improving at a task from examples in the prompt, with no weight updates. Induction heads explain token-level copying: repeated names, identifiers, boilerplate. Few-shot task learning relies on more. A few heads produce <em>function vectors</em> that encode "the task", and adding one to a zero-shot prompt makes the model do it. That is steering with the vector taken from the prompt.</p>
+        <p>The evidence has moved with scale. Early work suggested induction heads as a main mechanism, with the clearest support in small models. A 2025 comparison across twelve models found function-vector heads mattered much more than induction heads for few-shot task learning, and many of them begin life as induction heads and change role during training. Another view treats ICL as the transformer running something like gradient descent on the examples. None of these is settled, so claim only what an ablation shows.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">R5.3 · Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Cheap inspection of open-weight models.</strong> A probe is a small linear classifier on activations you already compute, so it needs no retraining and little compute.</li>
+          <li><strong>Monitoring signals inside the model.</strong> Because a concept such as "this request is a harmful ask" often has a direction, a probe can flag it without waiting for the output text.</li>
+          <li><strong>Turning correlation into evidence.</strong> Reading a direction, then removing or adding it and re-measuring, tests whether the model uses it. Few other tools do this.</li>
+          <li><strong>Fast behavioural nudges.</strong> Steering takes minutes from a few hundred contrast pairs, with no gradient training and no new weights to host.</li>
+          <li><strong>Explaining copying.</strong> Induction heads give a mechanistic account of why models repeat names, identifiers and boilerplate from the prompt.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>You only have an API.</strong> Probing and steering need the activations, so closed models are out of reach.</li>
+          <li><strong>The concept is not a line.</strong> Circular or hierarchical features, or ones tangled with others, make a single direction crude.</li>
+          <li><strong>You need a guarantee.</strong> A steering vector is statistical, can be removed by anyone with the weights, and may fail on prompts you did not test.</li>
+          <li><strong>You need to prove the model uses a feature.</strong> A probe alone shows presence only.</li>
+          <li><strong>You need many behaviours at once.</strong> Vectors interact and each needs its own layer and strength sweep.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose:</strong></p>
+      </div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+        <tbody>
+          <tr><td>Linear probe</td><td>You want to know if information is present, or to monitor a signal cheaply</td><td>You need proof of use, or the feature is not linear</td></tr>
+          <tr><td>Activation steering</td><td>You have the weights, want a quick reversible nudge, and can evaluate side effects</td><td>You need guaranteed behaviour or the base model is closed</td></tr>
+          <tr><td>Prompting</td><td>Behaviour can be described in words; the simplest first try, and works with any model</td><td>The behaviour keeps slipping or the prompt grows unwieldy</td></tr>
+          <tr><td>Fine-tuning (LoRA or full)</td><td>You have labelled examples and need durable, broad change</td><td>Data is scarce or you need to switch behaviour per request</td></tr>
+          <tr><td>Output classifier or guardrail</td><td>You need a deterministic, auditable check outside the model</td><td>The signal is only visible internally</td></tr>
+        </tbody>
+      </table></div>
+      <div class="prose">
+        <p><strong>In practice:</strong> try prompting first, then an output-side check. Reach for probes when you run open weights and want a monitoring or research signal. Start with difference of means or a regularised logistic regression, a middle layer, and a few hundred examples per class with a shuffled-label control. For steering, sweep strength and layer on held-out prompts and track fluency and your normal evaluation suite. Compute is modest: one forward pass to collect activations, then seconds of training.</p>
+        <p>In banking this is mostly research and model-risk work today. A self-hosted assistant might carry a probe as an extra monitor, and a team could test whether a credit model's embedding relies on a proxy for a protected trait. Steering for tone or refusal is still experimental. It is not production-ready as a control: use prompting, fine-tuning and external guardrails now. That would change if steering gave tested, stable behaviour across prompts, with a measured side-effect profile.</p>
       </div>
     </section>
 
@@ -256,7 +297,9 @@
         <li><div class="t">No control task, too many dimensions</div><p>4,096 inputs and 500 examples will fit nearly anything.</p><div class="spot"><b>Spot it</b>Ask for shuffled-label results and test accuracy only.</div></li>
         <li><div class="t">Probe finds a surface cue, not the concept</div><p>The "fraud" direction may fire on the word "unauthorised" alone.</p><div class="spot"><b>Spot it</b>Test on paraphrases, other languages and neutral phrasing.</div></li>
         <li><div class="t">Steering shown on a few prompts, side effects ignored</div><p>Tone can improve while accuracy or safety quietly drops.</p><div class="spot"><b>Spot it</b>Ask for held-out prompts and your normal evaluation suite, on and off.</div></li>
+        <li><div class="t">One direction for a multi-dimensional concept</div><p>Forcing a circle or a hierarchy into a line loses structure and makes steering erratic.</p><div class="spot"><b>Spot it</b>Check how much variance one direction explains; look at the top two or three components.</div></li>
         <li><div class="t">Treating a steering vector as a guardrail</div><p>A vector is statistical, and anyone with the weights can remove it.</p><div class="spot"><b>Spot it</b>Ask what checks sit outside the model.</div></li>
+        <li><div class="t">Claiming induction heads "are" in-context learning</div><p>They handle copying; other heads matter more for few-shot task learning.</p><div class="spot"><b>Spot it</b>Ask what ablating them does to few-shot accuracy, not only repeated-token loss.</div></li>
       </ul>
     </section>
 
@@ -269,6 +312,8 @@
         <details class="reveal"><summary>3. A probe predicts "customer is a student" from a credit-model embedding at 90%. Does the model use student status?</summary><div class="ans"><p>Not shown. It is decodable, perhaps via age or income. Remove the direction and see whether scores change.</p></div></details>
         <details class="reveal"><summary>4. You steer with a formality vector at strength 6 and replies turn into repetitive nonsense. Why?</summary><div class="ans"><p>The push has moved activations far outside what the model saw in training. There is a usable window of strength.</p></div></details>
         <details class="reveal"><summary>5. What does the induction head wrongly predicting at position 8 of Simulation 4 tell you?</summary><div class="ans"><p>Induction is a rule: "what followed this last time?". Copying is not checking.</p></div></details>
+        <details class="reveal"><summary>6. You run open weights and must stop an assistant giving legal-sounding advice. Do you pick a steering vector, fine-tuning or an output classifier, and why?</summary><div class="ans"><p>Start with the prompt and an output classifier: deterministic, auditable and independent of the weights. Fine-tune if you need durable broad change and have labelled data. A steering vector is a quick experiment, not a control, since it is statistical and removable.</p></div></details>
+        <details class="reveal"><summary>7. A colleague wants to monitor a hosted closed-model API with probes, another suggests an open-weight model with a probe on layer 15. Which would you choose?</summary><div class="ans"><p>The open-weight model, if quality is acceptable: probes need activations, which an API does not expose. With the API, use output-side checks instead. Validate the probe with a shuffled-label control and a test in another language.</p></div></details>
       </div>
     </section>
 

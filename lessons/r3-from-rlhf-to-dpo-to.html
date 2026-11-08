@@ -108,30 +108,37 @@
 
       <h3 class="sub" id="m-rlhf">RLHF: learn a reward from preferences</h3>
       <div class="prose">
-        <p>Humans pick the better of two answers, and a separate reward model learns to mimic those choices. The model is then trained to score highly on it, with a penalty (the KL leash) that stops it drifting far from the starting model. RLHF suits fuzzy goals but is heavy and unstable.</p>
+        <p>The classic recipe has three stages. First, <strong>supervised fine-tuning</strong> (SFT) on human-written demonstrations gives a starting model, which is kept frozen as the <strong>reference</strong>. Second, labellers pick the better of two answers, and a separate <strong>reward model</strong> learns to give the preferred one a higher score. It is a learned stand-in for human taste. Third, the model writes answers, the reward model scores them, and a policy-gradient method (usually PPO) raises the score.</p>
+        <p>The key knob is the <strong>KL leash</strong>: a penalty on how far the model's behaviour has moved from the reference. A large penalty keeps it close and safe but timid. A small one lets it chase reward, including the reward model's blind spots (see the over-optimisation figure below).</p>
+        <p>RLHF suits fuzzy goals such as helpfulness, tone and refusing harmful requests. The cost is weight: policy, reference, reward model and a value model all sit in memory, training is unstable, and you need a labelling operation. Every major assistant has used some version of it.</p>
       </div>
 
       <h3 class="sub" id="m-dpo">DPO: skip the reward model</h3>
       <div class="prose">
-        <p>DPO trains directly on pairs of preferred and rejected answers, making the winner likelier and the loser less likely compared with the old model. It is simple and cheap, but it learns from a fixed dataset and still needs someone to judge the pairs. It removes the reward network, not the judge.</p>
+        <p>DPO (direct preference optimisation) notices that the reward model and the RL loop can be folded into one loss. You train directly on pairs of preferred and rejected answers. For each pair, the loss asks whether, compared with the frozen reference, the model made the winner likelier and the loser less likely. It is an ordinary supervised-style training run: no sampling loop, no reward model, two models in memory.</p>
+        <p>The main knob is beta, which plays the role of the KL leash. A higher beta keeps the model close to the reference.</p>
+        <p>The trade-offs are real. DPO learns from a fixed dataset, so it never sees its own new mistakes, whereas RLHF samples fresh answers every step (<strong>on-policy</strong>). It can also push down the probability of both answers as long as the gap widens, which quietly hurts fluency. And it still needs pairs: it removes the reward network, not the judge.</p>
       </div>
 
       <h3 class="sub" id="m-rlvr">RLVR: a program is the judge</h3>
       <div class="prose">
-        <p>When a program can check the answer (a maths result, code with unit tests, a SQL query), it replaces the reward model like an answer key. It is hard to game, scales with compute rather than labellers, and rewards only the outcome, so habits like re-checking and backtracking emerge.</p>
+        <p>When a program can check the answer (a maths result, code with unit tests, a SQL query compared with a reference), it replaces the reward model like an answer key: 1 for right, 0 for wrong. Three properties make it powerful. It is hard to game, because a unit test is far harder to flatter than a learned opinion. It scales with compute rather than labellers, since millions of attempts can be checked automatically. And it rewards only the outcome, so any habit that raises the chance of a correct ending is reinforced: re-checking, trying alternatives, backing up after an error. That is where the long "thinking" of reasoning models comes from.</p>
+        <p>Even so, the verifier must be good. A model will special-case the tests if it can, so weak or incomplete tests become the new thing to hack.</p>
         <p>The weakness is the mirror image: no checker, no RLVR. Tone, credit-memo quality and restructuring advice have no unit test, so labs mix in reward models or judges there. The next lesson covers <a href="r3-process-reward-models-and-verifiers.html">process reward models and verifiers</a>.</p>
       </div>
 
       <h3 class="sub" id="m-grpo">GRPO: how it works</h3>
       <div class="prose">
-        <p>GRPO grades on a curve. For each question it samples a group of answers, scores each with the verifier, and gives each an advantage: how much better or worse than the group average. Positive is pushed up, negative down, and a rare success gets a big push.</p>
+        <p>GRPO (group relative policy optimisation) grades on a curve. For each question it samples a group of answers (commonly 8 to 64), scores each with the verifier, and gives each an <strong>advantage</strong>: how much better or worse than the group average, scaled by the group's spread. Positive is pushed up, negative down, and a rare success gets a big push. The group average replaces the separate value model that PPO needs, which saves memory and a moving part. A clipped update and a KL term still stop any single step moving the model too far.</p>
         <p>The catch: if every answer is right or every answer is wrong, all advantages are zero and nothing is learned. So the difficulty mix matters more than the problem count. Choose problems near the model's edge.</p>
+        <p>The knobs that matter are group size (bigger means fewer wasted groups but more compute), the KL weight, and above all the problem set and its difficulty.</p>
       </div>
 
       <h3 class="sub" id="m-sharpen">Does RL teach new reasoning, or sharpen what is there?</h3>
       <div class="prose">
         <p><strong>Pass@k</strong> is the chance that at least one of <i>k</i> sampled answers is correct. Pass@1 shows how reliably the model solves a problem; pass@256 shows whether it can at all. A pass@1 gain alone does not show new capability.</p>
-        <p>The finding that started the argument (Yue et al., 2025): RL models beat their base at small <i>k</i>, but at large <i>k</i> the base catches up. On that view RL <strong>sharpens</strong>: it moves probability to good paths already there, and cannot reward what it never samples. The counter-view is that this is partly lucky guesses, and other work reports real gains. The evidence is mixed.</p>
+        <p>The finding that started the argument (Yue et al., 2025): RL models beat their base at small <i>k</i>, but at large <i>k</i> the base catches up. On that view RL <strong>sharpens</strong>: it moves probability to good paths already there, and cannot reward what it never samples, because a zero pass rate gives a zero-signal group.</p>
+        <p>The counter-view is that the base model's high pass@k is partly lucky guesses: sampled hundreds of times, it can stumble on the right number through flawed reasoning. Check the reasoning and RL looks better. Other work reports real gains on tasks that need composed skills, especially with long training. The evidence is mixed and depends on domain, base model and <i>k</i>.</p>
       </div>
 
       <figure class="figure" id="fig-passk">
@@ -156,12 +163,17 @@
       </figure>
 
       <div class="prose">
-        <p>Read the toy as logic: RL follows the reward gradient, so progress concentrates where success is already possible. Either way, a stronger base model matters, and "sometimes right" becoming "usually right" is valuable to a bank.</p>
+        <p>Read the toy as logic: RL follows the reward gradient, so progress concentrates where success is already possible. Habits that generalise, such as verifying and backtracking, support transfer. Re-weighting towards a few dominant solution styles supports narrowing. Whichever is right, three things follow.</p>
+        <ul class="plain" style="max-width:var(--measure);padding-left:1.3em;display:grid;gap:6px">
+          <li>The base model's ceiling matters. If RL mainly sharpens, a stronger, more diverse base is worth more than clever RL.</li>
+          <li>"Sometimes right" becoming "usually right" is valuable to a bank, even if the ceiling stays put.</li>
+          <li>Sampling many times and voting or verifying recovers base ability, so test-time compute and RL are partly substitutes.</li>
+        </ul>
       </div>
 
       <h3 class="sub" id="m-goodhart">Why the judge matters: over-optimisation</h3>
       <div class="prose">
-        <p>Grade a student on how confident the essay sounds and they learn to sound confident. That is Goodhart's law. A reward model is accurate only near answers it has seen, so a strong optimiser drifts to long, flattering, confidently wrong answers: training reward keeps climbing while true quality peaks and falls.</p>
+        <p>Grade a student on how confident the essay sounds and they learn to sound confident. That is Goodhart's law: a measure that becomes the target stops measuring. A reward model is trained on finite data and is accurate only near answers it has seen, so a strong optimiser drifts to long, flattering, confidently wrong answers. Training reward keeps climbing while true quality peaks and falls. Gao et al. (2023) measured this using a large "gold" reward model as a stand-in for human truth. Bigger reward models delay and soften the effect but do not remove it.</p>
       </div>
       <figure class="figure" id="fig-goodhart">
         <div class="fig-head"><span class="fig-title">Push harder against a learned judge and quality turns over</span><span class="fig-tag">Simulation 3 of 3</span></div>
@@ -190,6 +202,40 @@
       <div class="prose">
         <p>When a team says training reward is still climbing, ask what the independent check says.</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Fuzzy goals (RLHF).</strong> Helpfulness, tone and safety cannot be written as a rule, but people can compare two answers. A learned reward turns those comparisons into a trainable signal.</li>
+          <li><strong>Cheap alignment (DPO).</strong> It is a supervised-style run with no sampling loop, so a small team can tune style and preferences on one or a few GPUs and reproduce the result.</li>
+          <li><strong>Exact, scalable signal (RLVR).</strong> A checker cannot be flattered and costs compute, not labeller time. That is why it gave reasoning models.</li>
+          <li><strong>Reliability.</strong> Whatever the reward, RL moves probability onto good paths the model already finds sometimes. Turning "sometimes right" into "usually right" is the practical win.</li>
+        </ul>
+        <p><strong>Weak at, or do not use when</strong></p>
+        <ul>
+          <li><strong>No checker, no RLVR.</strong> Credit-memo quality, advice and tone have no unit test. Forcing a weak proxy in is how reward hacking starts.</li>
+          <li><strong>Learned rewards over-optimise.</strong> Push too far and quality falls while the reward climbs. You need an independent evaluation and early stopping.</li>
+          <li><strong>Impossible problems teach nothing.</strong> Zero-signal groups waste compute, and RL cannot reward a skill it never samples.</li>
+          <li><strong>Costly and fiddly.</strong> Online RL needs a sampling stack, many GPUs and careful monitoring. If prompting or fine-tuning on good examples already works, it is overkill.</li>
+        </ul>
+      </div>
+
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+        <tbody>
+          <tr><td><b>SFT</b> on good examples</td><td>You have clean demonstrations and need a format, house style or domain vocabulary. Always try this first.</td><td>You want the model to beat the quality of your examples or to discover better strategies.</td></tr>
+          <tr><td><b>DPO</b></td><td>You have preference pairs and a small team. The goal is style, tone or safety behaviour, and you want stable training.</td><td>The task needs exploration, or the pair data is thin or noisy. The model never sees its own errors.</td></tr>
+          <tr><td><b>RLHF (PPO)</b></td><td>The goal is fuzzy, you can afford a reward model and a sampling loop, and you have a team to watch for hacking.</td><td>You lack labelling or engineering capacity, or the reward model would be weak.</td></tr>
+          <tr><td><b>RLVR + GRPO</b></td><td>Answers are checkable: maths, code, SQL, structured extraction. You want reliability or reasoning.</td><td>Nothing can verify the answer, or the tests are easy to special-case.</td></tr>
+          <tr><td><b>Prompting, retrieval, test-time sampling</b></td><td>A strong model already does the task sometimes. Sample many times and vote or verify.</td><td>You need a small, cheap model to do it in one pass.</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="prose">
+        <p><strong>In practice.</strong> Try prompting and good examples first. If behaviour or style is still off, add DPO on a few thousand to tens of thousands of quality pairs, with a conservative beta. Reserve GRPO for tasks with a trustworthy checker and a base model that already succeeds some of the time. Aim for problems with a pass rate somewhere between a few percent and 90%, and hold out an independent test set that training never sees.</p>
+        <p>In a bank, RLVR fits text-to-SQL against a test database, extraction checked against a schema, and code generation checked by tests. Preference methods fit chat assistants, where tone and compliance wording matter. Fraud, credit and forecasting models use ordinary supervised learning instead.</p>
+      </div>
     </section>
     <!-- ============================== 5. FAILS ============================== -->
     <section class="part" id="fails">
@@ -197,8 +243,10 @@
       <ul class="fails" style="margin-top:18px">
         <li><div class="t">Reward hacking</div><p>The model scores without doing the task, such as special-casing unit tests or padding with phrases a judge likes.</p><div class="spot"><b>Spot it</b>Read the highest-reward outputs, not just the curve.</div></li>
         <li><div class="t">Training reward up, real quality flat</div><p>The Goodhart pattern.</p><div class="spot"><b>Spot it</b>Ask for an evaluation independent of the training reward.</div></li>
+        <li><div class="t">Zero-signal groups</div><p>Problems that are too easy or too hard give every attempt the same score, so compute is spent and nothing is learned.</p><div class="spot"><b>Spot it</b>Track the share of groups with zero advantage and filter the problem set.</div></li>
+        <li><div class="t">DPO drifts or loses fluency</div><p>Both the winner and loser can become less likely while the gap widens, and outputs get odd or shorter.</p><div class="spot"><b>Spot it</b>Compare log-probabilities of chosen answers over training and read samples.</div></li>
         <li><div class="t">Right answer, wrong reasoning</div><p>Outcome-only reward cannot tell a sound derivation from a lucky one.</p><div class="spot"><b>Spot it</b>Sample traces on solved problems and check the steps.</div></li>
-                <li><div class="t">"RL taught it new skills" from pass@1 only</div><p>Reliability is not reach.</p><div class="spot"><b>Spot it</b>Ask for pass@k at large k for both models.</div></li>
+        <li><div class="t">"RL taught it new skills" from pass@1 only</div><p>Reliability is not reach.</p><div class="spot"><b>Spot it</b>Ask for pass@k at large k for both models.</div></li>
       </ul>
     </section>
 
@@ -211,7 +259,9 @@
         <details class="reveal"><summary>2. Pass@1 doubles from 30% to 60% after RL, but pass@256 stays near 80%. What does that suggest?</summary><div class="ans"><p>Sharpening: more reliable, same reach.</p></div></details>
         <details class="reveal"><summary>3. What does the KL term do, and what happens without it?</summary><div class="ans"><p>It penalises drifting from the reference model. Without it the optimiser exploits the reward model's blind spots, so true quality falls while reward rises.</p></div></details>
         <details class="reveal"><summary>4. DPO removes the reward model. What does it still need?</summary><div class="ans"><p>Preference pairs, so someone or some model still judges, plus a frozen reference model. It also cannot learn from the new model's own mistakes.</p></div></details>
-        <details class="reveal"><summary>5. Name a bank task with a verifiable reward and one without.</summary><div class="ans"><p>Verifiable: text-to-SQL checked against a test database. Not verifiable: the tone of a reply to a distressed customer. That needs preference data or judges.</p></div></details>
+        <details class="reveal"><summary>5. A team has 20,000 preference pairs on reply tone and one GPU node. Would you choose DPO or PPO-based RLHF, and why?</summary><div class="ans"><p>DPO. Tone is a fuzzy goal, the pairs already exist, and DPO needs no reward model or sampling loop. RLHF would add a reward model, a value model and instability for little gain. Revisit if DPO plateaus and you can afford on-policy training.</p></div></details>
+        <details class="reveal"><summary>6. Your text-to-SQL model passes 40% of tests. You can run GRPO or collect 5,000 labelled SQL examples for SFT. Which first?</summary><div class="ans"><p>Check the pass rate and test quality first. At 40% there is plenty of signal and the checker is exact, so GRPO is a strong fit and improves reliability. SFT on clean examples is cheaper and fixes format or dialect errors, so try it if failures are mostly style or syntax. If tests are thin, fix them before any RL.</p></div></details>
+        <details class="reveal"><summary>7. Name a bank task with a verifiable reward and one without.</summary><div class="ans"><p>Verifiable: text-to-SQL checked against a test database. Not verifiable: the tone of a reply to a distressed customer. That needs preference data or judges.</p></div></details>
       </div>
     </section>
 

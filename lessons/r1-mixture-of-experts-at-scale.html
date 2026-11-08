@@ -112,13 +112,16 @@
       <div class="prose">
         <p>In a transformer block, the feed-forward network (FFN) holds most parameters. An MoE layer swaps it for many smaller FFNs (the experts) plus a router, a small layer that scores every expert for the current token and picks the top few. The triage clerk scoring each desk.</p>
         <p>Three design choices matter. <strong>Many small experts beat few big ones:</strong> Mixtral used 8 large experts, top-2, while DeepSeekMoE splits them finer, so a token gets a precise mix instead of two blunt tools. <strong>Shared experts</strong> are always on and soak up general knowledge, so routed experts can specialise. <strong>Routing style</strong> is usually token choice, where each token picks its experts.</p>
-        <p>Reading names: "Qwen-30B-A3B" means 30B total, 3B active.</p>
+        <p>The router is just one linear layer: it turns the token's hidden vector into one score per expert, keeps the top k, and uses their (renormalised) scores as mixing weights. The other experts never run for that token. A cousin, "expert choice", lets each expert pick its tokens instead. Load is balanced by construction, but it is awkward when generating one token at a time, so token choice dominates.</p>
+        <p>Why do many small experts help? With 8 experts and top-2 there are 28 possible combinations per layer. With 256 and top-8 there are about 4 × 10<sup>14</sup> (try Simulation 1). More combinations mean a token's needs can be met by a finer mix of specialists, at the same compute.</p>
+        <p>Reading names: "Qwen-30B-A3B" means 30B total, 3B active ("A" is active). Cost is visible at a glance.</p>
       </div>
 
       <h3 class="sub" id="m-balance">Load balancing: the part that makes or breaks training</h3>
       <div class="prose">
         <p>Left alone, routers collapse. A few experts get slightly better early on, so they receive more tokens and improve further while the rest starve, like one popular restaurant with a queue while the others empty. Hardware makes it worse: a step ends when the busiest expert finishes.</p>
-        <p>The classic fix is an extra balancing loss, which competes with quality. DeepSeek-V3 instead adds a bias to each expert's score when picking the top-k, nudged down for overloaded experts and up for underloaded ones. It is almost loss-free, with no interfering gradient.</p>
+        <p>The classic fix is an extra balancing loss, which competes with quality. DeepSeek-V3 instead adds a bias to each expert's score when picking the top-k, nudged down for overloaded experts and up for underloaded ones. It is almost loss-free, with no interfering gradient. The mixing weights still use the unbiased scores, and V3 keeps a tiny sequence-level balance loss as a safeguard.</p>
+        <p>The classic loss (Switch Transformer) penalises uneven token shares. Its knob is the coefficient: too large hurts language quality, too small lets routing collapse. Two related details. <strong>Capacity and dropping:</strong> older systems gave each expert a fixed buffer and silently dropped overflow tokens, which hurts quality. <strong>Router stability:</strong> routers can produce huge scores and unstable training, so some models add a small penalty on them (a z-loss).</p>
       </div>
 
       <figure class="figure" id="fig-route">
@@ -148,7 +151,7 @@
       <h3 class="sub" id="m-serve">Why the compute saving does not come free</h3>
       <div class="prose">
         <p>Decoding is mostly <em>reading weights from memory</em>, not multiplying. When memory reads dominate, a step is <strong>memory-bound</strong> and extra compute is free. Each token picks its own experts, so a batch of tokens touches the <em>union</em> of their choices, and at modest batches nearly all the weights get read.</p>
-        <p>So the MoE's low arithmetic does not show up as speed until batches reach the thousands, across many users. A dense model gets there far sooner.</p>
+        <p>A rough rule: 256 experts with top-8 means one token touches 3% of experts, 16 tokens about 40%, and 64 tokens almost 90%. So the MoE's low arithmetic does not show up as speed until batches reach the thousands, across many users. A dense model gets there far sooner, at a batch near 150.</p>
       </div>
 
       <figure class="figure" id="fig-serve">
@@ -174,14 +177,15 @@
       </figure>
 
       <div class="prose">
-        <p>In practice, training is where MoE shines, because huge batches make the saving real. Serving needs scale: a bank hosting one model for a few hundred staff will often pay the memory cost without the throughput benefit. See <a href="r2-scaling-laws-then-and-now.html">R2.1</a> and <a href="r12-very-low-bit-quantization-gptq.html">R12.1</a>.</p>
+        <p>In practice, training is where MoE shines, because huge batches make the saving real. Serving needs scale: a bank hosting one model for a few hundred staff will often pay the memory cost without the throughput benefit. Large deployments spread experts over many GPUs (expert parallelism) and batch many users. DeepSeek reported pre-training V3 on 14.8 trillion tokens in about 2.79 million H800 GPU-hours, far less than a comparable dense model would be expected to need.</p>
+        <p>A small-active MoE can still suit a single machine: a 120B-total, 5B-active model, quantized, can fit one large GPU and decodes fast at batch 1. Fine-tuning has quirks too: adapters on attention layers are easy, but training the experts risks disturbing routing. See <a href="r2-scaling-laws-then-and-now.html">R2.1</a> and <a href="r12-very-low-bit-quantization-gptq.html">R12.1</a>.</p>
       </div>
 
       <h3 class="sub" id="m-ssm">R1.2 · State-space models and hybrids</h3>
       <div class="prose">
         <p>A second cost grows with <em>input length</em>. Attention keeps keys and values for every earlier token (the KV cache), so a long contract or call transcript eats memory per user.</p>
-        <p><strong>State-space models</strong> (SSMs) work like the recurrent networks of F5.4. They read one token at a time and update a <em>fixed-size</em> state, a running summary. Memory stays flat however long the input. <strong>Mamba</strong> made the update <em>selective</em>, so the model can ignore filler and keep a sanctioned name.</p>
-        <p>The weakness is the state's size. Exact retrieval ("what was the second clause's penalty rate?") is easy for attention and harder for a compressed state. So the practical answer is <strong>hybrids</strong>: mostly SSM layers with a few attention layers for lookup. Examples are Jamba, Nemotron-H and <strong>Falcon-H1</strong> (TII, Abu Dhabi), the one to know in the UAE.</p>
+        <p><strong>State-space models</strong> (SSMs) work like the recurrent networks of F5.4. They read one token at a time and update a <em>fixed-size</em> state, a running summary. Memory stays flat, and decoding costs the same at token 100 or 1,000,000. <strong>Mamba</strong> (Gu and Dao, 2023) made the update <em>selective</em>: what to write or forget depends on the current token, so the model can ignore filler and keep a sanctioned name. Mamba-2 linked SSMs to a form of attention, which allowed faster implementations.</p>
+        <p>The weakness is the state's size. Exact retrieval ("what was the second clause's penalty rate?") is easy for attention and harder for a compressed state. So the practical answer is <strong>hybrids</strong>: mostly SSM layers with a few attention layers for lookup. Jamba (AI21) uses roughly one attention layer per seven or eight Mamba layers, plus MoE. Nemotron-H (NVIDIA) is mostly Mamba-2. <strong>Falcon-H1</strong> (TII, Abu Dhabi) runs attention and SSM side by side in each block, spans 0.5B to 34B parameters, handles up to 256K context and is openly licensed. It is the one to know in the UAE.</p>
       </div>
 
       <figure class="figure" id="fig-ssm">
@@ -203,7 +207,44 @@
       </figure>
 
       <div class="prose">
-        <p>Hybrids are also faster at long lengths. Attention still wins at exact recall, so designers tune the ratio.</p>
+        <p>Hybrids are also faster at long lengths, since attention's per-token cost grows with length and an SSM's does not. Attention still wins at exact recall, so designers tune the ratio, and the best ratio is still moving.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Quality per unit of compute.</strong> Each token uses only the active slice, so for a fixed training or inference arithmetic budget you can store far more knowledge than a dense model.</li>
+          <li><strong>Training efficiency.</strong> Huge training batches keep every expert busy, so the saving is real where it matters most.</li>
+          <li><strong>Throughput at scale.</strong> With thousands of concurrent requests, a big MoE becomes compute-bound and its cost per token is low.</li>
+          <li><strong>Fast decoding at small batch when memory fits.</strong> Only the chosen experts are read, so a small-active model on one big GPU responds quickly.</li>
+          <li><strong>Long inputs (hybrids).</strong> A fixed SSM state keeps memory per user flat, so many more long documents fit per GPU.</li>
+        </ul>
+        <p><strong>Weak at, or do not use when:</strong></p>
+        <ul>
+          <li><strong>Low-traffic private serving.</strong> You pay memory for all experts but rarely batch enough to use the arithmetic saving.</li>
+          <li><strong>Tight memory.</strong> Footprint follows total parameters, so an edge device or a single small GPU favours a dense model.</li>
+          <li><strong>Fine-tuning on small data.</strong> Routing can shift and experts overfit, so tuning is touchier than for dense models.</li>
+          <li><strong>Exact recall over long text (pure SSMs).</strong> A compressed state loses detail, so clause lookups and copying fail more than with attention.</li>
+          <li><strong>Mature tooling needs.</strong> Serving stacks, quantization recipes and debugging are better trodden for dense models.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose:</strong></p>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Large MoE</b></td><td>You serve many users at once, or use a hosted API, and want top quality per unit of compute.</td><td>Few users, tight memory, or you plan heavy fine-tuning.</td></tr>
+            <tr><td><b>Dense model, similar cost</b></td><td>Private deployment with modest traffic; you want simple serving and easy tuning.</td><td>You need frontier knowledge breadth at low per-token cost.</td></tr>
+            <tr><td><b>Small dense model, distilled or quantized</b></td><td>One narrow task, tight latency, edge or single-GPU hosting.</td><td>Open-ended reasoning over varied inputs.</td></tr>
+            <tr><td><b>SSM or hybrid</b></td><td>Very long inputs, many concurrent long sessions, memory-limited GPUs.</td><td>Your task hinges on exact lookup, and you have not tested it.</td></tr>
+            <tr><td><b>Full attention transformer</b></td><td>Context under about 32K tokens and recall matters most.</td><td>Hundreds of thousands of tokens per user.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice:</strong> try a dense model of the size you can host first, and a hosted MoE API second. Judge both on your own task. Self-host an MoE only when expected concurrency is high enough to fill big batches, and size memory from total parameters at your chosen precision. The knobs that matter are the precision (8-bit or 4-bit), the number of GPUs for expert parallelism, and the batch size or concurrency limit. For hybrids, test retrieval on your own long documents before trusting any context-length claim.</p>
+        <p>In banking, most staff-assistant and document-summarisation workloads run on hosted MoE models without anyone noticing. Self-hosting arises for data-residency reasons, where a regulator or policy keeps customer text inside the country. Hybrids suit long credit files, contracts and call transcripts, but pair them with retrieval checks.</p>
       </div>
     </section>
 
@@ -216,6 +257,8 @@
         <li><div class="t">Assuming cheap API prices mean cheap self-hosting</div><p>Prices reflect huge shared batches. A lightly used private deployment leaves GPUs idle.</p><div class="spot"><b>Spot it</b>Compare your expected concurrent requests with the batch size where throughput peaks.</div></li>
         <li><div class="t">Reading "experts" as human-style specialists</div><p>Trained experts tend to specialise by token type or syntax, not clean topics like "finance". There is no "sanctions expert".</p><div class="spot"><b>Spot it</b>Distrust claims of interpretable domain experts without evidence.</div></li>
         <li><div class="t">"Infinite context" claims for SSMs</div><p>A fixed state cannot store everything. Exact retrieval from the middle of a long document exposes this.</p><div class="spot"><b>Spot it</b>Run needle-in-a-haystack lookups on your own documents.</div></li>
+        <li><div class="t">Routing collapse and dropped tokens</div><p>Poor balancing leaves experts idle, or drops tokens under tight capacity limits, silently degrading outputs under load.</p><div class="spot"><b>Spot it</b>Ask for expert load histograms, whether tokens are dropped, and whether quality was tested at production batch sizes.</div></li>
+        <li><div class="t">Quantization and fine-tuning that disturb routing</div><p>Aggressive compression or full fine-tuning can change router decisions and cause losses dense-model experience would not predict.</p><div class="spot"><b>Spot it</b>Re-run your own evaluation after any compression or fine-tuning, on your languages and document types.</div></li>
       </ul>
     </section>
 
@@ -228,6 +271,8 @@
         <details class="reveal"><summary>3. Why does load balancing matter?</summary><div class="ans"><p>Without it a few experts hog the tokens and the rest starve. The busiest expert sets the speed of the whole step. A per-expert bias nudged after each step fixes this without a competing loss term.</p></div></details>
         <details class="reveal"><summary>4. Why are SSMs weaker than attention at exact recall, and how do hybrids cope?</summary><div class="ans"><p>An SSM squeezes everything into a fixed-size state, so details can be lost. Hybrids keep a few attention layers for lookup and use SSM layers for the cheap bulk.</p></div></details>
         <details class="reveal"><summary>5. A vendor quotes very low per-token prices for a large MoE. Why might your private deployment cost more?</summary><div class="ans"><p>Their price assumes large shared batches that keep every expert busy. A private deployment with few users batches little and leaves expensive GPUs idle.</p></div></details>
+        <details class="reveal"><summary>6. A team of 30 analysts needs a private assistant. Would you host a large MoE or a mid-sized dense model, and why?</summary><div class="ans"><p>The dense model. With 30 users the batches are small, so the MoE's arithmetic saving goes unused while its memory bill covers all experts. Start dense; revisit if concurrency grows a lot.</p></div></details>
+        <details class="reveal"><summary>7. You must answer questions over 500,000-token case files. Would you choose a pure SSM, a hybrid or full attention, and why?</summary><div class="ans"><p>A hybrid, with retrieval checks. Full attention's cache per user is very large at that length, and a pure SSM may lose exact details. A few attention layers give lookup, and the SSM layers keep memory manageable.</p></div></details>
       </div>
     </section>
 

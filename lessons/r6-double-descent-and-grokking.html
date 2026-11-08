@@ -63,12 +63,13 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>The classic story (F4.1): too simple underfits, too flexible memorises noise, so aim for the middle and worry if training accuracy hits 100%. For a tree-based credit model on 40,000 rows that holds. For very large models it can mislead. Three findings show how:</p>
+        <p>The classic story (F4.1): too simple underfits, too flexible memorises noise, so aim for the middle and worry if training accuracy hits 100%. For a tree-based credit model on 40,000 rows that holds. For very large models it can mislead. Zhang and colleagues (2017) showed image networks that generalise well can also memorise <em>random labels</em> perfectly, so the ability to memorise does not decide whether a model generalises. Three findings follow:</p>
         <ul>
-          <li><strong>Double descent.</strong> Test error peaks where a model can just fit the data, then falls again.</li>
+          <li><strong>Double descent.</strong> Test error peaks where a model can just fit the data, then falls again, often below the earlier best.</li>
           <li><strong>Grokking.</strong> A network memorises early, sits at chance on new data, and much later suddenly learns the real rule.</li>
           <li><strong>Emergence.</strong> Large models seem to gain abilities abruptly, but much of that comes from the scoring rule.</li>
         </ul>
+        <p>One picture ties them together. A flexible model has many ways to fit the training data. The first fits it finds are often brittle memorisations. With more capacity, more training time, or a push towards small weights (weight decay), it settles on simpler fits. Whether you see a peak, a delay or a smooth curve depends on how that preference plays out.</p>
       </div>
       <div class="callout key"><span class="k">Hold onto this</span>"Training error is zero, so it is overfit" is a heuristic, not a law. The real test is error on unseen data from the period and population the model will face.</div>
     </section>
@@ -79,11 +80,19 @@
 
       <h3 class="sub" id="m-dd">Double descent: the peak at the interpolation threshold</h3>
       <div class="prose">
-        <p>As a model gets more parameters, test error rises to a peak at the size where it can only just fit every training row, then falls again, often below the earlier best. At that exact size there is one way to fit the data, so the model must copy the label noise and swings wildly. Beyond it there are many exact fits, and the smooth, small-weight one that training tends to find absorbs the noise harmlessly.</p>
+        <p>The simplest setting is linear regression on <em>p</em> random features (a "random features" model, a cousin of a one-hidden-layer network) fitted to <em>n</em> training rows. Increase <em>p</em> and there are three regimes.</p>
         <ul>
-          <li><strong>Regularisation removes it.</strong> Ridge, weight decay, early stopping or averaging flatten it, which is why tuned production models rarely show it.</li>
-          <li><strong>Data moves it.</strong> Adding rows can put the peak on your model size, so more data can briefly hurt.</li>
+          <li><strong>p well below n.</strong> The classical regime. More features cut bias (systematic miss), then add variance (sensitivity to the sample). This is the U-shape from F4.1.</li>
+          <li><strong>p close to n.</strong> Exactly one weight vector fits every row, so it must match the label noise with no slack. Weights become huge and test error spikes.</li>
+          <li><strong>p well above n.</strong> Infinitely many weight vectors fit exactly. Gradient descent started from zero, or a tiny ridge penalty, picks the smallest-norm one. It spreads the fit thinly over many directions, each weight stays small, and the noise is absorbed without distorting the signal. Test error falls again.</li>
         </ul>
+        <p>Three details matter in a meeting.</p>
+        <ul>
+          <li><strong>Noise makes the peak.</strong> Clean labels give a small spike. Noisy labels, the banking norm (mislabelled fraud, fuzzy default definitions), give a large one.</li>
+          <li><strong>Regularisation removes it.</strong> A ridge penalty, weight decay, early stopping or averaging many models flattens it. With the right penalty, Nakkiran et al. (2021) saw no peak in their linear setting. That is why tuned production models rarely show it.</li>
+          <li><strong>Data moves it.</strong> Adding rows to a fixed model can slide the peak onto your model size, so more data can briefly hurt ("sample-wise"). Along training time the same effect appears: error falls, rises, then falls again ("epoch-wise").</li>
+        </ul>
+        <p>Why is the far side good, not merely less bad? <strong>Benign overfitting</strong> (Bartlett et al., 2020): when the inputs have many weak directions, the model can park the noise in a huge number of unimportant directions while a few strong ones carry the signal. That is proved for linear models and a strong empirical pattern, not a guarantee, for deep networks.</p>
         <p><strong>Fitting exactly and generalising do not contradict; what matters is which exact fit you land on.</strong></p>
       </div>
 
@@ -112,8 +121,13 @@
 
       <h3 class="sub" id="m-grok">Grokking: generalisation that arrives late</h3>
       <div class="prose">
-        <p>Small networks on tasks like modular addition reach 100% training accuracy quickly, sit at chance on new cases, then 10 to 100 times later jump to near-perfect test accuracy.</p>
-        <p>Two solutions compete: a lookup table, which is fast to learn, and a general rule, which is slow but reaches the same fit with smaller weights. Weight decay slowly favours the general one, so the jump is a threshold on a smooth process.</p>
+        <p>Power and colleagues (2022) trained small transformers on tasks like addition modulo 97, using only part of all possible examples. Training accuracy hit 100% within a few hundred steps while validation stayed near chance. After 10 to 100 times more training, validation shot up. It is like a student who memorises the times table and only weeks later spots the pattern.</p>
+        <ul>
+          <li><strong>Two solutions compete.</strong> A lookup table memorises the training pairs. A general algorithm works on unseen pairs. For modular addition the network learns to place numbers on a circle (sines and cosines of a few frequencies) and add angles (Nanda et al., 2023).</li>
+          <li><strong>Memorising is fast; the general circuit is slow but cheaper.</strong> It reaches the same training confidence with smaller weights, so weight decay slowly favours it. Varma et al. (2023) call this circuit efficiency.</li>
+          <li><strong>Underneath, progress is gradual.</strong> Hidden measures improve smoothly long before test accuracy moves. The jump is a threshold on a continuous process, an idea that returns in the emergence debate.</li>
+          <li><strong>The ingredients are specific.</strong> Weight decay, a training set that is a modest share of all cases, and a task with a compact rule. More data brings grokking sooner; too little, never.</li>
+        </ul>
       </div>
 
       <figure class="figure" id="fig-grok">
@@ -141,14 +155,14 @@
       </figure>
 
       <div class="prose">
-        <p>Grokking is solid on small rule-based tasks; whether LLMs grok in ordinary pretraining is open. Stopping at a validation plateau can miss a late gain, but that is no licence to train forever on noisy bank labels.</p>
+        <p>Grokking is solid on small rule-based tasks; whether LLMs grok in ordinary pretraining is open. The practical lesson is about stopping rules. Stopping at a validation plateau can miss a late gain, but that is no licence to train forever on noisy bank labels, where you would only memorise the noise.</p>
       </div>
 
       <h3 class="sub" id="m-emerge">Is emergence a mirage?</h3>
       <div class="prose">
-        <p>Large language models seem to gain abilities abruptly: near chance when small, then a sharp rise past some size.</p>
-        <p>Schaeffer and colleagues (2023) argued much of this is the scoring. Exact match on a multi-digit sum needs every digit right, so smooth gains per digit look like a hockey stick. A continuous metric gives smooth curves.</p>
-        <p>Small test sets add to it: with 100 questions and a 0.5% true rate, every small model scores zero.</p>
+        <p>Wei et al. (2022) listed tasks where small language models sat near chance and then rose sharply past some size. They called these abilities emergent: absent in small models, present in large ones, and not predictable from the small ones. If abilities switch on unpredictably, you cannot know what the next model can do.</p>
+        <p>Schaeffer, Miranda and Koyejo (2023) argued much of this is the scoring, and a continuous metric made the curves smooth. Think of a 10-question exam marked pass only for 10 out of 10: a student improving steadily from 6 to 9 shows no pass until the end. Exact match on a multi-digit sum works the same way. If the chance of getting one digit right improves smoothly with size, the whole answer is right only when every digit is, so the score is that chance multiplied by itself once per digit. With 8 digits, 60% per digit gives under 2%, 74% gives about 9%, and 92% gives about 51%. Nothing in the model jumped; the harsh metric bent the curve.</p>
+        <p>The second ingredient is sampling noise. With 100 questions and a true success rate of 0.5%, you usually see 0 or 1 correct. Every small model scores zero, then the first successes appear. It looks like a switch because the ruler had no resolution at the bottom.</p>
       </div>
 
       <figure class="figure" id="fig-em">
@@ -182,14 +196,49 @@
         <ul>
           <li><strong>Mirage in the metric</strong> is well supported for many reported cases.</li>
           <li><strong>Usefulness can still jump.</strong> A model that gets an 8-digit sum right half the time is practically different from one at 2%, even if the skill rose smoothly.</li>
-          <li><strong>Some thresholds may be real.</strong> Tracking pre-training loss instead of size, some tasks stay near chance until loss crosses a value. Not closed.</li>
+          <li><strong>Some thresholds may be real.</strong> Du et al. (2024), tracking pre-training loss instead of size, found tasks that stay near chance until loss crosses a value, sometimes even on continuous metrics. Not closed.</li>
         </ul>
-        <p>At the bank:</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p>These are ideas about how models behave, not tools you deploy. So the question is what each lets you do or avoid.</p>
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Stopping false alarms about zero training error.</strong> Double descent explains why a boosted or over-parameterised model with a perfect training fit can still validate well. You judge by the holdout gap, not the training number.</li>
+          <li><strong>Explaining odd validation curves.</strong> A spike when you add features or rows is often the interpolation threshold, and a ridge penalty tests that at once.</li>
+          <li><strong>Setting stopping and budget policy.</strong> Grokking tells you a flat validation curve is not always the end, in small rule-based settings with weight decay.</li>
+          <li><strong>Evaluating LLMs honestly.</strong> The mirage argument gives you a concrete checklist: a continuous metric, enough questions, and a metric that matches the business need.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li>They do not give a recipe for building a better model. Double descent is not an instruction to make models huge.</li>
+          <li>The clean results come from random-feature regression and tiny algorithmic tasks with clean labels. Fraud and credit data have noisy labels and no neat rule.</li>
+          <li>Grokking gives no way to predict when a gain will arrive, so it cannot justify an open-ended training budget.</li>
+          <li>Whether emergence is mostly a mirage is not settled. Du et al. (2024) found thresholds that survive smooth metrics.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose:</strong></p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Double-descent view</b></td><td>The model is flexible, labels are noisy and validation error behaves oddly as size or data changes.</td><td>You need a decision on a small, well-regularised tabular model; it adds nothing.</td></tr>
+            <tr><td><b>Classical bias-variance view</b></td><td>Trees, linear models or GAMs on modest data, with cross-validation.</td><td>You are reasoning about heavily over-parameterised networks.</td></tr>
+            <tr><td><b>Regularise and early-stop</b></td><td>You want a safe default: a ridge or weight-decay sweep plus an out-of-time holdout.</td><td>The task is a clean algorithmic rule where a late gain is plausible.</td></tr>
+            <tr><td><b>Train long (grokking regime)</b></td><td>Small, clean, rule-based data with weight decay, such as research on algorithms.</td><td>Noisy bank labels; you would memorise the noise.</td></tr>
+            <tr><td><b>Continuous metrics with confidence intervals</b></td><td>Comparing LLM sizes or vendors.</td><td>The business only cares about whole-answer correctness, so pick that metric first.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice:</strong> start with an out-of-time holdout and a regularisation sweep (ridge strength, weight decay, tree depth). Plot validation error against model size and against training steps for the whole run, not just until it flattens. Cap the training budget in advance.</p>
         <ul>
           <li><strong>"100% training accuracy" under review.</strong> Normal for boosting on fraud data. Insist on a time-ordered holdout.</li>
-          <li><strong>Small labelled sets.</strong> 300 AML cases and a flexible model may sit near the peak. A modest ridge penalty helps.</li>
-          <li><strong>Vendor "emergent" claims and in-house LLM evaluations.</strong> Ask about the metric and test-set size, and use graded metrics.</li>
+          <li><strong>Small labelled sets.</strong> With 300 confirmed AML cases, a flexible model may sit near the peak, where extra cases can hurt. A modest ridge penalty is cheap insurance.</li>
+          <li><strong>Vendor "emergent" claims and in-house LLM evaluations</strong> (trade-finance documents, policy questions). Ask about the metric and the test-set size, and use graded metrics with enough questions per category.</li>
         </ul>
+        <p>Status: these are research ideas. They are well supported for double descent and for the metric effect in emergence, but not production tools. Today, use regularised models with honest validation. Clear evidence that grokking happens in ordinary large-scale training would change that.</p>
       </div>
     </section>
 
@@ -198,8 +247,11 @@
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
         <li><div class="t">"Bigger always generalises, so ignore overfitting"</div><p>Double descent depends on regularisation and noise.</p><div class="spot"><b>Spot it</b>Ask for out-of-time error against model size, with a regularisation sweep.</div></li>
+        <li><div class="t">"Zero training error means the model is broken"</div><p>The reverse over-reading. A boosted model with a perfect training fit can be fine.</p><div class="spot"><b>Spot it</b>Look at the gap on a genuine holdout, not the training number.</div></li>
+        <li><div class="t">Reading a validation spike as a bug</div><p>A jump when you add features or rows can be the interpolation threshold, not a data error.</p><div class="spot"><b>Spot it</b>Check whether feature count is near the number of training rows, and whether a ridge penalty removes the spike.</div></li>
         <li><div class="t">Citing a grokking paper to justify a bank model</div><p>Those results are on tiny rule-based tasks with clean labels. Bank labels are noisy.</p><div class="spot"><b>Spot it</b>Ask what the labels and the rule are.</div></li>
         <li><div class="t">Accepting "emergent ability" from a headline metric</div><p>A sharp curve on exact match, or pass/fail on a few dozen items, may be the ruler.</p><div class="spot"><b>Spot it</b>Ask for a continuous metric on the same models and the number of test items.</div></li>
+        <li><div class="t">Stopping too early, or too late</div><p>Cutting a run at a validation plateau can miss a late gain in algorithmic settings. Running forever on noisy bank labels fits the noise.</p><div class="spot"><b>Spot it</b>Plot validation metrics over the whole run and cap the budget in advance.</div></li>
         <li><div class="t">Declaring "no emergence" from a smooth metric</div><p>The opposite error. A smooth score can hide that the whole answer right really does switch on in practice.</p><div class="spot"><b>Spot it</b>Pick the metric that matches the business need, then judge the curve.</div></li>
       </ul>
     </section>
@@ -212,6 +264,9 @@
         <details class="reveal"><summary>2. In grokking, why does the general solution eventually win when both fit the training set equally?</summary><div class="ans"><p>It reaches the same fit with smaller weights, so weight decay erodes the memorising solution faster. Test accuracy jumps once the general one passes a threshold.</p></div></details>
         <details class="reveal"><summary>3. A benchmark has 50 questions and a model scores 0. Can you conclude it cannot do the task?</summary><div class="ans"><p>No. A model with a true rate of a few per cent often scores zero on 50 questions. Small test sets cannot resolve low scores.</p></div></details>
         <details class="reveal"><summary>4. A colleague says "100% train accuracy, reject it." What do you ask?</summary><div class="ans"><p>What the out-of-time validation result is, and how it compares with a simpler or regularised baseline. The holdout gap matters, not the training number.</p></div></details>
+        <details class="reveal"><summary>5. You have 500 noisy fraud labels and can fit either a small regularised model or a very flexible one. Which would you choose, and why?</summary><div class="ans"><p>The small regularised model, or the flexible one with a tuned penalty. With 500 noisy rows a flexible model may sit near the interpolation peak, where noise dominates. The choice is settled by out-of-time validation, not by theory.</p></div></details>
+        <details class="reveal"><summary>6. A vendor shows a sharp jump in an LLM's exact-match score on 8-digit sums at one model size. Would you call it a new ability, and what would you ask for?</summary><div class="ans"><p>Not yet. I would ask for a per-digit or probability-based score on the same models and the number of test items. If the graded curve is smooth, the jump is the metric. The business still decides which metric matters.</p></div></details>
+        <details class="reveal"><summary>7. Per-digit accuracy is 85%. What exact-match rate do you expect on a 6-digit answer, and on a 2-digit answer?</summary><div class="ans"><p>Roughly 38% on six digits (0.85 six times over) and 72% on two. The same skill gives very different headline scores.</p></div></details>
       </div>
     </section>
     <div class="lesson-foot">

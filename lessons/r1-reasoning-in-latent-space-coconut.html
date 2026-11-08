@@ -102,17 +102,23 @@
 
       <h3 class="sub" id="m-bottleneck">R1.5 · A token is a narrow doorway</h3>
       <div class="prose">
-        <p>A word carries only about 17 bits per step, while the hidden state behind it holds far more, and that state is discarded once the word is picked. Chain-of-thought works anyway, at a cost in tokens, money and latency.</p>
+        <p>At each step the transformer builds a <strong>hidden state</strong> (a vector of a few thousand numbers) at the last position, scores every vocabulary word, picks one and appends it. The hidden state is then discarded. Earlier states survive as keys and values in the cache, but the new position starts again from the chosen word's embedding.</p>
+        <p>A 128,000-word vocabulary carries at most about <strong>17 bits</strong> per step. The hidden state behind it can hold orders of magnitude more. Chain-of-thought works anyway, because the model writes down what it must remember. The cost is tokens, money and latency.</p>
+        <p>Written steps must also be grammatical, so much of a chain is filler such as "so" and "therefore". Studies of reasoning traces find that a few "fork" tokens, where the path could go either way, carry most of the real computation. That is the waste latent reasoning tries to remove.</p>
       </div>
 
       <h3 class="sub" id="m-coconut">R1.5 · The Coconut loop</h3>
       <div class="prose">
-        <p>Coconut feeds the last hidden state back <strong>directly as the next input</strong> for a fixed number of continuous thoughts, then switches back to words for the answer. No word is chosen, so every step stays differentiable and ordinary training works. On a graph-search task, one thought held several candidate next nodes at once, like breadth-first search, while a written chain must name one node and backtrack.</p>
+        <p>Coconut changes one thing. In "latent mode" the last hidden state is fed back <strong>directly as the next input</strong>. Marker tokens open and close the latent stretch. The model runs a fixed number of continuous thoughts, then switches back to words for the answer.</p>
+        <p>No word is chosen, so every step is <strong>differentiable</strong>: ordinary back-propagation sends the answer's error back through every thought. That is the elegance, and also the cost (see training below).</p>
+        <p>What does a thought hold? On a graph-search task (ProsQA), one thought encoded <em>several candidate next nodes at once</em>, with weights that sharpened over successive thoughts. That behaves like breadth-first search. A written chain, forced to name one node, behaves like depth-first search that must backtrack. Simulation 1 caricatures exactly this gap.</p>
+        <p>Neighbours share the premise of more internal steps than visible tokens. <em>Pause tokens</em> add empty compute slots. <em>Recurrent-depth</em> models loop a block of layers more times on hard inputs. <em>Soft thinking</em> mixes word embeddings by probability and needs no training.</p>
       </div>
 
       <h3 class="sub" id="m-curriculum">R1.5 · Training: replacing words with thoughts</h3>
       <div class="prose">
-        <p>Models will not think in vectors on request, so Coconut uses a <strong>curriculum</strong>: start from ordinary written chains and replace steps with continuous thoughts one stage at a time,. The catch is that each thought needs the previous one, so training is sequential and harder to scale.</p>
+        <p>Models will not think in vectors on request, so Coconut uses a <strong>curriculum</strong>: start from ordinary written chains and replace steps with continuous thoughts one stage at a time. Stage 1 swaps the first written step for a few thoughts (two per step on maths in the paper). Stage 2 swaps two steps, and so on until the reasoning is fully latent.</p>
+        <p>The catch is that each thought needs the previous hidden state, so a sample with <em>n</em> thoughts needs <em>n</em> + 1 forward passes in a row, against one parallel pass normally. Training is slower and harder to scale. Two knobs matter most: thoughts per replaced step, which sets how much room the model has, and how fast the curriculum advances.</p>
       </div>
 
       <figure class="figure" id="fig-curr">
@@ -136,18 +142,19 @@
       </figure>
 
       <div class="prose">
-        <p>On a small GPT-2-sized model (check before quoting), Coconut scored about 34% against 43% for written chains on school maths, with a third of the tokens. On graph search it scored about 97% against 78%. So it is cheaper where steps are routine, better where search matters and worse at careful arithmetic.</p>
+        <p>On a small GPT-2-sized model (check before quoting), Coconut scored about 34% against 43% for written chains on school maths, with a third of the tokens. On graph search it scored about 97% against 78%. With no reasoning at all the same model scored about 16%, so thoughts clearly help. The pattern is: <strong>cheaper where steps are routine, better where search matters, worse at careful arithmetic</strong>. Precise digit-by-digit work seems to need the exactness of written tokens.</p>
       </div>
 
       <h3 class="sub" id="m-jepa">R1.6 · Predict the world, not the pixels</h3>
       <div class="prose">
-        <p>A baby learns that unsupported things fall from far less data than a language model reads, so LeCun argues for a <strong>world model</strong>: an internal simulator you plan with. Predicting pixels wastes capacity on unpredictable detail such as ripples and noise. <strong>JEPA</strong> instead predicts the <em>embedding</em> of the target from the embedding of the context, so the encoder can drop what cannot be predicted.</p>
-        <p>The danger is <strong>collapse</strong>: if everything maps to one vector, prediction is trivial and loss is zero, so near-zero loss is not good news by itself. <strong>V-JEPA 2</strong> (2025) pretrained on over a million hours of unlabelled video, then needed under 62 hours of robot video to plan pick-and-place moves from a goal image. It imagines candidate actions and picks the one ending closest to the goal, which is <strong>model-predictive control</strong>.</p>
+        <p>A baby learns that unsupported things fall from far less data than a language model reads, so LeCun argues for a <strong>world model</strong>: an internal simulator you plan with. The obvious build predicts the next frame pixel by pixel. But most of a frame is unpredictable detail such as flickering leaves, ripples and sensor noise. Like a student marked on handwriting as well as content, the model wastes capacity and blurs its answers.</p>
+        <p><strong>JEPA</strong> (Joint-Embedding Predictive Architecture) fixes this. Two encoders embed a context (the video so far) and a target (the next clip or a masked patch). A predictor guesses the target's embedding from the context's, so the loss lives in <strong>embedding space</strong> and the encoder is free to drop what cannot be predicted.</p>
+        <p>The danger is <strong>collapse</strong>: if everything maps to one vector, prediction is trivial and loss is zero, so near-zero loss is not good news by itself. Fixes are a slowly updated target encoder with stop-gradient, or regularisers that keep embeddings varied. <strong>V-JEPA 2</strong> (2025) pretrained on over a million hours of unlabelled video, then needed under 62 hours of robot video to learn an action-conditioned predictor. Given a goal image, it planned pick-and-place moves on robot arms in new labs. It imagines candidate actions and picks the one ending closest to the goal, which is <strong>model-predictive control</strong>.</p>
       </div>
 
       <h3 class="sub" id="m-plan">R1.6 · Planning with an imperfect model</h3>
       <div class="prose">
-        <p>In this toy, the agent proposes <em>N</em> random plans, predicts each endpoint with an imperfect world model and executes the best-looking one.</p>
+        <p>In this toy, an agent must reach a goal 3 units away using six moves. It proposes <em>N</em> random plans, predicts each endpoint with an imperfect world model and executes the best-looking one. The simulation reports where the plan <em>actually</em> lands. The two knobs are how many futures you imagine and how wrong the model is.</p>
       </div>
 
       <figure class="figure" id="fig-plan">
@@ -169,12 +176,48 @@
       </figure>
 
       <div class="prose">
-        <p><strong>Planning quality is capped by model error</strong>, which compounds over the horizon, so systems plan short and replan often. And <strong>optimisers exploit mistakes</strong>: like picking the best of a thousand CVs, the winner is partly lucky.</p>
+        <p><strong>Planning quality is capped by model error</strong>, which compounds over the horizon, so systems plan short and replan often. And <strong>optimisers exploit mistakes</strong>: like picking the best of a thousand CVs, the winner is partly lucky. Reinforcement learning calls this model exploitation. The guards are short horizons, frequent replanning and checking predictions on held-out plans.</p>
       </div>
 
       <h3 class="sub" id="m-genie">R1.6 · Genie: world models that you can walk around in</h3>
       <div class="prose">
-        <p><strong>Genie</strong> (Google DeepMind) is the generative opposite of JEPA: a world model that renders playable worlds, with Genie 3 (2025) generating interactive 3D scenes from text in real time. Use it to test agents in a simulator (<a href="a4-simulation-testing-for-agents-tau.html">A4.3</a>). Neither camp has shown a clear win for general reasoning.</p>
+        <p><strong>Genie</strong> (Google DeepMind) is the generative opposite of JEPA: a world model that renders playable worlds, with Genie 3 (2025) generating interactive 3D scenes from text in real time. Use it to test agents in a simulator (<a href="a4-simulation-testing-for-agents-tau.html">A4.3</a>). Genie 1 (2024) learned playable 2D worlds from unlabelled video by inferring "latent actions". The camps disagree. The generative side says that to simulate, you must render. The JEPA side says that to plan, you only predict what matters. Neither camp has shown a clear win for general reasoning.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">R1.6 · Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Search-heavy reasoning.</strong> A continuous thought can hold several candidates at once, so branching tasks need less backtracking than a written chain.</li>
+          <li><strong>Short outputs.</strong> Routine steps cost a few thoughts instead of dozens of tokens, so answers are cheaper and faster to produce.</li>
+          <li><strong>Learning from unlabelled video (JEPA).</strong> Predicting embeddings needs no labels, so the first stage can use vast raw data, then a small amount of action data adds control.</li>
+          <li><strong>Cheap what-if testing (world models).</strong> Imagining outcomes in a model costs far less than trying them on a real robot or system.</li>
+        </ul>
+        <p><strong>Weak at, or do not use when</strong></p>
+        <ul>
+          <li><strong>You must audit the reasoning.</strong> Continuous thoughts are not text, so a reviewer cannot read them. Credit, AML and anything regulated need evidence you can inspect.</li>
+          <li><strong>Exact arithmetic or strict logic.</strong> Coconut lost to written chains on school maths. Discrete tokens are exact in a way vectors are not.</li>
+          <li><strong>You need something that ships.</strong> The results are on small models and benchmarks. There is no tooling, no vendor support and no frontier-scale evidence.</li>
+          <li><strong>Training budget is tight.</strong> Sequential training passes parallelise poorly, so the saving at inference is paid for in training.</li>
+          <li><strong>The world model is poor.</strong> Planning inherits its errors, so a weak simulator gives confident wrong plans.</li>
+        </ul>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Written chain-of-thought</b></td><td>You need readable, auditable reasoning, or exact arithmetic. This is the default today.</td><td>Tokens and latency dominate cost and the task is mostly routine.</td></tr>
+            <tr><td><b>Coconut-style latent thoughts</b></td><td>You are researching branching search tasks and can accept unreadable steps.</td><td>You need a production system, an audit trail or precise calculation.</td></tr>
+            <tr><td><b>Extra thinking budget (reasoning models)</b></td><td>You want more accuracy on hard problems now, with a visible trace.</td><td>The budget would be spent on easy requests.</td></tr>
+            <tr><td><b>Tools and code execution</b></td><td>The step is exact: sums, lookups, rules.</td><td>The step is fuzzy judgement.</td></tr>
+            <tr><td><b>JEPA-style world model</b></td><td>You have lots of unlabelled video or sensor data and a control task.</td><td>You have only tabular data, or you need generated media.</td></tr>
+            <tr><td><b>Generative world model (Genie)</b></td><td>You want a rendered environment to test agents in.</td><td>You need physical or business rules obeyed, not just plausible-looking.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice.</strong> Neither line is production-ready today. For reasoning, use a written reasoning model, give it tools for exact steps, and control cost with the thinking budget and shorter prompts. Treat Coconut as a signal about where efficiency may come from, not a thing to deploy. What would change that: faithfulness checks that let you inspect latent steps, and results at frontier scale with cheaper training.</p>
+        <p>For world models, the realistic uses are robotics, simulation and testing agents, not banking decisions. In a bank, the nearest relatives are simulators for stress tests and agent testing. A fraud or credit system needs readable evidence, which is the opposite of what latent thinking offers. If you do experiment, start small: a toy task, a fixed number of thoughts, and a comparison against a written chain on the same data.</p>
       </div>
     </section>
 
@@ -183,6 +226,7 @@
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
         <li><div class="t">Unreadable reasoning</div><p>Continuous thoughts are not text, so you cannot audit a wrong step, and misbehaviour could hide in them. Risk teams will want external evidence instead (<a href="g3-independent-validation.html">G3.2</a>).</p><div class="spot"><b>Spot it</b>Ask how a reviewer inspects the intermediate reasoning. "They would not" fails the bar for a credit or AML decision.</div></li>
+        <li><div class="t">Hidden misbehaviour</div><p>A model could pursue an unwanted goal in latent steps with no trace. Detection work is early and unsolved.</p><div class="spot"><b>Spot it</b>Distrust "safe because it passed output tests". Output tests do not show what hidden steps did.</div></li>
         <li><div class="t">Toy-benchmark generalisation</div><p>Results on a GPT-2-sized model say little about frontier models or real documents. These are research results, not products.</p><div class="spot"><b>Spot it</b>Check model size, task type and comparison with a modern reasoning model.</div></li>
         <li><div class="t">Training cost hidden behind inference savings</div><p>Fewer output tokens, but sequential training passes that parallelise poorly.</p><div class="spot"><b>Spot it</b>Ask for training cost beside tokens per answer.</div></li>
         <li><div class="t">Representation collapse in JEPA</div><p>The encoder outputs near-constant vectors, so loss looks perfect and features are useless.</p><div class="spot"><b>Spot it</b>Check embedding variance across a batch.</div></li>
@@ -200,6 +244,8 @@
         <details class="reveal"><summary>3. Why predict in embedding space rather than pixels, and what can go wrong?</summary><div class="ans"><p>The encoder can drop unpredictable detail, so capacity goes to what matters. The failure is collapse, where constant embeddings give zero loss.</p></div></details>
         <details class="reveal"><summary>4. Your planner's imagined best plan fails in reality. Give two causes.</summary><div class="ans"><p>Model error compounding over the horizon, and exploitation: the best-scoring plan is partly the one whose error flattered it.</p></div></details>
         <details class="reveal"><summary>5. A vendor offers a "latent reasoning" assistant for credit memos. What do you ask?</summary><div class="ans"><p>How reasoning can be inspected, what evidence of faithfulness exists, and what independent benchmarks show. If no reasoning is visible, controls must come from inputs, tool calls, tests and human review.</p></div></details>
+        <details class="reveal"><summary>6. You must build a reasoning assistant for loan-officer memos this quarter. Written chain-of-thought or latent thoughts, and why?</summary><div class="ans"><p>Written chain-of-thought, with tools for exact arithmetic. Reviewers can read it and model risk can validate it. Latent reasoning is a research result on small models and cannot be audited.</p></div></details>
+        <details class="reveal"><summary>7. A robotics team has 500 hours of unlabelled warehouse video and 10 hours of labelled robot actions. Pixel prediction or JEPA, and why?</summary><div class="ans"><p>JEPA. It learns from the unlabelled video by predicting embeddings, ignoring unpredictable detail, then the small action set trains the planner. Watch for collapse and check predictions on held-out plans.</p></div></details>
       </div>
     </section>
 

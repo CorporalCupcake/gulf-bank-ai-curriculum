@@ -110,7 +110,10 @@
 
       <h3 class="sub" id="m-super">R5.1a · Superposition</h3>
       <div class="prose">
-        <p>A layer with <i>d</i> dimensions has only <i>d</i> perfectly perpendicular directions, but random directions in high dimensions are almost perpendicular, so many more fit if you accept small overlaps. The cost is interference: reading one concept picks up a little leakage from every other active one, like conversations bleeding together in a café. Leakage stays small while few concepts are active. This is why single-neuron analysis is incomplete, and why a linear probe, which fits a direction, can find a concept no neuron shows.</p>
+        <p>A layer with <i>d</i> dimensions has only <i>d</i> perfectly perpendicular directions. But random directions in high dimensions are almost perpendicular: the typical overlap between two is about 1 divided by the square root of <i>d</i>. At <i>d</i> = 1,000 that is around 3%, so many thousands of directions fit if you accept small overlaps.</p>
+        <p>The cost is <strong>interference</strong>. Reading one concept picks up a little leakage from every other active one, like conversations bleeding together in a café. Leakage grows with the square root of how many concepts are active at once and shrinks with the square root of the dimensions. For <i>d</i> = 256 and 17 active, it is about a quarter of the signal.</p>
+        <p>What gets packed depends on importance and sparsity. In the toy models of Elhage et al. (2022), a small network gives dedicated dimensions to the most important features, packs rarer ones into shared geometry (pairs, triangles, pentagons, as in Simulation 1) and drops the least valuable. The sparser the inputs, the more goes into superposition. Evidence for real models is indirect.</p>
+        <p>Neurons are still partly meaningful, so you sometimes find a clean one. Superposition is why single-neuron analysis is incomplete, and why a linear probe (a classifier that fits one direction) can find a concept no neuron shows.</p>
       </div>
 
 <figure class="figure" id="fig-int">
@@ -135,7 +138,9 @@
 
       <h3 class="sub" id="m-sae">R5.1b · Sparse autoencoders</h3>
       <div class="prose">
-        <p>An SAE is trained on a layer's activations to rebuild them from a very wide code in which only a few entries are non-zero. Each entry is a feature with its own direction. More sparsity gives cleaner features but worse reconstruction; less sparsity rebuilds well but lets features blur again. Two numbers to read: the unexplained share of the signal (lower is better, and it is not harmless noise) and L0, the features firing per input (smaller is more readable).</p>
+        <p>If activations are sums of a few sparse feature directions, we can learn those directions from data. Collect activations from one place, say the residual stream (the running sum every layer reads and writes) after layer 12, over hundreds of millions of tokens. Then train an SAE with one hidden layer much wider than its input, from 8 times up to hundreds of times, giving thousands to millions of latents. The encoder turns an activation into a code with one entry per feature. The decoder rebuilds the activation as a weighted sum of feature directions, one decoder column per feature. The loss is reconstruction error plus a penalty on the code's size (an L1 penalty), which pushes most entries to exactly zero.</p>
+        <p>The knobs are dictionary width, sparsity strength, and which layer you read. Two variants set sparsity more directly. <strong>TopK</strong> SAEs keep only the <i>k</i> largest entries per input, so you choose L0 outright. <strong>JumpReLU</strong> SAEs use a learned threshold per feature. Both reduce L1's shrinkage (below). It needs the base model's weights and activations at scale, so for a large model it is a serious compute job.</p>
+        <p>The trade-off is unavoidable. More sparsity gives cleaner features but worse reconstruction; less sparsity rebuilds well but lets features blur again. Two numbers to read: the unexplained share of the signal (lower is better, and it is not harmless noise) and L0, the features firing per input (smaller is more readable).</p>
       </div>
 
 <figure class="figure" id="fig-sae">
@@ -165,18 +170,28 @@
       </figure>
 
       <div class="prose">
-        <p>Four problems to know. <strong>Shrinkage</strong>: strengths are under-reported. <strong>Feature splitting</strong>: a bigger dictionary splits "city" into "Gulf cities" and "Texan cities", so size is a choice of resolution. <strong>Absorption</strong>: a general feature goes quiet where a specific one fires. <strong>Dead latents</strong>: some never fire at all.</p>
-        <p>To trust a feature's label, look at where it fires, check it predicts new text, then intervene by pushing it up or down. Only intervening shows the model uses it. The famous case is a "Golden Gate Bridge" feature: amplify it and the model brings the bridge into everything.</p>
+        <p>The toy's effects appear at full scale as named problems.</p>
+        <ul>
+          <li><strong>Shrinkage.</strong> The L1 penalty drags strengths down, so the SAE under-reports how strongly a feature fires. TopK and JumpReLU reduce this.</li>
+          <li><strong>Feature splitting.</strong> A bigger dictionary splits "city" into "Gulf cities" and "Texan cities". No size is "right"; it is a choice of resolution.</li>
+          <li><strong>Absorption.</strong> A general feature goes quiet exactly where a more specific one fires, so "starts with S" has holes. It makes features unreliable detectors.</li>
+          <li><strong>Dead and dense latents.</strong> Dead ones never fire and waste capacity. Dense ones fire on a large share of tokens with no clear meaning and are partly artefacts.</li>
+          <li><strong>The remainder.</strong> Swapping the real activation for the SAE's reconstruction typically raises language-model loss noticeably, so some of what the model uses lives in what the SAE misses.</li>
+        </ul>
+        <p>How do you trust a feature's label? Three kinds of evidence, in rising strength. <strong>Look</strong>: read where it fires most and see whether a human can name it. <strong>Predict</strong>: does the label forecast where it fires on new text? <strong>Intervene</strong>: push the feature up or down and check behaviour changes as expected. The famous case is a "Golden Gate Bridge" feature in Claude 3 Sonnet: amplify it and the model brings the bridge into everything (Templeton et al., 2024).</p>
       </div>
 
       <h3 class="sub" id="m-trans">R5.2a · Transcoders</h3>
       <div class="prose">
-        <p>An SAE rebuilds its own input at one snapshot. A transcoder instead predicts a layer's output from its input through a wide sparse layer, so each feature has a clear "when it fires" and "what it writes". That makes one feature's effect on another traceable. Together they form a <strong>replacement model</strong>, a sparse, nameable stand-in for the original. It is imperfect: the leftover is kept as <strong>error nodes</strong>, and the share of the answer flowing through them shows how much the explanation fails to explain.</p>
+        <p>An SAE reads one snapshot. To explain computation, how one layer's features produce the next layer's, you must represent the <em>layers</em>. A <strong>transcoder</strong> looks like an SAE but does not rebuild its own input. It takes an MLP block's input and predicts that block's <em>output</em> through a wide sparse layer. The original MLP is dense and tangled; the replacement is a short list of active features, each with an input pattern (<em>when</em> it fires) and an output direction (<em>what it writes</em>). That split makes one feature's effect on another traceable.</p>
+        <p>Anthropic's circuit-tracing work (Ameisen et al., 2025) uses <strong>cross-layer transcoders</strong>: a feature reads the residual stream at one layer and writes to <em>all</em> later MLP outputs. Otherwise a concept used at many layers is copied once per layer. One set of these replaces every MLP, giving a <strong>replacement model</strong>: a sparse, nameable stand-in that tries to match the original's outputs.</p>
+        <p>It is imperfect. On any prompt its activations differ from the real model's by a leftover, kept as explicit <strong>error nodes</strong>. The share of the answer flowing through error nodes rather than features measures how much the explanation fails to explain. Near zero is a full account; most of it means the graph explains little.</p>
       </div>
 
       <h3 class="sub" id="m-graph">R5.2b · Attribution graphs</h3>
       <div class="prose">
-        <p>An attribution graph is a wiring diagram for one prompt and one output token. Nodes are active features, prompt tokens and error nodes; an edge says how much one directly pushed up another. For "the capital of the state containing Dallas is", Dallas features feed Texas features, which feed Austin.</p>
+        <p>An attribution graph is a wiring diagram for one prompt and one output token. Nodes are active features, prompt tokens, the output and error nodes; an edge says how much one directly pushed up another. To make those edges linear, the method builds a <strong>local replacement model</strong> that freezes the prompt's attention patterns and normalisation scales as constants. Edge weights are then exact for that stand-in.</p>
+        <p>Raw graphs have thousands of nodes, so researchers prune them and group similar features by hand into labelled <strong>supernodes</strong>. For "the capital of the state containing Dallas is", Dallas features feed Texas features, which feed Austin. A weaker direct Dallas-to-Austin path skips Texas.</p>
       </div>
 
 <figure class="figure" id="fig-graph">
@@ -190,7 +205,48 @@
       </figure>
 
       <div class="prose">
-        <p>A tidy graph is only a hypothesis. Test it on the real model: suppress the Texas features and the answer should weaken; swap in California and it should say Sacramento. Graphs freeze attention, so they show that information moved, not why. Each graph covers one prompt, so check the pattern holds on many. Open tooling exists for small open-weight models, which is the realistic way for a bank team to learn it.</p>
+        <p>A tidy graph is only a hypothesis. Test it on the real model: suppress the Texas features and the answer should weaken; swap in California and it should say Sacramento. Anthropic reported that it does (Lindsey et al., 2025). Three habits for reading real graphs follow.</p>
+        <ul>
+          <li><strong>Check the error-node share first.</strong> If most influence passes through error nodes, the picture does not explain the model.</li>
+          <li><strong>Intervene on the real model</strong>, not the replacement.</li>
+          <li><strong>Remember a graph is one prompt.</strong> Frozen attention means it shows that information moved, not why attention chose to move it. A pattern on a handful of hand-picked prompts can fail on the next thousand.</li>
+        </ul>
+        <p>Tooling is open. Anthropic published its circuit-tracing library in May 2025, with a viewer on Neuronpedia, supporting open-weight models such as Gemma-2-2B and Llama-3.2-1B. A bank team can run these methods on a small model it controls, which is the realistic way to learn them.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">R5.2c · Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Turning tangled neurons into readable units.</strong> Sparsity forces each input to be explained by a few features, and each feature is a direction you can inspect.</li>
+          <li><strong>Finding concepts nobody asked about.</strong> An SAE needs no labels.</li>
+          <li><strong>Giving a causal handle.</strong> A feature is a direction, so you can add or remove it and see what the model does. That is the step from correlation to use.</li>
+          <li><strong>Showing multi-step mechanisms.</strong> Attribution graphs expose intermediate steps, such as Dallas to Texas to Austin, which a probe on the output cannot.</li>
+                  </ul>
+        <p><strong>Weak at, or don't use when</strong></p>
+        <ul>
+          <li><strong>You need a complete account.</strong> The unexplained remainder and error nodes are large, and the model's own loss rises when the SAE is spliced in.</li>
+          <li><strong>You need reproducible features.</strong> Results shift with seed and dictionary size, so features are not a canonical vocabulary.</li>
+          <li><strong>You need coverage.</strong> A graph is one prompt and takes human effort to read.</li>
+          <li><strong>You lack the weights.</strong> API-only models cannot be dissected, and training SAEs on a large model is costly.</li>
+          <li><strong>The model is not a transformer language model.</strong> For scorecards and boosted trees, use F8 methods. For regulator-facing reasons, these are not the tool.</li>
+        </ul>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td>SAE, transcoder and attribution graph</td><td>Exploring unknown features or mechanisms in an open-weight model you control</td><td>You need a decision-grade answer now, or only have API access</td></tr>
+            <tr><td>Linear probe</td><td>You have labelled examples of a known concept and want a detector or a presence test</td><td>You want to discover concepts, or claim the model uses what the probe finds</td></tr>
+            <tr><td>Activation patching or ablation</td><td>Testing whether a specific layer, head or direction matters causally</td><td>You want names for what is inside; it is coarse</td></tr>
+            <tr><td>Behavioural evaluation and red-teaming</td><td>Judging what the model does, which is what risk sign-off needs</td><td>You want to know why it does it</td></tr>
+            <tr><td>SHAP or reason codes (F8)</td><td>Tabular credit, fraud or AML models</td><td>The model is a language model</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose">
+        <p><strong>In practice.</strong> This is research, not production tooling. Do not build a control around it today. For assurance of an in-house model use behavioural evaluations, linear probes and guardrail classifiers. To learn it, take a small open-weight model, load published SAEs and browse features on Neuronpedia, then steer one feature and watch the output. Sensible starting points are a mid-depth layer and an L0 in the tens to low hundreds. Training your own needs hundreds of millions of tokens and a GPU budget.</p>
+        <p>In a bank, the nearest uses are inspecting an in-house open-weight Arabic or English assistant for features tied to sensitive topics, and testing whether a safety behaviour depends on a feature. That changes if remainders shrink at scale, features replicate across seeds and graphs explain attention.</p>
       </div>
     </section>
 
@@ -203,6 +259,8 @@
         <li><div class="t">Cherry-picked graphs</div><p>One beautiful prompt, with no sense of how many failed.</p><div class="spot"><b>Spot it</b>Ask how many prompts were tried and how many gave a usable account.</div></li>
         <li><div class="t">Mistaking correlation for use</div><p>A feature fires on fraud-related text, but behaviour does not depend on it.</p><div class="spot"><b>Spot it</b>Ask for the intervention. No ablation, no causal claim.</div></li>
         <li><div class="t">Overclaiming</div><p>"We can see what the model is thinking", or offering feature dictionaries as customer-facing credit-decision reasons. This gives partial, hypothesis-grade evidence about transformer language models only.</p><div class="spot"><b>Spot it</b>Treat "complete", "guarantee" and "audit-ready" as red flags. For scorecards or boosted trees, use F8 methods.</div></li>
+        <li><div class="t">Treating dictionary size as a fact</div><p>"The model has 34 million features" means the researchers trained that many. Splitting and absorption change with size.</p><div class="spot"><b>Spot it</b>Ask whether the result holds at two dictionary sizes and with another seed.</div></li>
+        <li><div class="t">Beating a baseline you never ran</div><p>An SAE-based detector for harmful requests is reported without a linear probe or fine-tuned classifier alongside.</p><div class="spot"><b>Spot it</b>Ask for the best simple baseline, side by side, on the same held-out data.</div></li>
       </ul>
     </section>
 
@@ -216,6 +274,8 @@
         <details class="reveal"><summary>3. How is a transcoder different from an SAE?</summary><div class="ans"><p>An SAE rebuilds its own input; a transcoder predicts a layer's output through a sparse layer. That gives each feature an input pattern and an output direction, so one feature's effect on the next can be traced.</p></div></details>
         <details class="reveal"><summary>4. A graph shows Dallas leading to Texas leading to Austin. What shows the Texas step is really used?</summary><div class="ans"><p>An intervention on the real model: suppress Texas and Austin should fall; substitute California and the model should say Sacramento. A tidy graph alone is only a story.</p></div></details>
         <details class="reveal"><summary>5. What do error nodes measure, and why check them first?</summary><div class="ans"><p>The part of the computation the replacement model fails to capture. If much of the influence flows through them, the graph explains little.</p></div></details>
+        <details class="reveal"><summary>6. You have 2,000 labelled prompts and an open-weight model, and need a detector for "asks about sanctions evasion". Probe or SAE, and why?</summary><div class="ans"><p>A linear probe. The concept is known and labelled, and a probe is cheap, simple and usually as accurate. An SAE would be worth adding only to explore what else the model represents there, or to check by intervention whether the model uses the direction.</p></div></details>
+        <details class="reveal"><summary>7. A regulator asks why a gradient-boosted model declined a loan. Would you offer feature dictionaries or SHAP-style reason codes, and why?</summary><div class="ans"><p>Reason codes from F8 methods. SAEs and attribution graphs are for transformer language models and give partial, hypothesis-grade evidence. A tabular model has named inputs, so direct attribution is simpler and defensible.</p></div></details>
       </div>
     </section>
 

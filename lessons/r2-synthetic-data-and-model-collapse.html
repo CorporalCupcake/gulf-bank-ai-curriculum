@@ -93,6 +93,8 @@
       <div class="prose">
         <p>Good real text is finite and a strong model is a cheap writer, so synthetic data is attractive. The risk is <strong>model collapse</strong>: train on a model's samples, then train the next model on those, and repeat. The rare cases (the tails) vanish first while averages look fine, so headline metrics hide it.</p>
         <p>A small sample rarely contains extremes, so each generation is slightly narrower than the last, like a game of telephone.</p>
+        <p>Teams reach for synthetic data for three reasons. Good real text is finite and the open web is largely used up. Some data barely exists, such as long reasoning chains, tool-use transcripts and rare edge cases. And a strong model is a cheap, patient writer of clean explanations and rewrites.</p>
+        <p>Collapse has two stages. <strong>Early collapse</strong> loses the tails (low-probability events) while the average looks fine. <strong>Late collapse</strong> converges on narrow, repetitive output unrelated to the original data. Two effects stack on the basic sampling loss. <strong>Approximation error</strong>: no fit is exact, and each generation treats the last one's mistakes as facts. <strong>Decoding sharpening</strong>: a temperature below 1 or a tight top-p cuts the tail before the data is even written.</p>
       </div>
       <figure class="figure" id="fig-collapse">
         <div class="fig-head"><span class="fig-title">Photocopying a distribution: spread over 100 generations</span><span class="fig-tag">Simulation 1 of 3</span></div>
@@ -115,13 +117,22 @@
 
       <div class="prose">
         <p>Researchers separate two regimes. <strong>Replace</strong>: train only on the previous output, and error grows. <strong>Accumulate</strong>: keep the real data plus every synthetic batch, and error stays bounded.</p>
-        <p>Recipes: keep real data in the mix, add a <strong>verifier</strong> (tests, answer keys) so only good samples survive, distil from a stronger teacher, and insist on diversity.</p>
+        <p>Real web data piles up like accumulate, which is why the web itself is not collapsing overnight. But accumulation is a safeguard, not a licence: later work suggests a large synthetic share can still degrade how well a model improves with scale.</p>
+        <p>Recipes that follow from the toy, and why each works:</p>
+        <ul>
+          <li><strong>Keep real data in the mix.</strong> A small steady stream pins the tails, as the green line shows. How much you need is an empirical question per task.</li>
+          <li><strong>Add a verifier</strong> (unit tests, answer keys, back-translation, a reward model) so only good samples survive. The verifier is the new information the loop was missing. It is the engine behind reasoning-model training (R3.2).</li>
+          <li><strong>Distil from a stronger or different teacher.</strong> A larger model injects knowledge. A model's own raw samples inject none.</li>
+          <li><strong>Rewrite rather than invent.</strong> Rephrasing real documents keeps facts tied to a source. Inventing facts from nothing bakes in hallucinations.</li>
+        </ul>
       </div>
 
       <h3 class="sub" id="m-efficiency">Training efficiency: FP8 and FP4, Muon, μP (R2.4)</h3>
       <div class="prose">
         <p>Three levers cut training cost without changing the model's design. Recognise each and know what it buys.</p>
         <p><strong>Lower-precision numbers (FP8, FP4).</strong> Storing weights in 8 or 4 bits instead of 16 roughly halves memory and speeds up arithmetic, but a coarse number has less range and resolution, like a ruler marked only in whole centimetres. Formats store a <strong>scale</strong> per small block of values. One huge outlier forces a big scale and rounds ordinary values to zero. Training is touchier than inference, so recipes keep a high-precision master copy. FP8 is proven at scale; FP4 is newer.</p>
+        <p>A float splits its bits between an exponent (how big) and a mantissa (how finely). FP8 E4M3 has 4 and 3 bits: finer, but a maximum of 448. E5M2 has 5 and 2: wider, maximum 57,344, but coarser. FP4 E2M1 has only eight non-negative values: 0, 0.5, 1, 1.5, 2, 3, 4 and 6. That is why FP4 cannot work without per-block scales.</p>
+        <p>Training is harder than inference because gradients are small and noisy, and rounding bias builds up where random error would cancel. Recipes therefore accumulate sums in 32 bits, use <strong>stochastic rounding</strong> (round up or down at random in proportion to the remainder, so errors average out), and keep a few sensitive layers in 16 bits. DeepSeek-V3 showed FP8 training at very large scale. FP4 pretraining is still being proven.</p>
       </div>
 
       <figure class="figure" id="fig-prec">
@@ -145,16 +156,17 @@
       </figure>
 
       <div class="prose">
-        <p><strong>Muon, a different optimiser.</strong> The usual optimiser, AdamW, treats each weight alone. Muon treats a whole weight matrix and evens out its update directions, like giving every voice in a choir a turn. Moonshot AI reported roughly half the compute for the same loss.</p>
-        <p><strong>μP, hyperparameter transfer.</strong> The best learning rate for a small model is usually wrong for a big one, and tuning at full size is ruinous. μP rescales settings with width, so you tune a small model and reuse the settings, like tasting in a small pot before cooking for a banquet.</p>
+        <p><strong>Muon, a different optimiser.</strong> The usual optimiser, AdamW, treats each weight alone. Muon treats a whole weight matrix and evens out its update directions, like giving every voice in a choir a turn. Raw gradient matrices are dominated by a few directions, like a choir where three voices drown the rest, so equalising them spreads learning across the weaker directions. Muon does this cheaply with a few matrix iterations (Newton-Schulz). It is applied to hidden weight matrices only; embeddings, the output layer and small vectors stay on AdamW. Moonshot AI reported roughly half the compute for the same loss, and used a variant to train Kimi K2.</p>
+        <p><strong>μP, hyperparameter transfer.</strong> The best learning rate for a small model is usually wrong for a big one, and tuning at full size is ruinous. μP rescales settings with width, so you tune a small model and reuse the settings, like tasting in a small pot before cooking for a banquet. Scaling laws (R2.1) tell you how big and how long to train; μP sets the knobs. It handles width well. Depth and unusual optimisers need extensions, and not every lab uses it.</p>
         <p>Together they change who can afford to train a model, not what it can learn.</p>
       </div>
 
       <h3 class="sub" id="m-merge">Model merging (R2.5)</h3>
       <div class="prose">
         <p>Suppose you fine-tune one base on Arabic banking text and another on code, and want one model that does both. <strong>Merging</strong> combines their weights with no training and no data, in minutes on a CPU.</p>
-        <p>It works only for fine-tunes of the <em>same</em> base. They move only a short way from the base, so blending them stays in a good region. Models from different starts give garbage. A <em>task vector</em> is what fine-tuning changed (fine-tuned minus base). Add vectors to add skills, scaled by a strength you choose. If tasks use different weights they barely interfere; if they push the same weights, they pull against each other like two people on one rope, and a smaller strength is the compromise.</p>
-        <p>Methods such as TIES and DARE reduce interference, but plain averaging is a baseline they do not reliably beat.</p>
+        <p>It works only for fine-tunes of the <em>same</em> base. They move only a short way from the base, so the straight line between them stays in a low-loss region. Averaging several fine-tunes of one base can even beat any single one, the "model soup" result. Models from different starts give garbage. A <em>task vector</em> is what fine-tuning changed (fine-tuned minus base). Add vectors to add skills, scaled by a strength you choose. If tasks use different weights they barely interfere; if they push the same weights, they pull against each other like two people on one rope, and a smaller strength is the compromise.</p>
+        <p>Follow-up methods attack interference. <strong>TIES</strong> trims each task vector to its largest changes, picks a sign where tasks disagree, and merges only agreeing entries. <strong>DARE</strong> randomly drops 90% or more of each vector and rescales, because fine-tuning changes are highly redundant. The mergekit library turns these into config files.</p>
+        <p>The caveat: gains are real but uneven, and plain averaging or task arithmetic is a baseline the fancier methods do not reliably beat. Keep task vectors small (low learning rates, short fine-tunes, or LoRA adapters, which are low-rank task vectors already).</p>
       </div>
 
       <figure class="figure" id="fig-merge">
@@ -188,6 +200,42 @@
       <div class="prose">
         <p>Merge only from the same base, and <strong>re-evaluate the merge</strong> on every skill, because merging is a search, not a guarantee. For a bank, a merged model is a new model for governance (G3.2), and its safety is not the average of its parents'.</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Filling data gaps that real data cannot.</strong> Rare cases, reasoning chains and tool-use traces barely exist in the wild. A generator plus a verifier can make them in bulk.</li>
+          <li><strong>Cheap, verifiable domains.</strong> Code and maths can be checked automatically, so the verifier supplies the new information the loop needs.</li>
+          <li><strong>Cutting training cost.</strong> Lower precision saves memory and bandwidth, Muon needs fewer steps, and μP replaces expensive full-size tuning with a small proxy.</li>
+          <li><strong>Combining skills without retraining.</strong> Merging is minutes on a CPU, with no data and no gradients, because fine-tunes of one base sit in the same low-loss region.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>Closed-loop training with no fresh real data.</strong> The tails vanish and metrics hide it.</li>
+          <li><strong>Evaluation.</strong> A synthetic test set shares the generator's blind spots, so it flatters the student.</li>
+          <li><strong>Anything that needs ground truth you cannot verify,</strong> such as regulatory facts, customer behaviour or fraud patterns the generator has never seen. It copies and amplifies what it already believes.</li>
+          <li><strong>Very low precision on a small budget.</strong> FP4 needs careful recipes and kernel support, and a failed run costs more than the saving.</li>
+          <li><strong>Merging models with different bases, or fine-tunes that overlap heavily.</strong> One skill silently drops, and the overlap sets a ceiling no recipe can lift.</li>
+        </ul>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Synthetic data with a verifier</b></td><td>Outputs can be checked (code, maths, schema-bound extraction) or real data is scarce</td><td>Nothing can check the output, or it would replace all real data</td></tr>
+            <tr><td><b>More real labelled data</b></td><td>You can afford to collect or label it and quality matters most</td><td>The cases are rare or the data is too sensitive to share</td></tr>
+            <tr><td><b>Distillation from a stronger model</b></td><td>You want a small, cheap model that copies a larger one's behaviour</td><td>Licence terms forbid it, or the teacher is wrong on your domain</td></tr>
+            <tr><td><b>Multi-task fine-tuning</b></td><td>You have all the data in one place and can afford a run</td><td>Data sits in separate silos, or every new skill forces a full retrain</td></tr>
+            <tr><td><b>Model merging</b></td><td>Fine-tunes share one base and you need a quick blend to test</td><td>Different bases, heavy overlap, or you cannot re-evaluate afterwards</td></tr>
+            <tr><td><b>Low-precision training (FP8)</b></td><td>You train at a scale where memory or speed is the bottleneck</td><td>Small runs where 16-bit already fits, or you lack kernel support</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose">
+        <p><strong>In practice.</strong> Try real data plus a small, verified synthetic top-up first. Keep a real, independent test set and check rare-case performance, not just the average. For merging, start with plain averaging or task arithmetic, tune the strength, and re-evaluate every parent skill plus safety. For precision, FP8 is the safe default at scale.</p>
+        <p>Most banks will never pretrain, so the daily use is smaller. Synthetic data fills thin classes in fraud and AML (anti-money-laundering) work, makes test records without customer data, and generates Arabic and English instruction examples for assistants. Merging blends in-house LoRA fine-tunes. Training-efficiency tricks matter when you choose a vendor or open-weight base. Synthetic fraud data must never be the only evidence a model works. Validate on real, later-period data and keep the review trail for governance.</p>
+      </div>
     </section>
 
     <!-- ============================== 3. FAILS ============================== -->
@@ -199,6 +247,7 @@
         <li><div class="t">Synthetic tests and false privacy</div><p>A generator-written test set shares the generator's blind spots, and a generator trained on customer records can emit near-copies.</p><div class="spot"><b>Spot it</b>Use a real, independent test set. Ask for a membership-inference result (R11.2) before calling output anonymous.</div></li>
         <li><div class="t">Cheap training that quietly hurts</div><p>FP8 or FP4 can diverge or lose a little quality the loss curve hides, and "Muon is 2x faster" claims may not transfer to your scale.</p><div class="spot"><b>Spot it</b>Compare with a higher-precision run at small scale. Ask whether the baseline was tuned as hard.</div></li>
         <li><div class="t">Merging what shouldn't be merged</div><p>Different bases or aggressive fine-tunes lose a skill silently, safety behaviour can dilute, and a parent's backdoor can survive.</p><div class="spot"><b>Spot it</b>Confirm the same base. Evaluate on every parent's task, including safety, and check provenance (G1.2).</div></li>
+        <li><div class="t">Optimiser and tuning claims that don't transfer</div><p>"Muon is 2x faster" or "μP removed tuning" is quoted from a paper whose model size, data or baseline tuning differs from yours.</p><div class="spot"><b>Spot it</b>Ask whether the baseline was tuned as hard, at what scale, and over how many seeds.</div></li>
       </ul>
     </section>
 
@@ -211,6 +260,8 @@
         <details class="reveal"><summary>3. Why does a verifier make self-generated data useful?</summary><div class="ans"><p>It injects information the model lacked by separating good samples from bad. Without it, the loop only repeats what the model already believes.</p></div></details>
         <details class="reveal"><summary>4. Why do outliers hurt FP4, and what helps?</summary><div class="ans"><p>One huge value sets a big scale, so ordinary values round to zero. Smaller blocks confine the damage, and sensitive layers can stay in 16 bits.</p></div></details>
         <details class="reveal"><summary>5. Why can't you merge two models trained from different random starts?</summary><div class="ans"><p>Their weights do not line up, so blending lands on a high-loss ridge. Fine-tunes of one pretrained base stay in the same region.</p></div></details>
+        <details class="reveal"><summary>6. You must build a fraud model, but confirmed fraud cases are rare. Would you generate synthetic fraud cases, collect more labels, or neither first? Why?</summary><div class="ans"><p>Collect or re-weight real labels first, since real cases carry the true patterns. Add synthetic cases only if a verifier or domain rules can vouch for them, and keep them to training. Test on real, later-period cases. A generator cannot invent fraud patterns it has never seen.</p></div></details>
+        <details class="reveal"><summary>7. A team has three LoRA fine-tunes (Arabic text, SQL, safety) of one base. Would you merge them or train one multi-task model, and what would change your mind?</summary><div class="ans"><p>Merge first: it takes minutes, and you can test strength settings. Re-evaluate all three skills, especially safety. If one skill drops and overlap looks heavy, or if you can pool the data, train one multi-task model instead.</p></div></details>
       </div>
     </section>
 
