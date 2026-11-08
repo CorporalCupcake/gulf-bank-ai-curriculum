@@ -70,16 +70,15 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A clerk converts a million card slips from dollars to dirhams. She can pick up each slip, multiply by 3.6725, write the answer and move on. Or a machine built for one job multiplies the whole stack by the same constant. The clerk is a Python <code>for</code> loop; the machine is a NumPy array operation. Same arithmetic. The clerk spends most of her time on handling (look at the slip, check what it is, pick up the pen); the machine spends almost all of it multiplying. That is <strong>vectorisation</strong>: express the computation as operations on whole arrays, so the per-element loop runs in compiled code.</p>
-        <p>Real data also has labels: a balance means nothing without knowing whose it is. <strong>pandas</strong> glues labels (an index and column names) onto NumPy arrays. Think of a spreadsheet where rows are tied to names, not positions. That is convenient and dangerous:</p>
+        <p>A clerk converts a million card slips from dollars to dirhams. She can pick up each slip, multiply, write the answer and move on. Or a machine built for one job multiplies the whole stack at once. The clerk is a Python <code>for</code> loop; the machine is a NumPy array operation. Same arithmetic, but the clerk spends most of her time handling slips. That is <strong>vectorisation</strong>: describe the computation on whole arrays, so the loop runs in compiled code.</p>
+        <p>Real data also has labels: a balance means nothing without knowing whose it is. <strong>pandas</strong> glues labels (an index and column names) onto NumPy arrays. That is convenient and dangerous, because three things happen without any error:</p>
         <ul>
           <li>Adding two columns matches them by label, not position.</li>
           <li>Joining two tables multiplies rows when a key repeats.</li>
           <li>Assigning to a slice may or may not change the original.</li>
         </ul>
-        <p>None of these raise an error. They give a number, and it is wrong. pandas asks the same questions as SQL (F3.3): SQL runs where the data lives, pandas where you explore and build models.</p>
+        <p>Each gives a number, and the number is wrong.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Every pandas step has a silent contract: which labels line up, how many rows come out, what type each column has. Write the contract as a check (row-count assertion, key uniqueness, dtypes) so a broken one fails loudly instead of feeding a wrong figure into a report.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -88,13 +87,13 @@
 
       <h3 class="sub" id="m-array">What an array actually is</h3>
       <div class="prose">
-        <p>A Python list is a shelf of separate boxes, each labelled with its type, plus pointers to them. A NumPy <code>ndarray</code> is one tray of identical items laid side by side: a contiguous block of memory, all one type, plus a small description of how to read it:</p>
+        <p>A Python list is a shelf of separate boxes. A NumPy array is one tray of identical items laid side by side. Three properties describe it:</p>
         <ul>
-          <li><strong>dtype</strong>: the type of every element (<code>float64</code> is 8 bytes, <code>float32</code> 4, plus <code>int64</code>, <code>bool</code>).</li>
-          <li><strong>shape</strong>: sizes per axis. 1,000 customers by 12 months is <code>(1000, 12)</code>. One column of 1,000 values is <code>(1000,)</code>: neither row nor column, just a run. This distinction causes real bugs (see broadcasting).</li>
-          <li><strong>strides</strong>: bytes to jump to the next element per axis. This makes transposes and slices free: NumPy changes the description, not the bytes.</li>
+          <li><strong>dtype</strong>: the type of every element (<code>float64</code> uses 8 bytes, <code>float32</code> 4).</li>
+          <li><strong>shape</strong>: size per axis. 1,000 customers by 12 months is <code>(1000, 12)</code>. A bare column of 1,000 values is <code>(1000,)</code>: neither row nor column, just a run. This distinction causes real bugs (see broadcasting).</li>
+          <li><strong>strides</strong>: how NumPy steps through memory. It is why transposes and slices are free.</li>
         </ul>
-        <p>Consequence: a basic slice such as <code>a[:, 3]</code> is a <strong>view</strong> (same memory, so writing to it changes the original). Selecting by mask or list (<code>a[a &gt; 0]</code>) is a <strong>copy</strong>. NumPy does not tell you which you got. Use <code>.copy()</code> to state your intent.</p>
+        <p>A basic slice such as <code>a[:, 3]</code> is a <strong>view</strong>: same memory, so writing to it changes the original. Selecting by mask (<code>a[a &gt; 0]</code>) gives a <strong>copy</strong>. NumPy does not tell you which you got, so use <code>.copy()</code> to state your intent.</p>
       </div>
 <pre><code>import numpy as np
 
@@ -105,27 +104,22 @@ big = amounts[amounts &gt; 100]    # boolean mask -&gt; a COPY: [120., 8300.]
 head = amounts[:2]              # basic slice  -&gt; a VIEW of the same memory
 head[0] = 0.0                   # amounts is now [0., 45.5, 8300., 15.]</code></pre>
       <div class="prose">
-        <p><strong>Memory is simple arithmetic.</strong> <em>n</em> float64 values take 8<em>n</em> bytes. 50 million transactions with 40 numeric columns is 50,000,000 × 40 × 8 = 16 GB. <code>float32</code> halves that; <code>int32</code> or <code>category</code> for codes and labels can shrink it far more. This is how you say "that will not fit on the laptop" before it freezes.</p>
+        <p><strong>Memory is simple arithmetic:</strong> rows × columns × bytes per value. 50 million transactions with 40 float64 columns is about 16 GB. Smaller dtypes (<code>float32</code>, <code>category</code> for labels) shrink that, which is how you say "that will not fit on the laptop" before it freezes.</p>
         <p>Two dtype traps in banking:</p>
         <ul>
-          <li><strong>Floats are inexact.</strong> <code>0.1 + 0.2</code> is <code>0.30000000000000004</code>, like a ruler that cannot mark one-third exactly. Fine for analysis. For anything that must reconcile to the fils (ledgers, fees), keep integers of the smallest unit or use <code>decimal</code>, and compare with a tolerance, not <code>==</code>.</li>
+          <li><strong>Floats are inexact.</strong> <code>0.1 + 0.2</code> is <code>0.30000000000000004</code>. Fine for analysis. For anything that must reconcile to the fils, keep integers of the smallest unit or use <code>decimal</code>, and compare with a tolerance, not <code>==</code>.</li>
           <li><strong>NaN is a float.</strong> One missing value silently turns an integer column into <code>float64</code>, and <code>nan == nan</code> is False. Use <code>np.isnan</code>.</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-vector">Why a loop is slow and an array operation is not</h3>
       <div class="prose">
-        <p>For each element, Python fetches a full object, looks up what <code>*</code> means for its type, allocates a result object, then repeats for the addition: tens of nanoseconds per pass. NumPy pays that overhead <em>once</em>, then hands the contiguous block to a compiled routine that streams through memory (often several numbers per CPU cycle via SIMD). Rough cost model:</p>
-        <ul>
-          <li><strong>Python loop:</strong> <em>n</em> × (tens of ns overhead + the work).</li>
-          <li><strong>NumPy call:</strong> a few µs fixed start-up + <em>n</em> × (about 1 ns).</li>
-        </ul>
-        <p>So 20 elements gain almost nothing (start-up dominates), while a million gain fifty-fold or more. Like a taxi against a train: not worth it for one street, decisive across the country.</p>
+        <p>Python looks up the type of every element and builds a new result object each time round, tens of nanoseconds per pass. NumPy pays a small fixed cost once, then hands the whole block to compiled code that streams through memory. So 20 elements gain almost nothing, while a million gain fifty-fold or more. Like a taxi against a train: not worth it for one street, decisive across the country.</p>
       </div>
 
       <figure class="figure" id="fig-loop">
         <div class="fig-head"><span class="fig-title">Loop against array operation</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> start at 1,000,000 rows and 3 arithmetic steps per row. Slide the row count down to about 100 and watch the red and green lines meet: for tiny arrays there is almost nothing to gain. Slide it up to 100 million and see the loop move from seconds to minutes while the array version stays comfortable. The memory box tells you when the data itself stops fitting.</p>
+        <p class="try"><b>Try:</b> start at 1,000,000 rows. Slide the row count down to about 100 and watch the lines meet: tiny arrays gain nothing. Slide it up to 100 million and the loop moves from seconds to minutes. The memory box shows when the data stops fitting.</p>
         <div class="chart-wrap" id="loop-chart"></div>
         <div class="legend">
           <span><i style="background:var(--bad)"></i>Python loop over rows</span>
@@ -142,7 +136,7 @@ head[0] = 0.0                   # amounts is now [0., 45.5, 8300., 15.]</code></
           <div class="stat" id="st1-mem-b"><div class="k">One float64 column</div><div class="v" id="st1-mem"></div><div class="s" id="st1-mem-s"></div></div>
         </div>
         <p class="verdict" id="s1-verdict"></p>
-        <p class="sim-note">Simulated with an illustrative cost model, not a benchmark: the loop costs 50 ns per row plus 25 ns per arithmetic step; the array version costs 1.5 µs start-up plus 1 ns per element, per step. Real figures depend on the machine, the dtype and the operation, and typically land in the same order of magnitude. The shape of the result (a fixed overhead, then a large constant-factor gap) is the reliable part. Axes are logarithmic.</p>
+        <p class="sim-note">Illustrative cost model, not a benchmark. Real figures depend on the machine and operation; the reliable part is the shape (fixed overhead, then a large constant-factor gap). Axes are logarithmic.</p>
       </figure>
 
       <div class="prose">
@@ -156,29 +150,19 @@ for amt, is_intl in zip(amounts, intl_flags):
 # Fast: the whole thing as array operations
 fees = np.where(intl_flags, amounts * 0.0275, amounts * 0.01)</code></pre>
       <div class="prose">
-        <p>Three building blocks:</p>
-        <ul>
-          <li><strong>Ufuncs</strong> (<code>+</code>, <code>*</code>, <code>np.log</code>) apply an operation to every element.</li>
-          <li><strong>Boolean masks</strong> (<code>amounts[amounts &gt; 5000]</code>) replace <code>if</code>; <code>np.where(cond, x, y)</code> is vector if/else.</li>
-          <li><strong>Reductions</strong> (<code>sum</code>, <code>mean</code>, <code>max</code>, with <code>axis</code>) collapse a dimension and replace accumulator loops.</li>
-        </ul>
-        <p>Limits: if each step depends on the previous one (a running balance with an overdraft rule), it may not vectorise; try <code>cumsum</code>, Numba or a compiled tool. Vectorising also makes full-size temporaries (<code>a*b + c*d</code> makes three), which matters at several GB. The practical rule: <strong>a <code>for</code> loop over DataFrame rows almost always has a one-line version that is 10 to 100 times faster.</strong></p>
+        <p>Three building blocks cover most cases: <strong>ufuncs</strong> (<code>+</code>, <code>np.log</code>) apply an operation to every element; <strong>boolean masks</strong> (<code>amounts[amounts &gt; 5000]</code>) replace <code>if</code>; <strong>reductions</strong> (<code>sum</code>, <code>mean</code>, with <code>axis</code>) replace accumulator loops.</p>
+        <p>If each step depends on the previous one (a running balance with an overdraft rule), it may not vectorise. The practical rule: <strong>a <code>for</code> loop over DataFrame rows almost always has a one-line version that is 10 to 100 times faster.</strong></p>
       </div>
 
       <h3 class="sub" id="m-broadcast">Broadcasting: how arrays of different shapes combine</h3>
       <div class="prose">
-        <p>To subtract each month's average from <code>balances</code> of shape <code>(1000, 12)</code> using <code>column_means</code> of shape <code>(12,)</code>, NumPy stretches the means across all 1,000 rows without copying them. It is like a stencil pressed down the whole page. The rule:</p>
-        <ol>
-          <li><strong>Right-align the shapes</strong>; pad the shorter with 1s on the left.</li>
-          <li>Per axis, sizes are compatible if <strong>equal</strong> or <strong>one is 1</strong>.</li>
-          <li>The result takes the larger size; a size-1 axis is stretched virtually (stride zero).</li>
-        </ol>
-        <p>An axis that fails step 2 raises an error. That is the good outcome. The dangerous case is a shape that broadcasts when you did not intend it.</p>
+        <p>To subtract each month's average from <code>balances</code> of shape <code>(1000, 12)</code> using <code>column_means</code> of shape <code>(12,)</code>, NumPy stretches the means down all 1,000 rows without copying them, like a stencil pressed down the page. The rule: <strong>line the shapes up from the right; on each axis the sizes must be equal or one of them must be 1.</strong> A size-1 axis is stretched to fit.</p>
+        <p>An axis that fails raises an error, which is the good outcome. The dangerous case is a shape that broadcasts when you did not intend it.</p>
       </div>
 
       <figure class="figure" id="fig-bc">
         <div class="fig-head"><span class="fig-title">Do these two shapes combine?</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> press <b>Column means</b> first: it works, because the 12 months line up on the right. Then press <b>Customer means, the wrong way</b>: <code>(1000,)</code> is aligned against the 12, and fails. The fix is <b>Customer means with a new axis</b>, which makes it <code>(1000, 1)</code>. Finally pick <code>(1000, 1)</code> against <code>(1, 12)</code> yourself and notice the result is a much bigger table than either input.</p>
+        <p class="try"><b>Try:</b> press <b>Column means</b>: it works, because the 12 months line up on the right. Then press <b>Customer means, the wrong way</b>: <code>(1000,)</code> is lined up against the 12 and fails. The fix is <b>Customer means with a new axis</b>, which makes it <code>(1000, 1)</code>. Finally pick <code>(1000, 1)</code> against <code>(1, 12)</code> and notice the result is a much bigger table than either input.</p>
         <div class="btns" role="group" aria-label="Quick cases">
           <button class="btn" type="button" id="bc-1">Column means</button>
           <button class="btn" type="button" id="bc-2">Customer means, the wrong way</button>
@@ -190,54 +174,49 @@ fees = np.where(intl_flags, amounts * 0.0275, amounts * 0.01)</code></pre>
         </div>
         <div class="table-wrap"><div id="bc-table"></div></div>
         <div class="verdict" id="s2-verdict"></div>
-        <p class="sim-note">Simulated: this runs NumPy's actual broadcasting rule on shape tuples only, no data. Sizes are the customers-by-months example from the text (1,000 customers, 12 months). The "memory" figure assumes float64, 8 bytes per cell.</p>
+        <p class="sim-note">Simulated: runs NumPy's actual broadcasting rule on shape tuples only, no data. The memory figure assumes float64.</p>
       </figure>
 
       <div class="prose">
-        <p>Two idioms: <code>x[:, None]</code> (or <code>x.reshape(-1, 1)</code>) turns <code>(1000,)</code> into a <code>(1000, 1)</code> column, and <code>keepdims=True</code> keeps a collapsed axis as size 1 so it broadcasts back:</p>
+        <p>Two idioms fix most shape problems: <code>x[:, None]</code> turns <code>(1000,)</code> into a <code>(1000, 1)</code> column, and <code>keepdims=True</code> keeps a collapsed axis as size 1 so it broadcasts back:</p>
       </div>
 <pre><code>row_means = balances.mean(axis=1, keepdims=True)    # shape (1000, 1)
-centred   = balances - row_means                    # each customer minus their own mean
-z = (balances - balances.mean(axis=0)) / balances.std(axis=0)   # standardise each month</code></pre>
+centred   = balances - row_means                    # each customer minus their own mean</code></pre>
       <div class="prose">
-        <p>The opposite danger: for a square table like <code>(12, 12)</code>, a <code>(12,)</code> vector broadcasts along the last axis without complaint, and if you meant the other axis the answer is wrong with no error. When shapes are square or you are unsure, print <code>.shape</code> at each step and test on a tiny array you can check by hand (the F10.2 testing habit). Broadcasting is also how every neural-network layer in F5 adds a bias to a batch.</p>
+        <p>The opposite danger: for a square table like <code>(12, 12)</code>, a <code>(12,)</code> vector broadcasts without complaint, and if you meant the other axis the answer is wrong with no error. When unsure, print <code>.shape</code> at each step and test on a tiny array you can check by hand.</p>
       </div>
 
       <h3 class="sub" id="m-pandas">pandas in one picture: arrays with labels</h3>
       <div class="prose">
-        <p>A <code>Series</code> is a NumPy array plus an <strong>index</strong> (row labels). A <code>DataFrame</code> is Series sharing one index, with column names, and each column has its own dtype. Mental model: <em>a dictionary of columns, aligned by row label</em>. Mixing up the selection forms causes subtle errors:</p>
+        <p>A <code>Series</code> is a NumPy array plus an <strong>index</strong> (row labels). A <code>DataFrame</code> is Series sharing one index, each column with its own dtype. Mental model: <em>a dictionary of columns, aligned by row label</em>. Three selection forms matter:</p>
       </div>
       <div class="table-wrap" style="margin-top:16px">
         <table class="data">
           <thead><tr><th>You want</th><th>pandas</th><th>SQL equivalent</th><th>Watch for</th></tr></thead>
           <tbody>
-            <tr><td>Some columns</td><td><code>df[["cust_id","amount"]]</code></td><td><code>SELECT cust_id, amount</code></td><td>Double brackets return a DataFrame; single brackets a Series.</td></tr>
-            <tr><td>Rows by condition</td><td><code>df[df.amount &gt; 5000]</code> or <code>df.query("amount &gt; 5000")</code></td><td><code>WHERE amount &gt; 5000</code></td><td>Combine with <code>&amp;</code> and <code>|</code>, brackets around each, not <code>and</code>/<code>or</code>. A missing amount is False, as in SQL.</td></tr>
+            <tr><td>Rows by condition</td><td><code>df[df.amount &gt; 5000]</code></td><td><code>WHERE amount &gt; 5000</code></td><td>Combine with <code>&amp;</code> and <code>|</code>, brackets around each, not <code>and</code>/<code>or</code>.</td></tr>
             <tr><td>Rows and columns by label</td><td><code>df.loc[mask, "amount"]</code></td><td>both of the above</td><td><code>.loc</code> slices include the end label.</td></tr>
-            <tr><td>By position</td><td><code>df.iloc[0:10, 2]</code></td><td>none (SQL has no row order)</td><td><code>.iloc</code> slices exclude the end. After sorting or filtering, position and label differ.</td></tr>
-            <tr><td>New column</td><td><code>df.assign(fee=df.amount * 0.01)</code></td><td><code>SELECT *, amount*0.01 AS fee</code></td><td>Prefer <code>assign</code> and method chains: each step returns a new frame, nothing is mutated behind your back.</td></tr>
+            <tr><td>By position</td><td><code>df.iloc[0:10, 2]</code></td><td>none (SQL has no row order)</td><td>After sorting or filtering, position and label differ.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
         <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">Copies, views and the warning everyone ignores</h4>
-        <p><code>df[df.amount &gt; 5000]["flag"] = 1</code> is two steps (select, then assign), so it assigns to a temporary copy and <code>df</code> is untouched. Older pandas sometimes returned a view and warned with <code>SettingWithCopyWarning</code>. Pandas 3.0 (January 2026) makes <strong>copy-on-write</strong> the only mode: anything derived from another object behaves as a copy, so chained assignment never updates the original. Write it in one step, which also works on pandas 2.x: <code>df.loc[df.amount &gt; 5000, "flag"] = 1</code>.</p>
+        <p><code>df[df.amount &gt; 5000]["flag"] = 1</code> is two steps (select, then assign), so it assigns to a temporary copy and <code>df</code> is untouched. Older pandas sometimes returned a view and warned with <code>SettingWithCopyWarning</code>. Pandas 3.0 makes <strong>copy-on-write</strong> the only mode, so chained assignment never updates the original. Write it in one step: <code>df.loc[df.amount &gt; 5000, "flag"] = 1</code>.</p>
       </div>
-<pre><code>big = df.loc[df["amount"] &gt; 5000].copy()    # an explicit copy you may modify freely
-df.loc[df["amount"] &gt; 5000, "flag"] = 1      # modify the original, one step</code></pre>
 
       <h3 class="sub" id="m-align">Index alignment: the silent matcher</h3>
       <div class="prose">
-        <p>For <code>a - b</code>, pandas <strong>aligns on the index</strong> first: it takes the union of labels and matches equal ones, like matching exam scores to students by name rather than seat number. Labels on only one side give <code>NaN</code>. Right when labels mean something; a trap when:</p>
+        <p>For <code>a - b</code>, pandas <strong>aligns on the index</strong> first: it matches equal labels, like matching exam scores to students by name rather than seat number. Labels on only one side give <code>NaN</code>. That is right when labels mean something, and a trap when:</p>
         <ul>
           <li>The indexes are not what you think (one is 0,1,2,..., the other customer IDs): the result is mostly NaN.</li>
-          <li>You filter or sort one side, then add a column or <code>.values</code> from the other: you get unexpected alignment, or you bypass it and pair wrong rows with no warning.</li>
+          <li>You filter or sort one side, then use <code>.values</code> from the other: you bypass alignment and pair the wrong rows with no warning.</li>
         </ul>
       </div>
 
       <figure class="figure" id="fig-align">
         <div class="fig-head"><span class="fig-title">Subtracting fees from balances</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> with the offset at 0, all three modes agree. Move the offset to 2: the fee table now covers customers 103 to 107. The aligned result shows NaN where a label has no partner (visible and honest). Switch to <b>Positional</b> and the NaNs vanish, but check the "wrong pairing" count: every balance now has another customer's fee taken off. Then try <b>fill_value=0</b> and ask whether treating a missing balance as zero is sensible.</p>
+        <p class="try"><b>Try:</b> with the offset at 0, all three modes agree. Move the offset to 2: the fee table now covers customers 103 to 107. The aligned result shows NaN where a label has no partner (visible and honest). Switch to <b>Positional</b> and the NaNs vanish, but check the "wrong pairing" count: every balance now has another customer's fee taken off. Then try <b>fill_value=0</b> and ask whether a missing balance as zero is sensible.</p>
         <div class="btns" role="group" aria-label="Mode">
           <button class="btn" type="button" data-mode="align" aria-pressed="true">a - b (aligns on index)</button>
           <button class="btn" type="button" data-mode="fill" aria-pressed="false">a.sub(b, fill_value=0)</button>
@@ -254,54 +233,44 @@ df.loc[df["amount"] &gt; 5000, "flag"] = 1      # modify the original, one step<
           <div class="stat"><div class="k">Result rows</div><div class="v" id="st3-rows"></div><div class="s">a has 5 rows</div></div>
         </div>
         <p class="verdict" id="s3-verdict"></p>
-        <p class="sim-note">Simulated: five customers (IDs 101 to 105) with balances AED 1,200 / 560 / 8,300 / 150 / 2,400, and a fee table of AED 10 / 5 / 25 / 2 / 12 for five consecutive IDs starting at 101 plus the offset. The behaviour mirrors pandas: index-aligned subtraction uses the union of labels; fill_value substitutes 0 only where one side is missing; positional subtraction ignores labels. Exact, no randomness.</p>
+        <p class="sim-note">Simulated: five customers (IDs 101 to 105) with balances AED 1,200 / 560 / 8,300 / 150 / 2,400, and fees of AED 10 / 5 / 25 / 2 / 12 for five consecutive IDs starting at 101 plus the offset. Exact, no randomness.</p>
       </figure>
 
       <div class="prose">
-        <p>Habits: give frames a meaningful index (<code>set_index("cust_id")</code>) or none you rely on; use <code>reset_index(drop=True)</code> when you want positional behaviour; <code>assert a.index.equals(b.index)</code> where it should hold; prefer an explicit <code>merge</code> on a key over index magic between tables. And <code>fill_value=0</code> answers a different question: a missing fee as 0 is plausible, a missing balance as 0 usually is not.</p>
+        <p>Habits: give frames a meaningful index (<code>set_index("cust_id")</code>), <code>assert a.index.equals(b.index)</code> where it should hold, and prefer an explicit <code>merge</code> on a key between tables. <code>fill_value=0</code> answers a different question: a missing fee as 0 is plausible, a missing balance as 0 usually is not.</p>
       </div>
 
       <h3 class="sub" id="m-group">Grouping: split, apply, combine</h3>
       <div class="prose">
-        <p><code>groupby</code> is SQL's <code>GROUP BY</code>. Every flavour splits rows by key first; they differ in what comes back. Picking the right one is most of the skill.</p>
+        <p><code>groupby</code> is SQL's <code>GROUP BY</code>. Every flavour splits rows by key first; they differ in what comes back.</p>
       </div>
       <div class="table-wrap" style="margin-top:16px">
         <table class="data">
           <thead><tr><th>Flavour</th><th>Returns</th><th>pandas</th><th>SQL analogue</th></tr></thead>
           <tbody>
-            <tr><td><b>Aggregate</b></td><td>One row per group</td><td><code>df.groupby("cust_id")["amount"].agg(["sum","mean","count"])</code></td><td><code>GROUP BY cust_id</code> with <code>SUM</code>, <code>AVG</code>, <code>COUNT</code></td></tr>
-            <tr><td><b>Transform</b></td><td>One value per original row, group statistic repeated</td><td><code>df["share"] = df.amount / df.groupby("cust_id")["amount"].transform("sum")</code></td><td>Window function: <code>SUM(amount) OVER (PARTITION BY cust_id)</code></td></tr>
-            <tr><td><b>Apply / rolling / rank</b></td><td>Anything, including per-group ranking</td><td><code>df.groupby("cust_id")["amount"].rank(ascending=False)</code></td><td><code>RANK() OVER (PARTITION BY ...)</code></td></tr>
+            <tr><td><b>Aggregate</b></td><td>One row per group</td><td><code>df.groupby("cust_id")["amount"].agg(["sum","mean","count"])</code></td><td><code>GROUP BY cust_id</code></td></tr>
+            <tr><td><b>Transform</b></td><td>One value per original row, group statistic repeated</td><td><code>df.groupby("cust_id")["amount"].transform("sum")</code></td><td><code>SUM(amount) OVER (PARTITION BY cust_id)</code></td></tr>
           </tbody>
         </table>
       </div>
-<pre><code>features = (
-    txns
-    .groupby("cust_id")
-    .agg(n_txn=("amount", "size"),
-         total_spend=("amount", "sum"),
-         avg_spend=("amount", "mean"),
-         last_seen=("ts", "max"))
-    .reset_index()
-)</code></pre>
       <div class="prose">
-        <p>This is the shape of nearly every customer-level feature table (F3.4). Three details:</p>
+        <p>Aggregating by customer is the shape of nearly every feature table (F3.4). Three details:</p>
         <ul>
-          <li><strong>Missing keys disappear.</strong> Rows with a NaN group key are dropped unless you pass <code>dropna=False</code>, so a segment with blanks loses those customers from the totals.</li>
+          <li><strong>Missing keys disappear.</strong> Rows with a NaN group key are dropped unless you pass <code>dropna=False</code>.</li>
           <li><strong><code>count</code> counts non-missing values; <code>size</code> counts rows.</strong> The gap is the number of missing values.</li>
-          <li><strong>pandas skips NaN in <code>sum</code> and <code>mean</code></strong>; plain <code>np.mean</code> returns NaN. Convenient, but it hides missing data: check <code>.isna().sum()</code>.</li>
+          <li><strong>pandas skips NaN in <code>sum</code> and <code>mean</code></strong>. Convenient, but it hides missing data: check <code>.isna().sum()</code>.</li>
         </ul>
         <p>Group only by what happened <em>before</em> the prediction date, or the feature leaks (F3.1).</p>
       </div>
 
       <h3 class="sub" id="m-join">Joining: how rows multiply</h3>
       <div class="prose">
-        <p><code>merge</code> is SQL's <code>JOIN</code>; <code>how</code> is <code>inner</code> (keys in both), <code>left</code> (every left row) or <code>outer</code> (everything). The damaging rule is about <strong>duplicate keys</strong>: a key appearing <em>m</em> times on the left and <em>n</em> on the right gives <em>m × n</em> rows. Like a wedding where two guest-list entries for one person each get a full set of place settings. If the customer table has two rows for one customer (address history, re-issued ID), every one of that customer's transactions is doubled, and so is every total afterwards.</p>
+        <p><code>merge</code> is SQL's <code>JOIN</code>; <code>how</code> is <code>inner</code> (keys in both), <code>left</code> (every left row) or <code>outer</code> (everything). The damaging rule is about <strong>duplicate keys</strong>: a key appearing twice on one side matches every row on the other side twice. Like a wedding where a double guest-list entry gets two full sets of place settings. If the customer table has two rows for one customer, every one of that customer's transactions is doubled, and so is every total afterwards.</p>
       </div>
 
       <figure class="figure" id="fig-join">
         <div class="fig-head"><span class="fig-title">Join transactions to customers</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> start with <b>left</b>, one record per customer: 8 rows out, AED 1,760 in total, as it should be. Raise the duplicates slider to 2 and watch rows and total grow with nothing flagging it. Then switch on <code>validate="m:1"</code>: the same merge now fails loudly. Compare <b>inner</b>, which silently drops transaction T8 because its customer (ID 9) is not in the customer table.</p>
+        <p class="try"><b>Try:</b> start with <b>left</b>, one record per customer: 8 rows out, AED 1,760 in total, as it should be. Raise the duplicates slider to 2 and watch rows and total grow with nothing flagging it. Then switch on <code>validate="m:1"</code>: the same merge now fails loudly. Compare <b>inner</b>, which silently drops transaction T8 because customer 9 is not in the customer table.</p>
         <div class="btns" role="group" aria-label="Join type">
           <button class="btn" type="button" data-how="inner" aria-pressed="false">how="inner"</button>
           <button class="btn" type="button" data-how="left" aria-pressed="true">how="left"</button>
@@ -318,37 +287,29 @@ df.loc[df["amount"] &gt; 5000, "flag"] = 1      # modify the original, one step<
           <div class="stat" id="st4-miss-b"><div class="k">Transactions with no customer</div><div class="v" id="st4-miss"></div><div class="s">left unmatched or dropped</div></div>
         </div>
         <p class="verdict" id="s4-verdict"></p>
-        <p class="sim-note">Simulated: eight transactions (T1 to T8, AED 100 / 250 / 80 / 40 / 60 / 500 / 30 / 700) for customers 1, 1, 2, 3, 3, 3, 4 and 9. The customer table has IDs 1 to 5, with customers 1 and 3 repeated as many times as the slider says (for example address versions). Customer 9 is absent and customer 5 has no transactions. The join logic is the standard relational one and is exact.</p>
+        <p class="sim-note">Simulated: eight transactions (T1 to T8, AED 100 / 250 / 80 / 40 / 60 / 500 / 30 / 700) for customers 1, 1, 2, 3, 3, 3, 4 and 9. The customer table has IDs 1 to 5, with customers 1 and 3 repeated per the slider. Customer 9 is absent. The join logic is exact.</p>
       </figure>
 
       <div class="prose">
-        <p>Four defences, by how often they save you:</p>
+        <p>Three defences, by how often they save you:</p>
         <ol>
-          <li><strong>Check uniqueness</strong> on the side that should be unique: <code>assert customers["cust_id"].is_unique</code>.</li>
-          <li><strong>Pass <code>validate="m:1"</code></strong> so the merge raises <code>MergeError</code> if that fails.</li>
+          <li><strong>Pass <code>validate="m:1"</code></strong> so the merge raises <code>MergeError</code> if the right side has duplicate keys.</li>
           <li><strong>Compare row counts</strong> and an additive total before and after.</li>
           <li><strong>Use <code>indicator=True</code></strong> to count unmatched rows instead of guessing.</li>
         </ol>
         <p>Also watch key types: IDs read as integers in one file and strings in another fail to match, and an account number like <code>00123</code> read as a number loses its leading zeros. Read identifiers with <code>dtype=str</code>.</p>
-        <p>The join type is a statement about your data. <code>left</code> says "keep every transaction, known customer or not". <code>inner</code> says "only analyse known customers", which silently removes rows, and removal is rarely random (in the simulation it is the AED 700 transaction). For point-in-time work (F3.1), a key alone is not enough: you need the customer record as it stood on the transaction date. <code>merge_asof</code> joins each row to the most recent earlier record.</p>
+        <p>The join type is a statement about your data. <code>left</code> says "keep every transaction, known customer or not". <code>inner</code> says "only analyse known customers", which silently removes rows, and removal is rarely random (in the simulation it is the AED 700 transaction). For point-in-time work (F3.1), <code>merge_asof</code> joins each row to the most recent earlier record.</p>
       </div>
 
       <h3 class="sub" id="m-reshape">Reshaping: wide, long, and the dtype checks that go with them</h3>
       <div class="prose">
-        <p><strong>Long</strong> data has one row per customer per month (<code>cust_id, month, balance</code>); <strong>wide</strong> has one row per customer and a column per month. Models, SQL aggregates and plotting want long; reports and matrix operations want wide. <code>pivot_table</code> goes long to wide, <code>melt</code> goes wide to long; <code>stack</code>/<code>unstack</code> do the same via the index.</p>
-      </div>
-<pre><code>wide = long.pivot_table(index="cust_id", columns="month",
-                        values="balance", aggfunc="sum")        # one row per customer
-long_again = wide.reset_index().melt(id_vars="cust_id",
-                                     var_name="month", value_name="balance")</code></pre>
-      <div class="prose">
+        <p><strong>Long</strong> data has one row per customer per month; <strong>wide</strong> has one row per customer and a column per month. Models, SQL aggregates and plotting want long; reports and matrix operations want wide. <code>pivot_table</code> goes long to wide, <code>melt</code> goes wide to long.</p>
         <p>Pivoting leaves a NaN wherever a customer has no row for a month. Whether it becomes 0 (no activity) or stays missing (unknown) is a modelling decision (F3.4), so make it deliberately.</p>
-        <p>After loading any file, run <code>df.dtypes</code>, <code>df.isna().sum()</code>, <code>df.describe(include="all")</code> and <code>df.memory_usage(deep=True).sum()</code>. What they catch:</p>
+        <p>After loading any file, run <code>df.dtypes</code>, <code>df.isna().sum()</code> and <code>df.describe(include="all")</code>. They catch the usual three problems:</p>
         <ul>
           <li>A date left as text sorts alphabetically and cannot be subtracted (see <a href="f11-time-and-dates-in-pandas.html">F11.3</a>).</li>
           <li>A numeric column read as <code>object</code> because one cell said "N/A" will not sum.</li>
           <li>Low-cardinality strings (segment, branch, currency) are far smaller as <code>category</code>.</li>
-          <li>Pandas 3.0 changes the default string dtype, so code testing <code>dtype == object</code> to find text columns needs updating.</li>
         </ul>
       </div>
     </section>
@@ -356,32 +317,29 @@ long_again = wide.reset_index().melt(id_vars="cust_id",
     <!-- ============================== 3. FAILS ============================== -->
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>These appear in human-written and AI-written analyses alike. Each comes with the quickest check.</p></div>
+      <div class="prose"><p>Each comes with the quickest check.</p></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Row-by-row loops on a DataFrame</div><p><code>for i, row in df.iterrows()</code> or <code>df.apply(f, axis=1)</code> over millions of rows. It runs, slowly, and someone concludes "Python is too slow for this".</p><div class="spot"><b>Spot it</b>Search for <code>iterrows</code>, <code>apply(..., axis=1)</code> and row <code>for</code> loops. Ask what whole-column expression would do the same.</div></li>
-        <li><div class="t">Silent index alignment</div><p>Adding a column or Series whose index differs: NaNs appear, or values attach to the wrong customers after a sort or filter.</p><div class="spot"><b>Spot it</b>Check <code>result.isna().sum()</code> after every combination, and <code>a.index.equals(b.index)</code> where it should hold. More output rows than either input means the indexes did not match.</div></li>
-        <li><div class="t">Join row explosion</div><p>A key that should be unique is not, and rows and totals inflate with no error.</p><div class="spot"><b>Spot it</b>Compare rows and an additive total before and after. Use <code>validate="m:1"</code> and <code>indicator=True</code>. A customer count above the bank's customer base is the classic red flag.</div></li>
-        <li><div class="t">Inner joins that drop the awkward rows</div><p>Unmatched transactions vanish, and they are often the interesting ones (new customers, closed accounts, bad data).</p><div class="spot"><b>Spot it</b>Left join with <code>indicator=True</code> and count <code>left_only</code> before dropping anything.</div></li>
-        <li><div class="t">Chained assignment and unintended copies</div><p><code>df[mask]["x"] = 1</code> changes nothing (pandas 3.0) or something unpredictable (older versions).</p><div class="spot"><b>Spot it</b>Look for two sets of brackets before an assignment. Replace with <code>df.loc[mask, "x"] = 1</code>. Test on a tiny frame and print it.</div></li>
-        <li><div class="t">Numpy views mutated by accident</div><p>A slice is passed to a function that modifies it in place, and the original data changes.</p><div class="spot"><b>Spot it</b>Keep a pristine copy and compare, or use <code>np.shares_memory(a, b)</code>. Call <code>.copy()</code> when you intend to modify.</div></li>
+        <li><div class="t">Row-by-row loops on a DataFrame</div><p><code>for i, row in df.iterrows()</code> or <code>df.apply(f, axis=1)</code> over millions of rows. It runs, slowly, and someone concludes "Python is too slow for this".</p><div class="spot"><b>Spot it</b>Search for <code>iterrows</code> and <code>apply(..., axis=1)</code>. Ask what whole-column expression would do the same.</div></li>
+        <li><div class="t">Silent index alignment</div><p>Adding a column or Series whose index differs: NaNs appear, or values attach to the wrong customers after a sort or filter.</p><div class="spot"><b>Spot it</b>Check <code>result.isna().sum()</code> after every combination, and <code>a.index.equals(b.index)</code> where it should hold.</div></li>
+        <li><div class="t">Join row explosion, or inner joins that drop rows</div><p>A key that should be unique is not, and rows and totals inflate with no error. Or an inner join drops the unmatched transactions, which are often the interesting ones (new customers, closed accounts, bad data).</p><div class="spot"><b>Spot it</b>Compare rows and an additive total before and after. Use <code>validate="m:1"</code> and <code>indicator=True</code>, and count <code>left_only</code> before dropping anything.</div></li>
+        <li><div class="t">Chained assignment and views mutated by accident</div><p><code>df[mask]["x"] = 1</code> changes nothing (pandas 3.0) or something unpredictable (older versions). A NumPy slice passed to a function that edits it in place changes the original data.</p><div class="spot"><b>Spot it</b>Look for two sets of brackets before an assignment and use <code>df.loc[mask, "x"] = 1</code>. Call <code>.copy()</code> when you intend to modify.</div></li>
         <li><div class="t">Wrong axis or accidental broadcasting</div><p>Standardising rows instead of columns, or a square table hiding a transposed vector.</p><div class="spot"><b>Spot it</b>Print <code>.shape</code> at each step and test on a 3 by 4 array you can check by hand. Prefer <code>keepdims=True</code>.</div></li>
-        <li><div class="t">Missing values handled by default behaviour</div><p>NaN skipped in <code>mean</code>, dropped in <code>groupby</code> keys, turning integers into floats, compared with <code>==</code>.</p><div class="spot"><b>Spot it</b>Report <code>isna().sum()</code> per column before any aggregate. Check that group counts add up to the row count.</div></li>
-        <li><div class="t">Floats for money, text for identifiers read as numbers</div><p>Totals that differ from the ledger by a few fils; account numbers that lost leading zeros; IDs that fail to join because one side is <code>int</code> and the other <code>str</code>.</p><div class="spot"><b>Spot it</b>Read identifiers with <code>dtype=str</code>; keep money as integer fils or decimal; compare with a tolerance; check <code>df.dtypes</code> right after loading.</div></li>
+        <li><div class="t">Missing values and dtypes left to defaults</div><p>NaN skipped in <code>mean</code>, dropped in <code>groupby</code> keys, integers turned into floats; floats for money; account numbers that lost leading zeros or fail to join because one side is <code>int</code> and the other <code>str</code>.</p><div class="spot"><b>Spot it</b>Check <code>df.dtypes</code> right after loading and report <code>isna().sum()</code> before any aggregate. Read identifiers with <code>dtype=str</code>; keep money as integer fils or decimal.</div></li>
       </ul>
     </section>
 
     <!-- ============================== 4. CHECK ============================== -->
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
-      <div class="prose"><p>Try each one before opening the answer. The numeric ones need only the arithmetic in Part 2.</p></div>
+      <div class="prose"><p>Try each one before opening the answer.</p></div>
       <div class="qa">
-        <details class="reveal"><summary>1. You have <code>balances</code> of shape (1000, 12) and <code>cust_mean</code> of shape (1000,), and <code>balances - cust_mean</code> raises an error. Why, and what is the fix?</summary><div class="ans"><p>Shapes align from the right: 12 meets 1000, neither equal nor 1, so it fails. Make the means a column of shape (1000, 1) with <code>cust_mean[:, None]</code>, or use <code>mean(axis=1, keepdims=True)</code>. Then 1000 matches 1000 and 12 stretches against 1.</p></div></details>
-        <details class="reveal"><summary>2. A table of 50 million transactions has 40 numeric columns, all float64. How much memory? What if you can use float32 for 30 of them?</summary><div class="ans"><p>50,000,000 × 40 × 8 bytes = 16 GB. With 30 columns at 4 bytes and 10 at 8: 50,000,000 × (30×4 + 10×8) = 50,000,000 × 200 = 10 GB. Check precision first: float32 keeps about seven significant digits, too few for exact money.</p></div></details>
-        <details class="reveal"><summary>3. 1,000 transactions, AED 2,000,000 in total, are joined to a customer table. Fifty customers appear twice in that table and each has 10 transactions. How many rows come out of a left join, and what happens to the total?</summary><div class="ans"><p>Those 50 × 10 = 500 transactions are each matched twice, adding 500 rows: 1,500 in all. The total rises by the amount of those 500 extra rows, so it exceeds AED 2,000,000. Nothing errors; <code>validate="m:1"</code> would have.</p></div></details>
-        <details class="reveal"><summary>4. Series a has index {1, 2, 3} and b has index {2, 3, 4}. What does <code>a + b</code> return, and what does <code>a.add(b, fill_value=0)</code> return?</summary><div class="ans"><p><code>a + b</code> has index {1, 2, 3, 4}: NaN at 1 and 4, sums at 2 and 3. With <code>fill_value=0</code> a missing side counts as 0, so label 1 gives a's value, label 4 gives b's, and no NaN remains. Whether that is sensible depends on the data.</p></div></details>
-        <details class="reveal"><summary>5. What is the difference between <code>groupby(...).agg("sum")</code> and <code>groupby(...).transform("sum")</code>, and when do you want the second?</summary><div class="ans"><p><code>agg</code> returns one row per group. <code>transform</code> returns the original length, with each group's sum repeated on every row of the group. Use it when each row needs its group's statistic, such as a transaction's share of its customer's total. It is the pandas form of a SQL window function.</p></div></details>
-        <details class="reveal"><summary>6. <code>df[df.amount &gt; 5000]["flag"] = 1</code> leaves <code>df</code> unchanged. Why, and what do you write instead?</summary><div class="ans"><p>The first bracket makes a new object (a copy under pandas 3 copy-on-write; unpredictably a copy or view in older versions) and the assignment goes to that. Write one step: <code>df.loc[df.amount &gt; 5000, "flag"] = 1</code>.</p></div></details>
-        <details class="reveal"><summary>7. A pipeline reads <code>cust_id</code> as integers from a CSV, but the customer table stores it as text like "00417". What happens at the join, and what do you do?</summary><div class="ans"><p>Either the merge fails on mismatched types, or 417 does not equal "00417" and nothing matches, so a left join gives NaNs everywhere. The leading zeros are lost the moment the column is read as a number. Read identifiers with <code>dtype=str</code> on both sides, strip whitespace, and count unmatched rows with <code>indicator=True</code>.</p></div></details>
+        <details class="reveal"><summary>1. You have <code>balances</code> of shape (1000, 12) and <code>cust_mean</code> of shape (1000,), and <code>balances - cust_mean</code> raises an error. Why, and what is the fix?</summary><div class="ans"><p>Shapes line up from the right: 12 meets 1000, neither equal nor 1, so it fails. Make the means a column with <code>cust_mean[:, None]</code>, or use <code>mean(axis=1, keepdims=True)</code>.</p></div></details>
+        <details class="reveal"><summary>2. A table of 50 million transactions has 40 float64 columns and will not fit on your laptop. How do you think about what is using the memory, and what can you do?</summary><div class="ans"><p>Memory is rows × columns × bytes per value, so about 16 GB here. Cut the bytes per value: <code>float32</code> where precision allows (not for exact money), <code>category</code> for labels. Or cut the rows and columns you load.</p></div></details>
+        <details class="reveal"><summary>3. A thousand transactions are joined to a customer table in which fifty customers appear twice. What happens to the row count and the total, and what would have caught it?</summary><div class="ans"><p>Each of those customers' transactions is matched twice, so rows and the total both inflate, with no error. <code>validate="m:1"</code> would have failed the merge, and comparing the total before and after would have shown the jump.</p></div></details>
+        <details class="reveal"><summary>4. Series a has index {1, 2, 3} and b has index {2, 3, 4}. What does <code>a + b</code> return, and what changes with <code>a.add(b, fill_value=0)</code>?</summary><div class="ans"><p><code>a + b</code> has index {1, 2, 3, 4}: NaN at 1 and 4, sums at 2 and 3. With <code>fill_value=0</code> a missing side counts as 0, so no NaN remains. Whether that is sensible depends on the data.</p></div></details>
+        <details class="reveal"><summary>5. What is the difference between <code>groupby(...).agg("sum")</code> and <code>groupby(...).transform("sum")</code>, and when do you want the second?</summary><div class="ans"><p><code>agg</code> returns one row per group. <code>transform</code> returns the original length, with each group's sum repeated on every row. Use it when each row needs its group's statistic, such as a transaction's share of its customer's total.</p></div></details>
+        <details class="reveal"><summary>6. <code>df[df.amount &gt; 5000]["flag"] = 1</code> leaves <code>df</code> unchanged. Why, and what do you write instead?</summary><div class="ans"><p>The first bracket makes a new object and the assignment goes to that. Write one step: <code>df.loc[df.amount &gt; 5000, "flag"] = 1</code>.</p></div></details>
+        <details class="reveal"><summary>7. A pipeline reads <code>cust_id</code> as integers from a CSV, but the customer table stores it as text like "00417". What happens at the join, and what do you do?</summary><div class="ans"><p>Either the merge fails on mismatched types, or 417 does not equal "00417" and nothing matches. Read identifiers with <code>dtype=str</code> on both sides, and count unmatched rows with <code>indicator=True</code>.</p></div></details>
       </div>
     </section>
 
