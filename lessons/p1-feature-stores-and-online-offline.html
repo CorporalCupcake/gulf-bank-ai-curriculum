@@ -72,26 +72,21 @@
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model is only as good as the match between the features it learned from and the features it is fed live, so define each feature once, compute it point-in-time correctly, serve it fresh enough for the decision, and make the data's producers promise (and be checked on) what they deliver.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model is only as good as the match between the features it learned from and the features it is fed live, so define each feature once, compute it as of the decision time, serve it fresh enough, and make data producers promise what they deliver.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A data scientist builds a card-fraud model. A top feature is <em>transactions on this card in the last 24 hours</em>, computed in the warehouse with a SQL window. AUC is 0.98. Engineers must score each transaction in under 50 ms, and a warehouse query takes seconds, so they rewrite the feature in Java over a cache refreshed every few minutes. It looks the same. It is not:</p>
-        <ul>
-          <li>The SQL window excluded the current transaction; the Java one includes it.</li>
-          <li>The SQL used Gulf Standard Time midnight; the cache uses UTC.</li>
-          <li>The SQL saw late-arriving records; the cache never does.</li>
-        </ul>
-        <p>Nobody wrote a bug. Two implementations of one idea drifted apart, like two cooks following the "same" recipe from memory. Live inputs are shaped slightly differently from training, and the model quietly performs worse. This is <strong>training-serving skew</strong>.</p>
-        <p>The mirror image is a wrongly built training table. If last Tuesday's fraud label is joined to the <em>latest</em> feature value, the feature includes the fraud burst itself. The model learns a signal that will not exist at decision time. This is the leakage of F3.1, seen as plumbing.</p>
-        <p>A <strong>feature store</strong> answers both: each feature is defined once, computed one way, stored twice (big history for training, fast copy for serving), and joined to labels <em>as of</em> each decision. <strong>Data contracts</strong> and <strong>quality checks</strong> answer a third failure: an upstream system changes something and the feature silently turns to garbage. All three keep one promise: the numbers in front of the model mean what the model thinks they mean.</p>
+        <p>A fraud model has a top feature: <em>transactions on this card in the last 24 hours</em>, built in the warehouse with SQL. AUC is 0.98. But live scoring must take under 50 ms, so engineers rewrite the feature in Java over a cache. It looks the same. It is not: the SQL excluded the current transaction and the Java includes it; one uses Gulf time, the other UTC; one sees late records, the other never does.</p>
+        <p>Nobody wrote a bug. Two implementations of one idea drifted apart, like two cooks following the "same" recipe from memory, and the model quietly performs worse. This is <strong>training-serving skew</strong>.</p>
+        <p>The mirror image is a wrongly built training table. Join last Tuesday's fraud label to the <em>latest</em> feature value and the feature already contains the fraud burst. That is leakage (F3.1), seen as plumbing.</p>
+        <p>A <strong>feature store</strong> answers both: define each feature once, store it twice (full history for training, a fast latest copy for serving), and join to labels <em>as of</em> each decision. <strong>Data contracts</strong> and <strong>quality checks</strong> answer a third failure: an upstream system changes something and the feature silently turns to garbage.</p>
       </div>
 
       <figure class="figure" id="fig-skew">
         <div class="fig-head"><span class="fig-title">What small skew costs a good model</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> start with no skew: the live curves equal the offline ones. Drag <b>noise</b> up (a window boundary off by an hour, a stale cache) and watch the two curves overlap more, so the alert line you chose offline catches less fraud. Then drag <b>shift</b> (a null turned into zero, a time-zone slip) and see the false alarms balloon. The buttons set illustrative mixes.</p>
+        <p class="try"><b>Try:</b> start with no skew. Drag <b>noise</b> up (a window an hour off, a stale cache) and watch the live curves overlap, so the alert line chosen offline catches less fraud. Then drag <b>shift</b> (a null turned into zero, a time-zone slip) and watch false alarms balloon.</p>
         <div class="btns" role="group" aria-label="Skew presets">
           <button class="btn" type="button" data-p="0,0">No skew</button>
           <button class="btn" type="button" data-p="0.4,0">Window off by an hour</button>
@@ -117,13 +112,13 @@
           <div class="stat" id="st1-cost-b"><div class="k">Cost per 100,000</div><div class="v" id="st1-cost"></div><div class="s" id="st1-cost-s"></div></div>
         </div>
         <p class="verdict" id="s1-verdict"></p>
-        <p class="sim-note">Simulated: legitimate scores N(0,1), fraud N(3,1) offline; 0.5% fraud; the alert line is set offline to flag 1% of legitimate transactions. Live score = offline score + shift + noise. Costs: AED 40 per alert, AED 400 per missed fraud. The presets are illustrative, not measurements of any real system. Exact expected values.</p>
+        <p class="sim-note">Simulated: legitimate scores N(0,1), fraud N(3,1) offline; 0.5% fraud; alert line set to flag 1% of legitimate transactions. Live score = offline score + shift + noise. AED 40 per alert, AED 400 per missed fraud. Presets are illustrative.</p>
       </figure>
 
       <div class="prose">
-        <p>Nothing here is "broken": no error, no failed job, and the model still returns numbers between 0 and 1. That is why skew is dangerous, and why design that makes skew impossible beats debugging it later.</p>
+        <p>Nothing is "broken": no error, no failed job, and the model still returns numbers between 0 and 1. That is why skew is dangerous, and why a design that makes skew impossible beats debugging it later.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Three promises make a model trustworthy in production: the feature is computed the same way in training and serving (consistency); it uses only what was known at decision time (point-in-time correctness); and upstream data is what you expected (quality and contracts). A feature store enforces the first two. Checks and contracts enforce the third.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Three promises make a model trustworthy in production: the feature is computed the same way in training and serving; it uses only what was known at decision time; and upstream data is what you expected. A feature store enforces the first two. Checks and contracts enforce the third.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -132,51 +127,38 @@
 
       <h3 class="sub" id="m-store">What a feature store is made of</h3>
       <div class="prose">
-        <p>A feature store is a shared pantry: each ingredient is defined once and both kitchens (training and live) use it. It has five parts.</p>
+        <p>A feature store is a shared pantry: each ingredient is defined once and both kitchens (training and live) use it.</p>
         <ul>
-          <li><strong>Registry.</strong> Catalogue of definitions: name, entity (customer, card, merchant), logic or source, type, owner, freshness promise, description. One definition feeds training and serving, which ends the "two implementations" problem.</li>
-          <li><strong>Offline store.</strong> Full history, in warehouse or lakehouse tables (<a href="p1-warehouses-lakes-and-lakehouses.html">P1.1 – P1.2</a>). Big, cheap, slow. Builds training sets and backfills.</li>
-          <li><strong>Online store.</strong> Latest value per entity, in a key-value database (Redis, DynamoDB, Cassandra) with single-digit-millisecond lookups. Small, fast, costly per gigabyte. Used at decision time.</li>
-          <li><strong>Materialisation.</strong> Batch jobs (hourly or nightly) and streaming jobs (per event) that write the same definition to both stores. This produces consistency.</li>
-          <li><strong>Point-in-time retrieval API.</strong> "For each (entity, timestamp, label) row, give the feature values known at that timestamp." The store does the as-of join so no analyst reinvents it wrongly.</li>
+          <li><strong>Registry.</strong> The catalogue of definitions: name, entity (customer, card), logic, owner, freshness promise. One definition feeds training and serving.</li>
+          <li><strong>Offline store.</strong> Full history in warehouse tables (<a href="p1-warehouses-lakes-and-lakehouses.html">P1.1 – P1.2</a>). Big, cheap, slow. Builds training sets.</li>
+          <li><strong>Online store.</strong> Latest value per entity in a key-value database such as Redis. Small, fast, millisecond lookups. Used at decision time.</li>
+          <li><strong>Materialisation and point-in-time retrieval.</strong> Jobs write the same definition to both stores, and the store does the as-of join so no analyst reinvents it wrongly.</li>
         </ul>
         <p>How a feature is produced decides how hard consistency is.</p>
       </div>
       <div class="table-wrap" style="margin-top:16px">
         <table class="data">
-          <thead><tr><th>Feature kind</th><th>Example</th><th>How it is computed</th><th>Consistency risk</th></tr></thead>
+          <thead><tr><th>Feature kind</th><th>Example</th><th>Consistency risk</th></tr></thead>
           <tbody>
-            <tr><td><b>Batch</b></td><td>Average monthly salary credit, last 6 months</td><td>Nightly job on the warehouse, pushed to the online store</td><td>Low. Staleness of up to a day is acceptable for slow-moving facts.</td></tr>
-            <tr><td><b>Streaming / windowed</b></td><td>Card transactions in the last 10 minutes</td><td>Stream processor updates on every event</td><td>Medium. Training must replay the same window logic over history.</td></tr>
-            <tr><td><b>On-demand (request-time)</b></td><td>This amount ÷ customer's usual amount; distance from home</td><td>Computed inside the request from the request plus stored values</td><td>High unless the <em>same code</em> runs in training. Best handled by one shared function.</td></tr>
-            <tr><td><b>Embeddings</b></td><td>Merchant vector, document vector</td><td>Produced by a model, stored like any feature</td><td>High. If the embedding model changes, old and new vectors are not comparable. Version them.</td></tr>
+            <tr><td><b>Batch</b></td><td>Average salary credit, last 6 months</td><td>Low. A day of staleness is fine for slow facts.</td></tr>
+            <tr><td><b>Streaming</b></td><td>Card transactions in the last 10 minutes</td><td>Medium. Training must replay the same window logic.</td></tr>
+            <tr><td><b>On-demand</b></td><td>This amount vs the customer's usual amount</td><td>High unless the <em>same code</em> runs in training.</td></tr>
+            <tr><td><b>Embeddings</b></td><td>Merchant vector</td><td>High. If the embedding model changes, old and new vectors are not comparable. Version them.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Not every bank needs a feature-store product. A few batch models get most of the value from a disciplined feature table, a shared transformation library and as-of joins. A product pays off when many models share features, real-time decisions need fresh values, or audit needs to show exactly what any past score used.</p>
+        <p>You do not always need a product. A few batch models do well with a disciplined feature table, shared transformation code and as-of joins. A product pays off when many models share features, decisions are real time, or audit must show what any past score used.</p>
       </div>
 
       <h3 class="sub" id="m-pit">Point-in-time correctness: the as-of join</h3>
       <div class="prose">
-        <p>Think of a school report written on Friday: it must not be used to predict Monday's mark. For each training row (a label at time <i>e</i>, the transaction being scored), take the feature value the live system would have returned at <i>e</i>. Features are stored as snapshots: entity, value, event time, and the time the value became available. Join each entity to the latest snapshot whose availability time is at or before <i>e</i>:</p>
-<pre><code>SELECT l.txn_id, l.card_id, l.event_ts, l.is_fraud,
-       f.txn_count_24h
-FROM labels l
-LEFT JOIN LATERAL (
-    SELECT txn_count_24h
-    FROM card_features f
-    WHERE f.card_id = l.card_id
-      AND f.available_ts &lt;= l.event_ts   -- not event_ts of the feature, when it arrived
-    ORDER BY f.available_ts DESC
-    LIMIT 1
-) f ON TRUE;</code></pre>
-        <p>The key is <code>available_ts</code>: when you could <em>use</em> the value, not the time it describes. A nightly job summarising Tuesday finishes at 02:00 Wednesday, so it was not usable Tuesday evening. In pandas use <code>merge_asof</code> (<a href="f11-time-and-dates-in-pandas.html">F11.2</a>). The failure is joining on the latest row, or on date alone.</p>
+        <p>Think of a school report written on Friday: it must not be used to predict Monday's mark. For each training row, use the feature value the live system would have returned at that moment. The key is the <strong>availability time</strong>: when you could <em>use</em> the value, not the time it describes. A nightly job summarising Tuesday finishes at 02:00 Wednesday, so it was not usable on Tuesday evening. Join each label to the latest snapshot available at or before the event (in pandas, <code>merge_asof</code>, <a href="f11-time-and-dates-in-pandas.html">F11.2</a>). The failure is joining on the latest row, or on date alone.</p>
       </div>
 
       <figure class="figure" id="fig-pit">
         <div class="fig-head"><span class="fig-title">Which snapshot lands in the training row?</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> pick a transaction in the burst (the last one is the most extreme). In <b>latest</b> mode the training row quietly includes the burst, and the model learns a signal that is not there at decision time. <b>Nearest</b> sometimes picks a snapshot taken after the event. Only <b>as-of</b> equals what the online store would have returned. Then raise the publication lag and see the serving value get staler.</p>
+        <p class="try"><b>Try:</b> pick a transaction in the burst. <b>Latest</b> mode quietly puts the burst into the training row. <b>Nearest</b> sometimes picks a snapshot taken after the event. Only <b>as-of</b> matches what the online store would have returned. Then raise the publication lag.</p>
         <div class="btns" role="group" aria-label="Join mode" id="pit-mode">
           <button class="btn" type="button" data-m="latest" aria-pressed="false">Latest snapshot</button>
           <button class="btn" type="button" data-m="nearest" aria-pressed="false">Nearest snapshot</button>
@@ -200,31 +182,27 @@ LEFT JOIN LATERAL (
           <div class="stat" id="st2-gap-b"><div class="k">Training minus serving</div><div class="v" id="st2-gap"></div><div class="s">a gap means skew by construction</div></div>
         </div>
         <p class="verdict" id="s2-verdict"></p>
-        <p class="sim-note">Simulated: one card with 11 transactions over 48 hours (a burst after hour 38). The feature is "transactions in the 24 hours up to the snapshot", recomputed every 6 hours; a snapshot becomes usable after the chosen lag. The live system reads the latest usable snapshot. Counts are exact.</p>
+        <p class="sim-note">Simulated: one card, 11 transactions over 48 hours (a burst after hour 38). The feature counts transactions in the 24 hours up to each snapshot, recomputed every 6 hours; a snapshot is usable after the chosen lag.</p>
       </figure>
 
       <div class="prose">
-        <p><strong>As-of equals serving:</strong> if the join takes the latest usable snapshot, the training row is what the online store would have said, staleness included. That is intended; a model should learn from the inputs it will really get, not idealised fresh ones. Also, late corrections (a backdated chargeback, a restated balance) make offline history <em>cleaner</em> than anything live ever saw. "Bitemporal" tables, which keep both event time and recorded time, let you reproduce what was known then.</p>
+        <p>As-of equals serving: the training row is what the online store would have said, staleness included. That is intended, because a model should learn from the inputs it will really get. Beware late corrections (a backdated chargeback, a restated balance): they make offline history cleaner than anything live ever saw.</p>
       </div>
 
       <h3 class="sub" id="m-fresh">Freshness, latency and how fresh is fresh enough</h3>
       <div class="prose">
-        <p>Consistency is not freshness: a feature can match perfectly and still be uselessly stale, like a perfectly accurate newspaper from last week. Freshness should match how fast the thing you detect moves.</p>
+        <p>Consistency is not freshness: a feature can match perfectly and still be uselessly stale, like an accurate newspaper from last week. Match freshness to how fast the thing you detect moves.</p>
         <ul>
-          <li><strong>Salary-credit average</strong> changes monthly. Daily batch is plenty.</li>
+          <li><strong>Salary-credit average</strong> changes monthly. A daily batch is plenty.</li>
           <li><strong>"Card used in three countries in an hour"</strong> changes in minutes. With a 15-minute refresh, the attacker has finished.</li>
-          <li><strong>Credit-limit utilisation</strong> for an overnight collections list: hours are fine.</li>
+          <li><strong>Utilisation for an overnight collections list:</strong> hours are fine.</li>
         </ul>
-        <p>A feature materialised every Δ minutes is on average Δ/2 old when read, up to Δ at worst, plus pipeline delay. Streaming everything costs complexity and money, so choose per feature. The lookup itself also has a budget: with 100 ms available, 40 serial reads at 5 ms each take 200 ms. Stores therefore fetch a whole feature set per entity in one call and keep vectors small.</p>
-      </div>
-      <div class="formula">
-        <math display="block"><mtext>age of value when read</mtext><mo>≈</mo><mfrac><mi>Δ</mi><mn>2</mn></mfrac><mo>+</mo><mi>ℓ</mi></math>
-        <p class="where">Δ is the materialisation interval, ℓ the pipeline delay between event and write. A 15-minute batch with a 2-minute delay averages 9.5 minutes old when read and reaches 17 at worst. Read it as a bound on how early any rule on that feature can fire.</p>
+        <p>A value refreshed every Δ minutes is on average half of Δ old when read, and up to Δ at worst, plus pipeline delay. That bounds how early any rule on it can fire. Streaming everything costs complexity and money, so choose per feature.</p>
       </div>
 
       <figure class="figure" id="fig-fresh">
         <div class="fig-head"><span class="fig-title">What a stale online store costs in a fast attack</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> an attack starts at minute 100 and ramps up. The rule says "block when the one-hour transaction count reaches 8". With a 5-minute refresh the blue steps lag only slightly. Slide to 60 or 240 minutes and the value stays flat while the attacker keeps going. Press <b>Streaming</b> to see the floor.</p>
+        <p class="try"><b>Try:</b> an attack starts at minute 100. The rule blocks when the one-hour count reaches 8. At a 5-minute refresh the store lags only slightly; at 60 or 240 minutes it stays flat while the attacker continues. Press <b>Streaming</b> for the floor.</p>
         <div class="btns" role="group" aria-label="Streaming"><button class="btn" type="button" id="b-stream" aria-pressed="false">Streaming (update on every event)</button></div>
         <div class="chart-wrap" id="fresh-chart"></div>
         <div class="legend">
@@ -241,36 +219,34 @@ LEFT JOIN LATERAL (
           <div class="stat" id="st3-loss-b"><div class="k">Extra fraud let through</div><div class="v" id="st3-loss"></div><div class="s">against streaming</div></div>
         </div>
         <p class="verdict" id="s3-verdict"></p>
-        <p class="sim-note">Simulated: the true count is 2 until minute 100, then rises by 0.2 a minute (one extra transaction every 5 minutes, each AED 1,800) to a cap of 30. The store is written at multiples of Δ and each write lands 2 minutes later (streaming: 0.1 minute). The rule can use only what is in the store. Exact for this ramp.</p>
+        <p class="sim-note">Simulated: the true count is 2 until minute 100, then rises by 0.2 a minute (each extra transaction AED 1,800) to a cap of 30. The store is written every Δ minutes and each write lands 2 minutes later (streaming: 0.1). The rule sees only the store.</p>
       </figure>
 
       <h3 class="sub" id="m-quality">Data quality checks: what to test and where</h3>
       <div class="prose">
-        <p>Upstream data is often wrong: a core-banking release changes a column, a vendor feed stalls, a join silently drops customers. The model does not crash; it consumes garbage. Quality checks are cheap tests, like a smoke alarm, run on each batch or stream window <em>before</em> features are used. The families below come from Great Expectations, Soda, Deequ and Google's data validation work.</p>
+        <p>Upstream data is often wrong: a core-banking release changes a column, a vendor feed stalls, a join silently drops customers. The model does not crash; it consumes garbage. Quality checks are cheap smoke alarms, run on each batch <em>before</em> features are used.</p>
       </div>
       <div class="table-wrap" style="margin-top:16px">
         <table class="data">
-          <thead><tr><th>Family</th><th>Question</th><th>Example for a transactions table</th></tr></thead>
+          <thead><tr><th>Check</th><th>Question and example</th></tr></thead>
           <tbody>
-            <tr><td><b>Schema</b></td><td>Are the columns and types as agreed?</td><td><code>amount</code> is decimal, <code>channel</code> exists, no new columns unannounced</td></tr>
-            <tr><td><b>Completeness</b></td><td>How much is missing?</td><td>Null share of <code>amount</code> ≤ 1%; row count within ±30% of the same weekday last month</td></tr>
-            <tr><td><b>Validity / range</b></td><td>Are values possible?</td><td>0 &lt; amount ≤ 200,000 AED; currency code in the ISO list</td></tr>
-            <tr><td><b>Uniqueness</b></td><td>Are keys unique?</td><td><code>txn_id</code> has no duplicates (a replayed message would double a feature)</td></tr>
-            <tr><td><b>Accepted values</b></td><td>Are categories known?</td><td><code>channel</code> in {POS, ECOM, ATM, APP}; a new "WALLET" must be reviewed</td></tr>
-            <tr><td><b>Freshness</b></td><td>Is the data current?</td><td>Newest event is under 15 minutes old</td></tr>
-            <tr><td><b>Distribution</b></td><td>Does the shape match what we know?</td><td>Population stability index of <code>amount</code> below 0.2 against a reference (F7.7)</td></tr>
-            <tr><td><b>Referential</b></td><td>Do joins find their partners?</td><td>99.5% of transactions match a known customer</td></tr>
+            <tr><td><b>Schema</b></td><td>Are columns and types as agreed? <code>amount</code> is still a decimal.</td></tr>
+            <tr><td><b>Completeness</b></td><td>How much is missing? Null share of <code>amount</code> at most 1%.</td></tr>
+            <tr><td><b>Range</b></td><td>Are values possible? 0 &lt; amount ≤ 200,000 AED.</td></tr>
+            <tr><td><b>Uniqueness</b></td><td>Are keys unique? A replayed message would double a feature.</td></tr>
+            <tr><td><b>Accepted values</b></td><td>Are categories known? A new "WALLET" channel must be reviewed.</td></tr>
+            <tr><td><b>Freshness</b></td><td>Is the newest event under 15 minutes old?</td></tr>
+            <tr><td><b>Distribution</b></td><td>Does the shape match a reference? Population stability index (F7.7) below 0.2.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Checks sit at three points: <strong>ingestion</strong> (stops bad raw data cheaply), after <strong>transformation</strong> (catches your own join bugs) and at <strong>feature-serving</strong> time (catches an out-of-range value in one request; use a safe default or fallback). Each check needs a decision attached: <em>block</em> the load and keep yesterday's values, <em>warn</em> and continue, or <em>quarantine</em> the bad rows. A check nobody acts on is noise.</p>
-        <p>Thresholds are the hard part. Too tight and the team ignores alerts; too loose and nothing is caught. Start from history, flag a high percentile of usual variation, and treat each false alarm as a chance to improve the check.</p>
+        <p>Run checks at <strong>ingestion</strong>, after <strong>transformation</strong> (your own join bugs) and at <strong>serving</strong> time. Each check needs an action attached: <em>block</em> the load and keep yesterday's values, <em>warn</em> and continue, or <em>quarantine</em> the bad rows. A check nobody acts on is noise. Thresholds are the hard part: too tight and the team ignores alerts, too loose and nothing is caught. Start from history.</p>
       </div>
 
       <figure class="figure" id="fig-dq">
         <div class="fig-head"><span class="fig-title">Which check catches which upstream accident?</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> choose a fault, then switch checks off one at a time. Most faults are caught by exactly one or two checks. The last fault, a plausible 15% drift in amounts, passes every check: no rule substitutes for monitoring (F7.7). With every check off, see how many alerts the model would raise on corrupted input.</p>
+        <p class="try"><b>Try:</b> choose a fault, then switch checks off one at a time. Most faults are caught by one or two checks. The last, a plausible 15% drift, passes every check: no rule replaces monitoring (F7.7).</p>
         <div class="btns" role="group" aria-label="Fault" id="dq-faults"></div>
         <div class="chk-list" id="dq-checks"></div>
         <div class="table-wrap"><div id="dq-table"></div></div>
@@ -279,32 +255,27 @@ LEFT JOIN LATERAL (
           <div class="stat" id="st4-act-b"><div class="k">Pipeline action</div><div class="v" id="st4-act"></div><div class="s" id="st4-act-s"></div></div>
         </div>
         <p class="verdict" id="s4-verdict"></p>
-        <p class="sim-note">Simulated: 2,000 transactions per batch; amounts lognormal with median AED 300, spread 1.1; four channels; ages 0 to 60 minutes. The reference for the distribution check is a separate clean batch of 2,000 (ten deciles). The toy model alerts when amount exceeds about AED 1,800 (risk above 0.5) and treats a null as zero. Faults are injected deterministically with a fixed seed; the values shown are computed from the batch.</p>
+        <p class="sim-note">Simulated: 2,000 transactions per batch; amounts lognormal with median AED 300; four channels; a toy model alerts above about AED 1,800 and treats a null as zero. The distribution check compares against a clean reference batch. Faults are injected with a fixed seed.</p>
       </figure>
 
       <h3 class="sub" id="m-contract">Data contracts: moving the promise upstream</h3>
       <div class="prose">
-        <p>A <strong>data contract</strong> is the agreement made <em>before</em> the data ships. Checks catch problems after the producer ships them; a contract is a machine-readable promise the producer publishes and your pipelines depend on. Think of a delivery service-level agreement: the supplier states what arrives, in what shape, by when. It covers:</p>
+        <p>A <strong>data contract</strong> is the agreement made <em>before</em> the data ships. Checks catch problems after the producer ships them; a contract is a machine-readable promise the producer publishes and your pipelines depend on, like a delivery service-level agreement. It covers:</p>
         <ul>
-          <li><strong>Schema:</strong> columns, types, nullability, units (AED or fils?), time zone.</li>
-          <li><strong>Semantics:</strong> what each field means, how a transaction is defined, how reversals appear.</li>
-          <li><strong>Quality and service levels:</strong> maximum null share, freshness, delivery time, retention.</li>
-          <li><strong>Ownership and change rules:</strong> a named owner, how breaking changes are announced and versioned, how long the old version runs.</li>
-          <li><strong>Classification:</strong> personal data, residency limits, who may access (<a href="g2-privacy-basics-minimisation-consent-anonymisation.html">G2</a>).</li>
+          <li><strong>Schema and meaning:</strong> columns, types, units (AED or fils?), time zone, what a transaction is, how reversals appear.</li>
+          <li><strong>Quality and service levels:</strong> maximum null share, freshness, delivery time.</li>
+          <li><strong>Ownership and change rules:</strong> a named owner, how breaking changes are announced, how long the old version runs.</li>
         </ul>
 <pre><code>dataset: core_banking.card_transactions
 version: 2.1
 owner: payments-data@bank.example
 schema:
-  - name: txn_id        type: string   required: true   unique: true
-  - name: amount        type: decimal  unit: AED        required: true
-  - name: event_ts      type: timestamp tz: UTC
-  - name: channel       type: string   allowed: [POS, ECOM, ATM, APP]
+  - name: amount   type: decimal  unit: AED   required: true
+  - name: channel  type: string   allowed: [POS, ECOM, ATM, APP]
 quality:
   - freshness: event_ts within 15 minutes
-  - null_share(amount) &lt;= 0.01
-change_policy: breaking changes announced 30 days ahead, two versions run in parallel</code></pre>
-        <p>The point is the <em>process</em>: the contract sits in a repository and is validated in CI against the producer's code, so a release that renames a column fails its own tests, not your model at 3 a.m. Open specifications exist (the Open Data Contract Standard from the Bitol project), and quality tools can turn contract clauses into executable checks. Limit: a contract binds only the teams that sign it, and needs a producer who treats it as part of the job. At many banks the hard part is organisational.</p>
+change_policy: breaking changes announced 30 days ahead</code></pre>
+        <p>The point is the <em>process</em>: the contract lives in a repository and is validated in CI against the producer's code, so a release that renames a column fails its own tests, not your model at 3 a.m. It binds only the teams that sign it, so at many banks the hard part is organisational.</p>
       </div>
     </section>
 
@@ -313,16 +284,12 @@ change_policy: breaking changes announced 30 days ahead, two versions run in par
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Two implementations of one feature</div><p>SQL in training, Java in serving. Rounding, time zones, window edges and null handling all differ.</p><div class="spot"><b>Spot it</b>Log serving-time features and recompute them offline for the same transactions. The difference should be zero or explained.</div></li>
-        <li><div class="t">Joining on the latest value</div><p>Training rows get feature values from after the label. AUC is gorgeous, live performance is not.</p><div class="spot"><b>Spot it</b>Any join on customer ID alone, or on date without time, is suspect. Compare offline AUC with a forward-in-time test.</div></li>
-        <li><div class="t">Joining on when a value describes, not when it arrived</div><p>A nightly job writes Tuesday's totals at 02:00 Wednesday, but the training set treats them as available Tuesday.</p><div class="spot"><b>Spot it</b>Ask for each feature's availability timestamp. If only an event timestamp exists, assume leakage.</div></li>
-        <li><div class="t">Silent defaults</div><p>A missing feature becomes 0 online and NaN offline (or the reverse). The model learned that NaN means something.</p><div class="spot"><b>Spot it</b>Compare missing rates per feature, offline and live. Never missing online but often missing in training is a warning.</div></li>
+        <li><div class="t">Two implementations of one feature</div><p>SQL in training, Java in serving. Rounding, time zones, window edges and null handling (0 online, NaN offline) all differ.</p><div class="spot"><b>Spot it</b>Log serving-time features and recompute them offline for the same transactions. Compare missing rates too. Differences should be zero or explained.</div></li>
+        <li><div class="t">Joining on the wrong time</div><p>Joining on the latest value, on date alone, or on when a value describes rather than when it arrived. Training rows get information from after the decision, so AUC is gorgeous and live performance is not.</p><div class="spot"><b>Spot it</b>Ask for each feature's availability timestamp. If only an event timestamp exists, assume leakage.</div></li>
         <li><div class="t">Stale online store</div><p>A stream stalls; the last value sits there for hours, looking normal.</p><div class="spot"><b>Spot it</b>Track the age of each served value and alert when it exceeds the promise.</div></li>
         <li><div class="t">Upstream change nobody told you about</div><p>A core system release switches amounts to fils, adds a currency, renames a code.</p><div class="spot"><b>Spot it</b>Range and accepted-value checks at ingestion, a contract with a change policy, an on-call owner.</div></li>
-        <li><div class="t">Checks with no owner or no action</div><p>Hundreds of alerts, all muted.</p><div class="spot"><b>Spot it</b>For every check, name who is paged and whether the pipeline blocks. Review which fired last quarter.</div></li>
-        <li><div class="t">A check suite that passes plausible nonsense</div><p>A slowly drifting definition or a 15% shift in amounts passes every rule.</p><div class="spot"><b>Spot it</b>Add distribution monitoring on features and outputs (F7.7), and reconcile against an independent source such as the general ledger.</div></li>
-        <li><div class="t">Feature versions that change under a model</div><p>Someone fixes a definition; the model, trained on the old version, now receives the new one.</p><div class="spot"><b>Spot it</b>Pin feature versions in the model's metadata. A change means a new version and a retraining plan.</div></li>
-        <li><div class="t">Buying a platform to fix a process</div><p>The store goes live but definitions are still copied by hand and nobody owns them.</p><div class="spot"><b>Spot it</b>Ask how many models share each feature, who approves a change, and how it is rolled out.</div></li>
+        <li><div class="t">Checks that pass nonsense, or nobody acts on</div><p>A 15% drift in amounts passes every rule, or hundreds of alerts are all muted.</p><div class="spot"><b>Spot it</b>Add distribution monitoring (F7.7) and reconcile against an independent source such as the general ledger. For every check, name who is paged and whether the pipeline blocks.</div></li>
+        <li><div class="t">Feature versions that change under a model</div><p>Someone fixes a definition; the model, trained on the old version, now receives the new one. Related trap: buying a platform while definitions are still copied by hand.</p><div class="spot"><b>Spot it</b>Pin feature versions in the model's metadata. A change means a new version and a retraining plan.</div></li>
       </ul>
     </section>
 
@@ -331,14 +298,14 @@ change_policy: breaking changes announced 30 days ahead, two versions run in par
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. What is training-serving skew, and why does it not raise an error?</summary><div class="ans"><p>The model sees live features that differ from its training features (different code, data or timing). Every value is still valid and in range, so nothing fails; the model just gets worse. You find it only by comparing live inputs with offline recomputation, or by watching performance.</p></div></details>
+        <details class="reveal"><summary>1. What is training-serving skew, and why does it not raise an error?</summary><div class="ans"><p>The model sees live features that differ from its training features (different code, data or timing). Every value is still valid, so nothing fails; the model just gets worse. You find it by comparing live inputs with offline recomputation, or by watching performance.</p></div></details>
         <details class="reveal"><summary>2. A nightly job finishes writing Tuesday's customer totals at 02:00 on Wednesday. A fraud label occurred Tuesday 20:00. Which timestamp should the as-of join use, and what goes wrong otherwise?</summary><div class="ans"><p>Availability time (Wednesday 02:00). The Tuesday 20:00 row then gets Monday's totals, which is what the live system had. Joining on the date the totals describe gives values not yet available: a leak.</p></div></details>
-        <details class="reveal"><summary>3. A feature is refreshed every 30 minutes with a 3-minute pipeline delay. How old is it when read, on average and at worst?</summary><div class="ans"><p>Average Δ/2 + ℓ = 15 + 3 = 18 minutes. Worst case 30 + 3 = 33. A rule needing a signal within 5 minutes cannot rely on it.</p></div></details>
-        <details class="reveal"><summary>4. Why is the online store not just the offline store with a cache in front?</summary><div class="ans"><p>Online holds only the latest value per entity in a key-value system built for millisecond lookups. Offline holds full history in analytical tables built for large scans. The same definitions fill both, but the access patterns are opposite. A cache over a warehouse is still slow on a miss and cannot do windowed updates.</p></div></details>
-        <details class="reveal"><summary>5. Name two checks that would catch amounts suddenly arriving in fils instead of dirhams, and one that would not.</summary><div class="ans"><p>The range check (maximum amount) and the distribution check (PSI against a reference) fire. Null-rate, uniqueness and freshness checks do not: values are present, unique and recent.</p></div></details>
-        <details class="reveal"><summary>6. Your quality checks all pass, yet fraud losses rise and the model's average score has changed. What other safeguards should you have?</summary><div class="ans"><p>Drift monitoring on features and scores (F7.7), reconciliation against an independent source, logged served features compared with offline, and performance monitoring once labels mature. Checks catch breaks, not slow or plausible shifts.</p></div></details>
-        <details class="reveal"><summary>7. A colleague proposes recomputing training features from the freshest, corrected history. What is the risk?</summary><div class="ans"><p>The model trains on inputs cleaner than anything it will get live (late data included, corrections applied), so training looks better than serving. Use what was known at the time, or log served values for later training.</p></div></details>
-        <details class="reveal"><summary>8. What goes in a data contract for a customer-income feed used by a credit model?</summary><div class="ans"><p>Schema and units (currency, monthly or annual, gross or net), nullability and what null means, source and definition of income, update frequency and freshness, accepted ranges, owner, change policy (notice period, versioning), personal-data classification and access rules.</p></div></details>
+        <details class="reveal"><summary>3. A feature refreshes every 30 minutes. A rule needs to react within 5 minutes of an attack starting. Can it rely on this feature?</summary><div class="ans"><p>No. The value is on average about 15 minutes old when read, plus pipeline delay, and up to 30 at worst. Such a rule needs a streaming feature.</p></div></details>
+        <details class="reveal"><summary>4. Why is the online store not just the offline store with a cache in front?</summary><div class="ans"><p>Online holds only the latest value per entity, built for millisecond lookups. Offline holds full history, built for large scans. The same definitions fill both, but the access patterns are opposite. A cache over a warehouse is still slow on a miss.</p></div></details>
+        <details class="reveal"><summary>5. Name two checks that would catch amounts suddenly arriving in fils instead of dirhams, and one that would not.</summary><div class="ans"><p>The range check and the distribution check fire. Null-rate, uniqueness and freshness checks do not: values are present, unique and recent.</p></div></details>
+        <details class="reveal"><summary>6. Your quality checks all pass, yet fraud losses rise and the model's average score has changed. What other safeguards should you have?</summary><div class="ans"><p>Drift monitoring on features and scores (F7.7), reconciliation against an independent source, logged served features compared with offline, and performance monitoring once labels mature. Checks catch breaks, not plausible shifts.</p></div></details>
+        <details class="reveal"><summary>7. A colleague proposes recomputing training features from the freshest, corrected history. What is the risk?</summary><div class="ans"><p>The model trains on inputs cleaner than anything it will get live, so training looks better than serving. Use what was known at the time, or log served values for later training.</p></div></details>
+        <details class="reveal"><summary>8. What goes in a data contract for a customer-income feed used by a credit model?</summary><div class="ans"><p>Schema and units (currency, monthly or annual, gross or net), what null means, the definition of income, freshness, accepted ranges, owner, change policy (notice period, versioning), and personal-data classification.</p></div></details>
       </div>
     </section>
 

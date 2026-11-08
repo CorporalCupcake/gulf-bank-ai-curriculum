@@ -61,28 +61,28 @@
         <span>About 38 minutes</span>
       </div>
       <h1>Seeing and Gating an LLM System: Prompt Versions, Traces and Evals in CI</h1>
-      <p class="dek">A prompt is code that nobody can read the output of in advance. This lesson covers how to version it, how to see every step an LLM application took, and how to stop a bad change reaching customers by running tests automatically, including the arithmetic of how many test cases that takes.</p>
+      <p class="dek">A prompt is code whose output you cannot read in advance. This lesson covers how to version it, how to see every step an LLM application took, and how to stop a bad change reaching customers with automatic tests.</p>
     </header>
 
     <div class="mobile-toc">
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Treat prompts, models and retrieval settings as versioned releases, record a trace of every step so a bad answer can be explained, and run a test set on every change as a statistical gate whose size you have chosen on purpose.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Version prompts, models and settings as releases, trace every step so a bad answer can be explained, and gate every change with a test set big enough to beat the noise.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>Picture a card-fee assistant that tells a customer the annual fee is waived after AED 20,000 of spend. The policy says AED 30,000. Complaints arrive, and the team needs three answers.</p>
+        <p>A card-fee assistant tells a customer the fee is waived after AED 20,000 of spend. The policy says AED 30,000. The team needs three answers.</p>
         <ul>
-          <li><strong>What changed?</strong> A prompt tweak, a new chunk size, or a silent model update. Answered by <strong>versioning</strong>: every prompt, model name and setting is a numbered, immutable release (like a flight number, so you can say exactly which flight).</li>
-          <li><strong>What happened on that call?</strong> Which text was retrieved and sent? Answered by <strong>tracing</strong>: each request leaves a record of every step, with inputs, outputs, timings and cost (like a parcel's tracking history).</li>
-          <li><strong>How do we stop a repeat?</strong> Answered by <strong>evals in CI</strong>: a test set runs automatically on each change and blocks the release if quality drops (like a smoke test before a factory line ships).</li>
+          <li><strong>What changed?</strong> <strong>Versioning</strong>: every prompt, model name and setting is a numbered, immutable release, like a flight number.</li>
+          <li><strong>What happened on that call?</strong> <strong>Tracing</strong>: each request leaves a record of every step, like a parcel's tracking history.</li>
+          <li><strong>How do we stop a repeat?</strong> <strong>Evals in CI</strong>: a test set runs on each change and blocks the release if quality drops.</li>
         </ul>
-        <p>The twist: output is free text that varies run to run. A normal test says "equals 42". An LLM test asks "was this acceptable?", scored by rules, another model or a person. And a score from 100 cases is itself a noisy estimate (Simulation 3).</p>
+        <p>The twist: output is free text, so an LLM test asks "was this acceptable?" rather than "equals 42". And a score from 100 cases is itself a noisy estimate (Simulation 3).</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>An LLM app's behaviour is the product of a prompt, a model, retrieval settings, tools and data. If you cannot name the exact combination that handled a request, you cannot debug, audit or roll it back.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>If you cannot name the exact prompt, model and settings that handled a request, you cannot debug, audit or roll it back.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -91,22 +91,14 @@
 
       <h3 class="sub" id="m-trace">Tracing: a request as a tree of timed steps</h3>
       <div class="prose">
-        <p>A <strong>trace</strong> is the record of one request, like a delivery tracking page. It is made of <strong>spans</strong>, one per step ("retrieve", "rerank", "call model", "output check"). Each span has a start time, duration, parent and <strong>attributes</strong>: for a model call, the model name, prompt version, token counts and optionally the prompt and answer text. Spans nest into a tree, usually drawn as a waterfall of bars.</p>
-        <p>This is distributed tracing from microservices, and the standard is the same: OpenTelemetry, with "GenAI semantic conventions" (agreed attribute names such as <code>gen_ai.request.model</code>) so tools can read each other's data. A minimal span:</p>
-<pre><code>with tracer.start_as_current_span("generate_answer") as span:
-    span.set_attribute("gen_ai.request.model", MODEL)
-    span.set_attribute("app.prompt_name", "card-faq")
-    span.set_attribute("app.prompt_version", 7)      # link trace to release
-    reply = client.call(messages)
-    span.set_attribute("gen_ai.usage.input_tokens", reply.usage.input)
-    span.set_attribute("gen_ai.usage.output_tokens", reply.usage.output)</code></pre>
-        <p>SDKs auto-instrument most of this. You add the business context: segment (never raw identifiers), channel, language, prompt version, retrieved document IDs and versions. That lets you ask "show every Arabic answer that used policy document 118, 2022 version". Traces give you what logs do not:</p>
+        <p>A <strong>trace</strong> is the record of one request, like a delivery tracking page. It is made of <strong>spans</strong>, one per step ("retrieve", "rerank", "call model"), each with a duration and attributes such as model name, prompt version and token counts. Spans nest into a tree, usually drawn as a waterfall of bars. The standard is OpenTelemetry.</p>
+        <p>You add the business context: segment (never raw identifiers), language, prompt version, retrieved document IDs and versions. Then you can ask "show every Arabic answer that used policy document 118, 2022 version". Traces tell you what logs do not:</p>
         <ul>
           <li><strong>Where time and money went.</strong> Generation usually dominates both; retrieval often dominates variance.</li>
           <li><strong>Why the answer was wrong.</strong> Right paragraph retrieved but ignored: prompt or model problem. Wrong paragraph: search problem (M3). Right paragraph, stale version: data problem.</li>
           <li><strong>A path from complaint to fix.</strong> Copy the trace into a test case, fix, keep the case forever (M5).</li>
         </ul>
-        <p>Two limits. <strong>Sampling</strong>: storing every full prompt is expensive, so keep all error and low-score traces plus a random fraction of the rest. <strong>Privacy</strong>: prompts contain customer data, so decide what is redacted before storage, who reads traces, retention and location. Whether a managed tracing service is acceptable is a question for security and the regulator's data rules (CBUAE or SAMA).</p>
+        <p>Two limits: keep all error and low-score traces plus a random sample, not everything. And prompts contain customer data, so decide what is redacted and who reads traces, with security and the regulator's rules (CBUAE or SAMA).</p>
       </div>
 
       <figure class="figure" id="fig-trace">
@@ -132,22 +124,21 @@
           <div class="stat" id="tr-q-b"><div class="k">Answer correct?</div><div class="v" id="tr-q"></div><div class="s">only a quality score can tell</div></div>
         </div>
         <p class="verdict" id="tr-verdict"></p>
-        <p class="sim-note">Simulated: one request through a seven-step retrieval-augmented assistant. Durations and token counts are invented but plausible. Prices are illustrative: AED 11 per million input tokens and AED 55 per million output tokens; check your provider's actual rates. Costs are exact sums of those assumptions.</p>
+        <p class="sim-note">Simulated: one request through a seven-step retrieval-augmented assistant. Durations and token counts are invented but plausible. Prices are illustrative: AED 11 per million input tokens and AED 55 per million output tokens; check your provider's actual rates. </p>
       </figure>
 
       <div class="prose">
-        <p>Read a trace in order: the shape (one long bar or many short?), the model spans (token counts), the retrieval span (what came back), and only then the text. Most incidents show before you read a word of the answer.</p>
+        <p>Read a trace in order: the shape, the model spans (token counts), the retrieval span (what came back), and only then the text.</p>
       </div>
 
       <h3 class="sub" id="m-version">Prompt versioning: immutable releases, movable labels</h3>
       <div class="prose">
-        <p>A <strong>prompt release</strong> is more than the text: template, pinned model version, sampling settings, tool definitions, retrieval settings (top-k, chunking) and any output schema. Change one and behaviour changes, so they share one number. Two rules:</p>
+        <p>A <strong>prompt release</strong> is more than the text: template, pinned model version, sampling settings, tools, retrieval settings (top-k, chunking) and any output schema. Change one and behaviour changes, so they share one number. Two rules:</p>
         <ul>
-          <li><strong>Versions are immutable.</strong> Version 7 is always the same bytes; an edit makes version 8. Old traces can be replayed against exactly what they used.</li>
-          <li><strong>Labels are movable.</strong> "production", "staging" and "candidate" are pointers, like a bookmark. Promotion moves the pointer; rollback moves it back. The app asks for "card-faq at production", so rollback needs no redeploy.</li>
+          <li><strong>Versions are immutable.</strong> Version 7 is always the same; an edit makes version 8. Old traces can be replayed against exactly what they used.</li>
+          <li><strong>Labels are movable.</strong> "production" and "candidate" are pointers, like a bookmark. Promotion moves the pointer; rollback moves it back, with no redeploy.</li>
         </ul>
-        <p>Where the text lives: <strong>git beside the code</strong> gives review, blame and CI for free. A <strong>registry</strong> editable by non-engineers gives fast iteration but needs its own approvals and audit trail. A bank will usually want git, or a registry with sign-off, since a prompt change alters customer-facing behaviour. Either way, the trace records which version answered.</p>
-        <p>Pin the model too. An alias such as "latest" can move under you, and providers retire old versions. A model change forces re-evaluation exactly like a prompt change.</p>
+        <p>A bank will usually want prompts in git beside the code (review and audit for free), or a registry with sign-off, since a prompt change alters customer-facing behaviour. Pin the model too: an alias such as "latest" can move under you, and a model change needs re-evaluation exactly like a prompt change.</p>
       </div>
 
       <figure class="figure" id="fig-reg">
@@ -162,36 +153,25 @@
         </div>
         <p class="verdict" id="reg-verdict"></p>
         <div class="log" id="reg-log" aria-live="polite"></div>
-        <p class="sim-note">Simulated: five prompt versions for a card-FAQ assistant scored on 200 invented test cases (120 English, 50 Arabic, 30 complaints). Pass rates are made up to show the pattern; the 95% intervals use the usual normal approximation √(p(1−p)/n), which is rough at small n.</p>
+        <p class="sim-note">Simulated: five prompt versions for a card-FAQ assistant scored on 200 invented test cases (120 English, 50 Arabic, 30 complaints). Pass rates are made up to show the pattern; the 95% intervals are a rough approximation at small sample sizes.</p>
       </figure>
 
       <h3 class="sub" id="m-ci">Evals in CI: a test set as a release gate</h3>
       <div class="prose">
-        <p>An <strong>eval</strong> runs the app over a fixed set of cases and scores the outputs. <strong>In CI</strong> it runs automatically whenever anything that can change behaviour changes (prompt, model, retrieval settings, tool, library), and fails the build if scores drop below a threshold. Promptfoo is built for this; Langfuse and MLflow store datasets and results. Cheap checks first, expensive last:</p>
+        <p>An <strong>eval</strong> runs the app over a fixed set of cases and scores the outputs. <strong>In CI</strong> it runs automatically whenever a prompt, model, retrieval setting or tool changes, and fails the build if scores drop below a threshold. Cheap checks first, expensive last:</p>
         <div class="table-wrap" style="margin-top:12px">
           <table class="data">
-            <thead><tr><th>Layer</th><th>What it checks</th><th>Cost and speed</th><th>Blind spot</th></tr></thead>
+            <thead><tr><th>Layer</th><th>What it checks</th><th>Blind spot</th></tr></thead>
             <tbody>
-              <tr><td><b>Deterministic checks</b></td><td>Valid JSON, schema, required fields, no card number, language matches, citation points to a retrieved document.</td><td>Free, milliseconds. Every case, every commit.</td><td>Not whether content is right.</td></tr>
-              <tr><td><b>Golden answers</b></td><td>Key facts present ("AED 30,000"), or exact match for classification and extraction.</td><td>Free, fast.</td><td>Brittle for free text; a correct paraphrase fails.</td></tr>
-              <tr><td><b>LLM-as-judge</b></td><td>Another model grades helpfulness, faithfulness, tone against a rubric.</td><td>Costs tokens, minutes. Full set on pull requests.</td><td>Biases and drift; calibrate against human labels (M5).</td></tr>
-              <tr><td><b>Human review</b></td><td>Experts grade a sample, settle disputes, refresh labels.</td><td>Slow, costly. Before major releases.</td><td>Small samples, annotator disagreement.</td></tr>
-              <tr><td><b>Adversarial cases</b></td><td>Prompt injection, data-reveal requests, off-policy advice.</td><td>Moderate. On a schedule and before release.</td><td>Only finds attacks someone thought of.</td></tr>
+              <tr><td><b>Deterministic checks</b></td><td>Valid JSON, required fields, no card number, language matches. Free, every commit.</td><td>Not whether content is right.</td></tr>
+              <tr><td><b>Golden answers</b></td><td>Key facts present ("AED 30,000"). Free, fast.</td><td>A correct paraphrase can fail.</td></tr>
+              <tr><td><b>LLM-as-judge</b></td><td>Another model grades helpfulness, faithfulness, tone. Costs tokens.</td><td>Biases and drift; calibrate against human labels (M5).</td></tr>
+              <tr><td><b>Human review</b></td><td>Experts grade a sample before major releases. Slow, costly.</td><td>Small samples, disagreement.</td></tr>
             </tbody>
           </table>
         </div>
-        <p>A skeleton of the gate:</p>
-<pre><code>results = run_suite("card-faq-cases.jsonl", prompt="card-faq@candidate")
-assert results.schema_failures == 0                    # hard rules: zero tolerance
-assert results.pass_rate("faithfulness") &gt;= 0.88       # soft score vs a threshold
-for sl in results.slices():                            # never only the average
-    assert sl.pass_rate &gt;= baseline[sl.name] - 0.05, sl.name</code></pre>
-        <p>Cases come from production failures, policy documents (each rule becomes questions), compliance and product staff, and hard variants in Arabic, mixed Arabic and English, typos and dialects. Keep a held-out set nobody tunes against, or you measure memorisation.</p>
-        <p>The hard part is noise. Think of polling: ask 100 people and the result wobbles; ask 400 and it steadies. Each case is pass or fail, so the pass rate over <i>n</i> cases has a standard error</p>
-      </div>
-      <div class="formula">
-        <math display="block"><mi>SE</mi><mo>≈</mo><msqrt><mfrac><mrow><mi>p</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>p</mi><mo stretchy="false">)</mo></mrow><mi>n</mi></mfrac></msqrt></math>
-        <p class="where"><i>p</i> is the true pass rate, <i>n</i> the number of cases. SE is the typical wobble in the measured score between reruns of an identical system. At <i>p</i> = 90% and <i>n</i> = 100 it is 3 points, so two identical runs routinely differ by 6. A gate of "fail below baseline minus 3" on 100 cases wrongly blocks a good change about one time in eight and passes a real 5-point regression about a third of the time (F2.1). Common misreading: a 3-point drop is not a regression; it is inside the noise. Model non-determinism and judge noise add more.</p>
+        <p>Cases come from production failures, policy documents and hard Arabic and mixed-language variants. Keep a held-out set nobody tunes against, or you measure memorisation.</p>
+        <p>The hard part is noise. Like polling: 100 people wobble, 400 steady. A score from 100 cases at 90% wobbles by about 3 points between reruns of an identical system, and two identical runs routinely differ by 6. A gate of "fail below baseline minus 3" on 100 cases wrongly blocks a good change about one time in eight and passes a real 5-point regression about a third of the time (F2.1).</p>
       </div>
 
       <figure class="figure" id="fig-gate">
@@ -220,12 +200,9 @@ for sl in results.slices():                            # never only the average
       <div class="prose">
         <p>What to do about noise, in order of value:</p>
         <ul>
-          <li><strong>More cases where it matters.</strong> Noise falls with √<i>n</i>, so quadrupling the set halves it. Go bigger on costly topics (fees, eligibility, complaints).</li>
-          <li><strong>Paired comparison.</strong> Run baseline and candidate on the <em>same</em> cases and count flips. 9 got worse and 2 better is far stronger evidence than two overlapping pass rates.</li>
-          <li><strong>Hard rules versus soft scores.</strong> Zero tolerance for structure and safety; a margin with intervals for quality.</li>
-          <li><strong>Repeat runs.</strong> Run each case a few times and average; keep temperature low, though identical output is never guaranteed.</li>
-          <li><strong>Slices.</strong> Gate separately on language, product and risk tier (Simulation 2). Small slices need a wider margin or a human look.</li>
-          <li><strong>Human override with a record.</strong> A named approver can ship a blocked release and write down why (the model-risk pattern, G3).</li>
+          <li><strong>More cases where it matters.</strong> Quadrupling the set halves the noise. Go bigger on costly topics (fees, eligibility, complaints).</li>
+          <li><strong>Paired comparison.</strong> Run baseline and candidate on the <em>same</em> cases and count flips. Nine got worse and two better is far stronger evidence than two overlapping pass rates.</li>
+          <li><strong>Hard rules versus soft scores.</strong> Zero tolerance for structure and safety; a margin for quality, checked per slice such as language and risk tier.</li>
         </ul>
       </div>
     </section>
@@ -233,15 +210,12 @@ for sl in results.slices():                            # never only the average
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Prompt edited live, no version</div><p>A "small tweak" in production. Behaviour changes and nobody can say when.</p><div class="spot"><b>Spot it</b>Pick last month's trace and try to recover the exact prompt. If you cannot, versions are not immutable.</div></li>
-        <li><div class="t">Only the prompt is versioned</div><p>Model alias, top-k or chunk size changes while the prompt number stays put.</p><div class="spot"><b>Spot it</b>Check the release ID covers model version, parameters, tools and retrieval settings.</div></li>
-        <li><div class="t">Gate on a tiny or unrepresentative set</div><p>Fifty hand-picked, easy, English cases. The gate passes everything.</p><div class="spot"><b>Spot it</b>Ask for case count per slice and the interval; compute the block-probability curve (Simulation 3).</div></li>
-        <li><div class="t">Overfitting to the eval</div><p>Prompts tuned on the same cases until the score rises; live quality does not follow.</p><div class="spot"><b>Spot it</b>Compare scores on a held-out set with the tuning set.</div></li>
-        <li><div class="t">Uncalibrated LLM judge</div><p>It prefers long, polite answers or its own model family, and drifts when updated.</p><div class="spot"><b>Spot it</b>Measure judge-human agreement on a sample; pin the judge version.</div></li>
+        <li><div class="t">Prompt edited live, or only the prompt versioned</div><p>A "small tweak", or a model alias or top-k that changes while the prompt number stays put.</p><div class="spot"><b>Spot it</b>Try to recover last month's exact prompt, model and retrieval settings from a trace.</div></li>
+        <li><div class="t">Gate on a tiny or unrepresentative set</div><p>Fifty easy English cases. The gate passes everything, or fails on noise and people rerun until green.</p><div class="spot"><b>Spot it</b>Ask for case count per slice, and count failures that pass on rerun.</div></li>
+        <li><div class="t">Overfitting to the eval</div><p>Prompts tuned on the same cases until the score rises; live quality does not follow.</p><div class="spot"><b>Spot it</b>Compare held-out and tuning-set scores.</div></li>
+        <li><div class="t">Uncalibrated LLM judge</div><p>It prefers long, polite answers and drifts when updated.</p><div class="spot"><b>Spot it</b>Measure judge-human agreement; pin the judge version.</div></li>
         <li><div class="t">Average hides a slice</div><p>Overall rises while Arabic or complaints fall.</p><div class="spot"><b>Spot it</b>Demand a per-slice table beside every headline number.</div></li>
-        <li><div class="t">Traces full of customer data</div><p>Names, account numbers and IDs in a third-party service with broad access.</p><div class="spot"><b>Spot it</b>Sample stored traces for IBAN or card patterns; check retention, access and hosting against policy.</div></li>
-        <li><div class="t">Flaky gate gets ignored</div><p>It fails on noise, people rerun until green, and a real regression is rerun away.</p><div class="spot"><b>Spot it</b>Count failures that pass on rerun. A high rate means an under-sized set or wrong margin.</div></li>
-        <li><div class="t">Healthy latency, bad quality</div><p>Dashboards green while answers are stale or wrong.</p><div class="spot"><b>Spot it</b>Ask whether quality scores are attached to traces (Simulation 1, stale index).</div></li>
+        <li><div class="t">Green dashboards, bad answers, exposed data</div><p>Latency is fine while answers are stale; customer data sits in traces with broad access.</p><div class="spot"><b>Spot it</b>Check quality scores are attached to traces; sample traces for IBAN or card patterns.</div></li>
       </ul>
     </section>
 
@@ -249,13 +223,13 @@ for sl in results.slices():                            # never only the average
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. Why are prompt versions immutable while labels such as "production" move?</summary><div class="ans"><p>Immutability lets any old trace be replayed against exactly what ran (debugging, audit). Movable labels make promotion and rollback a pointer change with no redeploy.</p></div></details>
-        <details class="reveal"><summary>2. Name four things besides prompt text that belong in a release.</summary><div class="ans"><p>Model name and pinned version, sampling parameters, tool definitions, retrieval settings (top-k, chunking), output schema. Possibly the document index version.</p></div></details>
-        <details class="reveal"><summary>3. A trace shows normal latency and cost, yet the answer quotes an old fee. Where is the fault and how would you have caught it?</summary><div class="ans"><p>In the data: retrieval returned a stale document version, visible in the trace attributes. A faithfulness score on the trace, or a CI case on that fee, would have flagged it. Latency and cost cannot.</p></div></details>
-        <details class="reveal"><summary>4. 100 cases, baseline 90%. What is the standard error of the candidate's measured pass rate if it is truly 90%?</summary><div class="ans"><p>√(0.9 × 0.1 ÷ 100) = 0.03, so 3 points. A 95% interval is about ±6, so a 3-point gap between runs is noise.</p></div></details>
-        <details class="reveal"><summary>5. How many more cases to halve the noise?</summary><div class="ans"><p>SE falls with √<i>n</i>, so four times as many: 100 becomes 400, SE goes from 3 to 1.5 points.</p></div></details>
-        <details class="reveal"><summary>6. The overall score rose from 83% to 87%. What do you check before promoting?</summary><div class="ans"><p>Per-slice scores with sizes and intervals, the paired flips, hard-rule checks, and a held-out set. Simulation 2's v4 is better overall but worse in Arabic.</p></div></details>
-        <details class="reveal"><summary>7. Why record the prompt version on every trace?</summary><div class="ans"><p>To tie any complaint to the release that produced it, compare monitoring scores by version, and copy a failing trace into a regression test with the right context.</p></div></details>
+        <details class="reveal"><summary>1. Why are prompt versions immutable while labels such as "production" move?</summary><div class="ans"><p>Immutability lets any old trace be replayed against exactly what ran. Movable labels make promotion and rollback a pointer change with no redeploy.</p></div></details>
+        <details class="reveal"><summary>2. Name four things besides prompt text that belong in a release.</summary><div class="ans"><p>Pinned model version, sampling parameters, tool definitions, retrieval settings, output schema.</p></div></details>
+        <details class="reveal"><summary>3. A trace shows normal latency and cost, yet the answer quotes an old fee. Where is the fault?</summary><div class="ans"><p>In the data: retrieval returned a stale document version, visible in the trace attributes. Only a quality score or a CI case on that fee would flag it.</p></div></details>
+        <details class="reveal"><summary>4. With 100 test cases, a candidate scores 87% against a 90% baseline. Is it worse?</summary><div class="ans"><p>Not necessarily. Two identical systems routinely differ by about 6 points on 100 cases, so 3 points is noise. Add cases or compare on the same cases.</p></div></details>
+        <details class="reveal"><summary>5. What is the most reliable way to make a gate less noisy?</summary><div class="ans"><p>More cases, especially on costly topics. Quadrupling the set roughly halves the noise.</p></div></details>
+        <details class="reveal"><summary>6. The overall score rose from 83% to 87%. What do you check before promoting?</summary><div class="ans"><p>Per-slice scores, paired flips, hard-rule checks and a held-out set. Simulation 2's v4 is better overall but worse in Arabic.</p></div></details>
+        <details class="reveal"><summary>7. Why record the prompt version on every trace?</summary><div class="ans"><p>To tie any complaint to the release that produced it and copy a failing trace into a regression test.</p></div></details>
       </div>
     </section>
 
