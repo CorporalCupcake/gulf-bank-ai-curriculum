@@ -77,14 +77,14 @@
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
         <p>A relationship manager asks the internal assistant: <em>"What is the overdraft limit in the Al Noor Trading facility letter?"</em> It answers calmly, with a citation: <strong>AED 5,000,000</strong>. The real limit is AED 750,000. The 5,000,000 belongs to the Murabaha line one row above.</p>
-        <p>The language model was fine. The extraction tool read the table <em>down the columns</em> instead of across the rows, so the model was handed "Murabaha line, Overdraft, 5,000,000, 750,000" with the pairing lost. It guessed the natural pairing and guessed wrong.</p>
-        <p><strong>A PDF is a drawing, not a text file.</strong> It says where to paint each glyph. It does not record sentences, tables or reading order, much like a photo of a spreadsheet. A human sees the table; the pipeline sees positioned characters, and rebuilding structure from them is lossy.</p>
-        <p>The second half of the lesson is the mirror image: a wrong answer can come from parsing, retrieval, the model, or the test itself. Teams waste weeks tuning prompts when the passage never reached the model, or tuning embeddings when it did and the model ignored it. A short discipline prevents that.</p>
+        <p>The language model was fine. The extraction tool read the table <em>down the columns</em>, so the pairing was lost before the model saw it.</p>
+        <p><strong>A PDF is a drawing, not a text file.</strong> It says where to paint each glyph. It does not record sentences, tables or reading order, much like a photo of a spreadsheet.</p>
+        <p>The second half of the lesson: a wrong answer can come from parsing, retrieval, the model, or the test itself. Check them in order.</p>
       </div>
 
       <figure class="figure" id="fig-table">
         <div class="fig-head"><span class="fig-title">One table, four extractions</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> pick each extraction mode and read what the model would be handed. Can "What is the overdraft limit?" be answered from that text, and would a search for "overdraft limit" find it?</p>
+        <p class="try"><b>Try:</b> pick each extraction mode. Can "What is the overdraft limit?" be answered from that text?</p>
         <div class="two">
           <div class="pg"><div class="cap">The page as a human sees it</div>
             <table><thead><tr><th>Facility</th><th>Limit (AED)</th><th>Tenor</th><th>Pricing</th></tr></thead>
@@ -101,10 +101,10 @@
           <div class="stat" id="t-b"><div class="k">Does a chunk say "limit" next to "overdraft"?</div><div class="v" id="t-b-v"></div><div class="s" id="t-b-s"></div></div>
         </div>
         <p class="verdict" id="t-verdict" style="margin-top:12px"></p>
-        <p class="sim-note">Simulated: four hand-written strings showing typical outputs of a text-stream extractor, a row-wise extractor, a table-aware extractor and a header-repeating serialisation. The point is the failure mode, not any product.</p>
+        <p class="sim-note">Simulated: four hand-written strings showing typical outputs. The point is the failure mode, not any product.</p>
       </figure>
 
-      <div class="callout key"><span class="k">Hold onto this</span>Parsing is not preprocessing. It sets the ceiling on everything after it: embeddings, rerankers and bigger models cannot recover a pairing the text no longer contains.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Parsing sets the ceiling on everything after it: embeddings, rerankers and bigger models cannot recover a pairing the text no longer contains.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -115,67 +115,53 @@
       <div class="prose">
         <h4 style="font-family:var(--font-display);font-size:18px;margin-top:6px">Born-digital or scanned: the first fork</h4>
         <ul>
-          <li><strong>Born-digital.</strong> Exported from Word or a core banking system. It has a <em>text layer</em> (characters with coordinates), so the characters are usually correct and the job is rebuilding structure.</li>
-          <li><strong>Scanned.</strong> A photo of paper in a PDF: pixels only. You need <strong>OCR</strong> (optical character recognition) first, and characters can now be wrong.</li>
-          <li><strong>Hybrid, the nasty case.</strong> A scan someone OCR'd years ago, with a hidden text layer of unknown quality. Trade finance bundles and stamped letters are often this. The layer can be confidently wrong and nothing flags it.</li>
+          <li><strong>Born-digital.</strong> Exported from Word or a banking system. It has a <em>text layer</em>, so characters are usually right and the job is rebuilding structure.</li>
+          <li><strong>Scanned.</strong> Pixels only. You need <strong>OCR</strong> (optical character recognition) first, and characters can now be wrong.</li>
+          <li><strong>Hybrid, the nasty case.</strong> An old scan with a hidden OCR layer of unknown quality. It can be confidently wrong and nothing flags it.</li>
         </ul>
-        <p>Triage each page by counting extractable characters. Zero means scan. Text that fails a dictionary or language check means a bad hidden layer. Route accordingly instead of running one tool on everything.</p>
-<pre><code>for page in pdf.pages:
-    chars = page.extract_text() or ""
-    if len(chars.strip()) &lt; 20:
-        route = "ocr"            # scanned: no text layer
-    elif quality(chars) &lt; 0.8:   # share of tokens that look like real words/numbers
-        route = "ocr_and_compare" # old hidden OCR layer: do not trust it
-    else:
-        route = "layout_parse"   # born-digital: recover structure</code></pre>
+        <p>Triage each page by counting extractable characters. Zero means scan. Text full of non-words means a bad hidden layer. Route each page to the right tool instead of running one tool on everything.</p>
 
-        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">The stages of a modern parser</h4>
-        <p>Like a factory line, a failure's stage tells you where to look.</p>
+<h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">The stages of a modern parser</h4>
+        <p>Like a factory line: the stage that failed tells you where to look.</p>
         <ol>
-          <li><strong>Layout detection.</strong> A vision model labels page regions: title, paragraph, table, figure, header, footer, footnote, stamp.</li>
-          <li><strong>Reading order.</strong> Decide which region follows which. Two columns, sidebars and footnotes break "top to bottom, left to right".</li>
-          <li><strong>Recognition.</strong> Text goes to extraction or OCR; tables go to a table-structure model (rows, columns, merged cells).</li>
-          <li><strong>Serialisation.</strong> Write Markdown, HTML tables, or JSON with coordinates and page numbers. This matters for chunking and citations.</li>
-          <li><strong>Cleaning.</strong> Strip repeated headers and footers, join hyphenated breaks, normalise Unicode, drop page numbers.</li>
+          <li><strong>Layout detection.</strong> Label regions: paragraph, table, header, stamp.</li>
+          <li><strong>Reading order.</strong> Columns and footnotes break "top to bottom".</li>
+          <li><strong>Recognition.</strong> Extract or OCR text; send tables to a table model.</li>
+          <li><strong>Serialisation.</strong> Write Markdown or JSON with page numbers.</li>
+          <li><strong>Cleaning.</strong> Strip repeated headers and footers, normalise Unicode.</li>
         </ol>
-        <p>Simulation 1 is a step 3 and 4 failure. A footnote swallowed into the next paragraph is step 2. "Strictly confidential" on every page and in every chunk is step 5: it pulls all chunks towards each other in embedding space.</p>
+        <p>Simulation 1 is a step 3 and 4 failure. "Strictly confidential" repeated in every chunk is step 5: it makes all chunks look alike to search.</p>
 
-        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">Tables: where most money is lost</h4>
-        <p>Bank documents are table-heavy: facility schedules, fee tariffs, financial statements, collateral lists. Tables fail in five ways.</p>
+<h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">Tables: where most money is lost</h4>
+        <p>Facility schedules, tariffs and financial statements are all tables. They fail in three ways.</p>
         <ul>
           <li><strong>Linearised wrongly</strong> (Simulation 1): rows and columns interleaved.</li>
-          <li><strong>Headers lost.</strong> "12,430" could be revenue, profit or last year's figure.</li>
-          <li><strong>Merged cells.</strong> An "FY2025" header spanning two columns breaks any extractor that assumes a regular grid.</li>
-          <li><strong>Tables crossing pages.</strong> Header on page 4, rows on page 5: a page-by-page parser yields an orphan table.</li>
-          <li><strong>Units and notes elsewhere.</strong> "AED thousands" in the title, a footnote below. Lose either and every number is off by 1,000.</li>
+          <li><strong>Headers lost.</strong> "12,430" could be revenue, profit or last year's figure. Worst when a table crosses pages.</li>
+          <li><strong>Units and notes elsewhere.</strong> "AED thousands" in the title. Lose it and every number is off by 1,000.</li>
         </ul>
-        <p>The fix: serialise each row with its headers and context ("Facility letter, Al Noor Trading, page 4, Schedule 1. Facility: Overdraft; Limit (AED): 750,000; Tenor: 12 months"). A retrieval hit on that row explains itself. For very large tables, keep them in a structured store and let the model query them (see <a href="m4-the-agent-loop-reason-act.html">M4</a>).</p>
+        <p>The fix: serialise each row with its headers and context ("Facility letter, Al Noor Trading, page 4, Schedule 1. Facility: Overdraft; Limit (AED): 750,000"). A hit on that row explains itself.</p>
 
-        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">Stamps, signatures, handwriting and scan noise</h4>
+<h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">Stamps, signatures, handwriting and scan noise</h4>
         <ul>
-          <li><strong>Stamps</strong> overlap text. OCR reads the stamp's letters into the paragraph underneath or loses the paragraph. Round or angled stamps defeat line-based OCR.</li>
-          <li><strong>Signatures</strong> are not text. Detect them as a region and store "signed? where?" as metadata. For KYC or trade documents, the <em>presence</em> of a signature or stamp is often the fact you need, and text-only pipelines miss it.</li>
-          <li><strong>Handwriting</strong> (cheque amounts, corrections) is far less reliable than print. Treat it as a proposal to check.</li>
-          <li><strong>Scan quality</strong> (skew, low resolution, fax artefacts, show-through, phone-photo shadows) raises the character error rate. Deskew, denoise, upscale, or ask for a better scan.</li>
+          <li><strong>Stamps</strong> overlap text, so OCR mixes their letters into the paragraph.</li>
+          <li><strong>Signatures</strong> are not text. For KYC or trade documents the <em>presence</em> of a signature or stamp is often the fact you need, so detect it and store it as metadata.</li>
+          <li><strong>Handwriting and poor scans</strong> are far less reliable than print. Treat the output as a proposal to check, or ask for a better scan.</li>
         </ul>
       </div>
 
       <h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px;max-width:var(--measure)">Mixed Arabic and English</h4>
       <div class="prose">
-        <p>Gulf bank documents are routinely bilingual. This creates its own failures (deeper OCR in <a href="a14-arabic-ocr-and-document-ai.html">Arabic OCR and document AI</a>, models in <a href="a14-arabic-llms-jais-allam-falcon.html">Arabic LLMs</a>). The ones that hit RAG parsing:</p>
+        <p>Gulf bank documents are routinely bilingual (deeper OCR in <a href="a14-arabic-ocr-and-document-ai.html">Arabic OCR and document AI</a>, models in <a href="a14-arabic-llms-jais-allam-falcon.html">Arabic LLMs</a>). The failures that hit RAG parsing:</p>
         <ul>
-          <li><strong>Right-to-left order.</strong> Many PDFs store glyphs in <em>visual</em> order (as painted), so extraction yields reversed letters or scrambled word order. A human can flip it; an embedding model or keyword index sees nonsense.</li>
-          <li><strong>Joined letters.</strong> Arabic letters change shape by position. Some PDFs store these <em>presentation forms</em> as separate Unicode characters, so one word gets two spellings that never match. Unicode normalisation (NFKC) maps most back to base letters.</li>
+          <li><strong>Right-to-left order.</strong> Many PDFs store glyphs in <em>visual</em> order, so extraction yields reversed letters. A search index sees nonsense.</li>
+          <li><strong>Joined letters and spelling variants.</strong> Arabic letters change shape by position, and some PDFs store each shape as a separate character, so one word gets two spellings that never match. Normalise (NFKC and similar) for search; keep the original for display and citation.</li>
           <li><strong>Digits.</strong> Arabic-Indic (٠١٢٣٤٥٦٧٨٩) and Western (0123456789) digits can mix. An amount indexed as "٧٥٠٬٠٠٠" is invisible to a query for "750,000".</li>
-          <li><strong>Spelling variants.</strong> Hamza forms (أ إ آ ا), ta marbuta vs ha, ya vs alif maqsura, diacritics, and tatweel (the decorative stretch). Normalise for search; keep the original for display and citation.</li>
-          <li><strong>Bidirectional runs.</strong> An English company name or number inside an Arabic sentence can land in the wrong place, with punctuation on the wrong side.</li>
-          <li><strong>Tokens and chunk size.</strong> Arabic splits into more tokens than English in many tokenisers (<a href="m1-tokenisation.html">M1</a>), so a "500-token" chunk covers less Arabic, and an English query may retrieve Arabic passages less strongly.</li>
         </ul>
       </div>
 
       <figure class="figure" id="fig-ar">
         <div class="fig-head"><span class="fig-title">The same words that cannot find each other</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> search for the Arabic phrase "credit limit" and for the amount 750,000. Switch on the extraction faults one at a time and watch the match fail, then switch on normalisation to reverse the damage.</p>
+        <p class="try"><b>Try:</b> switch on the extraction faults one at a time and watch the searches fail, then switch on normalisation.</p>
         <div class="toggles" id="ar-toggles" aria-label="Extraction faults"></div>
         <div class="grid2" style="margin-top:12px">
           <div class="cell"><div class="k">Text stored in the index</div><div class="v rtl" id="ar-stored" style="font-size:18px;font-weight:500"></div></div>
@@ -186,21 +172,17 @@
           <div class="stat" id="ar-s2"><div class="k">Search: 750,000</div><div class="v" id="ar-v2"></div><div class="s">exact substring match</div></div>
         </div>
         <p class="verdict" id="ar-verdict" style="margin-top:12px"></p>
-        <p class="sim-note">Simulated with real string operations: one sample sentence, characters reversed to imitate visual-order storage, digits mapped to Arabic-Indic. Real documents need a proper bidi algorithm and NFKC. Semantic search forgives spelling variants somewhat, but not reversed or garbled text.</p>
+        <p class="sim-note">Simulated with real string operations on one sample sentence. Real documents need a proper bidi algorithm and NFKC.</p>
       </figure>
 
       <div class="prose">
-        <h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">OCR errors compound</h4>
-        <p><strong>Character error rate</strong> (CER) is the share of characters read wrongly. 1% sounds superb, but a fact is a string where <em>every</em> character must be right, like a phone number: one wrong digit and it is someone else's. If errors are independent, a field of <i>n</i> characters survives with probability</p>
-      </div>
-      <div class="formula">
-        <math display="block"><mi>P</mi><mo stretchy="false">(</mo><mtext>field intact</mtext><mo stretchy="false">)</mo><mo>=</mo><msup><mrow><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mtext>CER</mtext><mo stretchy="false">)</mo></mrow><mi>n</mi></msup></math>
-        <p class="where">At CER 1%, a 24-character account number survives 0.99<sup>24</sup> = 79% of the time; a 12-character amount, 89%. Ten such fields all intact: 0.886<sup>10</sup> ≈ 30%. A wrong digit in an amount is not "slightly worse text": it is a different fact. Each extra character or field multiplies in another chance to fail.</p>
+<h4 style="font-family:var(--font-display);font-size:18px;margin-top:22px">OCR errors compound</h4>
+        <p><strong>Character error rate</strong> (CER) is the share of characters read wrongly. 1% sounds superb, but a fact is a string where <em>every</em> character must be right, like a phone number. At 1%, a 24-character account number is fully correct only about 79% of the time, and a document with ten such fields only about 30%. A wrong digit in an amount is not "slightly worse text": it is a different fact.</p>
       </div>
 
       <figure class="figure" id="fig-ocr">
         <div class="fig-head"><span class="fig-title">How fast a small error rate eats a whole document</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> hold the error rate at 1% and lengthen the field, then raise the number of fields a decision depends on. Documents needing no manual check fall away far faster than the headline accuracy suggests.</p>
+        <p class="try"><b>Try:</b> hold the error rate at 1%, lengthen the field, then raise the number of fields a decision depends on.</p>
         <div class="chart-wrap" id="ocr-chart"></div>
         <div class="legend">
           <span><i style="background:var(--neutral)"></i>6 characters (a date)</span>
@@ -219,7 +201,7 @@
           <div class="stat" id="o-c"><div class="k">Documents needing a human check</div><div class="v" id="o-c-v"></div><div class="s">per 1,000 scanned</div></div>
         </div>
         <p class="verdict" id="o-verdict" style="margin-top:12px"></p>
-        <p class="sim-note">Simulated: exact arithmetic assuming independent errors. Real errors cluster (a bad scan is bad everywhere; 0/O, 1/l, 5/S are confused often), so real documents are more all-or-nothing. Check digits, format rules and cross-field consistency catch many wrong amounts.</p>
+        <p class="sim-note">Simulated, assuming independent errors. Real errors cluster, so real documents are more all-or-nothing. Check digits and cross-field rules catch many wrong amounts.</p>
       </figure>
 
       <div class="prose">
@@ -230,38 +212,34 @@
         <table class="data">
           <thead><tr><th>Approach</th><th>How it works</th><th>Strengths</th><th>Weak spots</th></tr></thead>
           <tbody>
-            <tr><td><b>Text-layer extraction</b></td><td>Read the embedded characters and coordinates. Rules to rebuild lines and blocks.</td><td>Fast, cheap, exact characters on born-digital files. Runs on-premises easily.</td><td>No help for scans. Weak on tables and multi-column layout. Visual-order Arabic.</td></tr>
-            <tr><td><b>Layout-aware pipeline</b> (detection + OCR + table model)</td><td>Detect regions, order them, OCR or extract each, rebuild tables, serialise.</td><td>Good structure, auditable stages, bounding boxes for citations, can run locally with open tools.</td><td>Several models to maintain. Errors in early stages cascade. Unusual layouts.</td></tr>
-            <tr><td><b>Vision-language model reads the page image</b></td><td>Give the page image to a multimodal model and ask for Markdown or JSON.</td><td>Handles odd layouts, stamps, forms and mixed scripts without hand-built rules. One component.</td><td>Can hallucinate or silently skip content, cost and latency per page, data-residency questions if the model is hosted outside the bank, hard to guarantee exact digits.</td></tr>
-            <tr><td><b>Skip text: embed the page image</b></td><td>Retrieve over page images directly (see <a href="a6-search-over-document-images-colpali.html">document-image search</a>).</td><td>No parsing errors on charts, stamps and layouts.</td><td>Newer, heavier index, the answering model still has to read the page accurately.</td></tr>
+            <tr><td><b>Text-layer extraction</b></td><td>Read the embedded characters and coordinates.</td><td>Fast, cheap, exact on born-digital files.</td><td>No help for scans. Weak on tables and visual-order Arabic.</td></tr>
+            <tr><td><b>Layout-aware pipeline</b></td><td>Detect regions, order them, OCR each, rebuild tables.</td><td>Good structure, auditable stages, bounding boxes for citations, runs locally.</td><td>Several models to maintain; early errors cascade.</td></tr>
+            <tr><td><b>Vision-language model reads the page image</b></td><td>Give the page image to a multimodal model and ask for Markdown or JSON.</td><td>Handles odd layouts, stamps and mixed scripts.</td><td>Can hallucinate or skip content; cost per page; data residency; exact digits not guaranteed.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>Two rules cover most of the design. First, <strong>never trust a single reading of a high-stakes number</strong>: extract it two ways (text layer and OCR, or two engines) and flag disagreements. Second, <strong>keep provenance</strong>: store page number and bounding box with every chunk, so an answer can show the exact region and a reviewer can check the parse against the picture. This is also where most of the work in <a href="b7-document-ai-for-trade-finance.html">trade-finance document AI</a> and <a href="f9-recommender-systems-and-ranking.html">reading cheques and scans</a> lives.</p>
-        <p>Chunk after parsing, on the sections and tables the parser found, not fixed character counts (<a href="m3-chunking-strategies.html">chunking strategies</a>). Exact numbers, clause numbers and Arabic variants are why you want keyword matching beside embeddings (<a href="m3-keyword-search-and-bm25.html">BM25</a>, <a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a>).</p>
+        <p>Two rules. First, <strong>never trust a single reading of a high-stakes number</strong>: extract it two ways (text layer and OCR, or two engines) and flag disagreements. Second, <strong>keep provenance</strong>: store page number and bounding box with every chunk, so an answer can show its source region and a reviewer can check the parse against the picture. See also <a href="a6-search-over-document-images-colpali.html">searching page images directly</a>.</p>
+        <p>Chunk after parsing, on the sections and tables the parser found (<a href="m3-chunking-strategies.html">chunking strategies</a>), and keep keyword matching beside embeddings for exact numbers (<a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a>).</p>
       </div>
 
       <h3 class="sub" id="m-diagnose">Diagnosing failures: retrieval or generation? (M3.10)</h3>
       <div class="prose">
-        <p>A RAG system is a chain: <em>parse, chunk, index, retrieve, (rerank), assemble context, generate</em>. Like a leaking pipe, you find the <strong>first</strong> break, because everything after it is a consequence. A better prompt cannot rescue a wrong chunk, and a better embedding model cannot rescue a correct chunk the model ignored.</p>
+        <p>A RAG system is a chain: <em>parse, chunk, index, retrieve, rerank, assemble context, generate</em>. Like a leaking pipe, you find the <strong>first</strong> break, because everything after it is a consequence. A better prompt cannot rescue a wrong chunk.</p>
         <p>Use a test set of real questions where you know the <em>gold passage</em> and gold answer. For each failure, ask in order:</p>
         <ol>
-          <li><strong>Is the gold answer in the parsed text?</strong> Search your own parsed corpus. If not, it is a parsing or ingestion failure: page skipped, table scrambled, OCR misread.</li>
-          <li><strong>Was the gold passage retrieved?</strong> Look at the top <i>k</i> chunks given to the model. Present in the corpus but not in the top <i>k</i> is a retrieval failure: different query words (<a href="m3-query-rewriting-hyde-and-multi.html">query rewriting</a> helps), a badly cut chunk, or an exact term needing keyword search.</li>
-          <li><strong>Retrieved but buried?</strong> In the top 20 but not the top 5 the model saw is a ranking or context-assembly failure. Look-alike distractors hurt most.</li>
-          <li><strong>In the context, and the model still failed?</strong> A generation failure: ignored, contradicted, merged with a similar passage, or answered from memory (<a href="m1-context-windows-and-the-kv.html">"lost in the middle"</a>). Check for guess-friendly instructions, long passages, or arithmetic the question needed.</li>
-          <li><strong>Was the answer actually right?</strong> Sometimes the grader or gold answer is wrong, or the question is ambiguous. Check by hand first.</li>
+          <li><strong>Is the gold answer in the parsed text?</strong> If not, it is a parsing failure: page skipped, table scrambled, OCR misread.</li>
+          <li><strong>Was the gold passage retrieved?</strong> In the corpus but not in the top <i>k</i> is a retrieval failure: different query words (<a href="m3-query-rewriting-hyde-and-multi.html">query rewriting</a> helps), a badly cut chunk, or an exact term needing keyword search.</li>
+          <li><strong>Retrieved but buried?</strong> In the top 20 but not the top 5 is a ranking failure.</li>
+          <li><strong>In the context, and the model still failed?</strong> A generation failure: ignored, merged with a look-alike passage, or answered from memory (<a href="m1-context-windows-and-the-kv.html">"lost in the middle"</a>).</li>
+          <li><strong>Was the answer actually right?</strong> Sometimes the gold answer or grader is wrong. Check by hand first.</li>
         </ol>
-      </div>
-      <div class="formula">
-        <math display="block"><mtext>accuracy</mtext><mo>=</mo><mi>r</mi><mo>·</mo><msub><mi>g</mi><mn>1</mn></msub><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>r</mi><mo stretchy="false">)</mo><mo>·</mo><msub><mi>g</mi><mn>0</mn></msub></math>
-        <p class="where"><i>r</i> is the <strong>retrieval hit rate</strong>: the share of questions where the gold passage reached the model. <i>g</i><sub>1</sub> is the share answered correctly when it did. <i>g</i><sub>0</sub> is the share answered correctly anyway when it did not (memory, a lucky neighbour, a correct "I don't know"). Like a student who needs the right textbook page and then must read it properly, you can fail either way. Raising <i>r</i> by a point gains (<i>g</i><sub>1</sub> − <i>g</i><sub>0</sub>) points; raising <i>g</i><sub>1</sub> by a point gains <i>r</i> points. Measure them separately to see where the next improvement is cheapest.</p>
+        <p>Think of a student who needs the right textbook page and then must read it properly: they can fail either way. So measure two things separately. The <strong>retrieval hit rate</strong> (<i>r</i>) is how often the gold passage reached the model. <i>g</i><sub>1</sub> is how often the answer is right when it did, and <i>g</i><sub>0</sub> is how often it is right anyway when it did not (memory, luck, a correct "I don't know"). Measuring them separately shows where the next improvement is cheapest.</p>
       </div>
 
       <figure class="figure" id="fig-diag">
         <div class="fig-head"><span class="fig-title">Which half should you fix first?</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> start at the defaults (retrieval 70%, generation 90%). Compare ten more points of retrieval with ten more of generation. Then drag retrieval to 95% and watch the priority flip.</p>
+        <p class="try"><b>Try:</b> start at the defaults. Compare ten more points of retrieval with ten more of generation, then drag retrieval to 95%.</p>
         <div class="controls">
           <div class="ctl"><label for="s-r">Retrieval hit rate r <output for="s-r"></output></label><input type="range" id="s-r" min="0" max="1" step="0.01" value="0.7"></div>
           <div class="ctl"><label for="s-g1">Correct when the passage is given, g₁ <output for="s-g1"></output></label><input type="range" id="s-g1" min="0" max="1" step="0.01" value="0.9"></div>
@@ -280,17 +258,17 @@
           <div class="stat"><div class="k">+10 points generation</div><div class="v" id="d-gg"></div><div class="s">accuracy gain</div></div>
         </div>
         <p class="verdict" id="d-verdict" style="margin-top:12px"></p>
-        <p class="sim-note">Simulated: 200 questions with your three rates; counts are expected values. Real failures concentrate in particular document types, so split the same table by document type and language.</p>
+        <p class="sim-note">Simulated: 200 questions with your three rates. Real failures concentrate in particular document types.</p>
       </figure>
 
       <div class="prose">
-        <p>The answer is not "always fix retrieval". When retrieval is strong, remaining errors are mostly generation faults. The formula also shows a ceiling: if parsing drops the answer for 15% of questions, <i>r</i> cannot exceed 85% however good the search.</p>
-        <p>Measuring <i>r</i> needs a labelled set: 100 to 200 real business questions, each with its answer page, split across easy, hard, Arabic, English and table-based. LLM judges ("was the answer supported by the context?") help scale but have their own errors and need spot checks (<a href="a4-hallucination-detection-and-groundedness.html">groundedness checks</a>, <a href="m5-human-evaluation-and-annotator-agreement.html">human evaluation</a>). Score stages separately: retrieval by hit rate at <i>k</i> and gold-passage rank; generation by faithfulness to the context and answer correctness.</p>
+        <p>The answer is not "always fix retrieval". When retrieval is strong, remaining errors are mostly generation faults. There is also a ceiling: if parsing drops the answer for 15% of questions, hit rate cannot exceed 85% however good the search.</p>
+        <p>Measuring this needs a labelled set: 100 to 200 real questions, each with its answer page, split across easy, hard, Arabic, English and table-based. LLM judges help scale but need spot checks (<a href="a4-hallucination-detection-and-groundedness.html">groundedness checks</a>).</p>
       </div>
 
-      <div class="case-box" style="margin-top:6px">
+            <div class="case-box" style="margin-top:6px">
         <h4 style="font-family:var(--font-display);font-size:18px;margin:22px 0 6px">Case sorter: where did it first go wrong?</h4>
-        <p class="try" style="font-size:14px;color:var(--muted);max-width:var(--measure)">Each case shows what you would see in the trace. Pick the first failing stage, as in a bad-answer review meeting.</p>
+        <p class="try" style="font-size:14px;color:var(--muted);max-width:var(--measure)">Pick the first failing stage, as in a bad-answer review meeting.</p>
         <div id="cases" style="display:grid;gap:12px;margin-top:10px"></div>
         <p class="verdict" id="case-score" style="margin-top:12px"></p>
       </div>
@@ -299,18 +277,14 @@
     <!-- ============================== 5. FAILS ============================== -->
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Behind most bad document-RAG demos, each with its quickest check.</p></div>
+      <div class="prose"><p>Each with its quickest check.</p></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Scrambled or headerless tables</div><p>The model pairs the wrong number with the wrong label, fluently.</p><div class="spot"><b>Spot it</b>Compare parsed text with the page image for ten table questions.</div></li>
-        <li><div class="t">Pages silently dropped</div><p>A scanned appendix produced no text and nothing flagged it.</p><div class="spot"><b>Spot it</b>Report characters per page at ingestion; near-zero pages should alert.</div></li>
+        <li><div class="t">Scrambled or headerless tables</div><p>The model pairs the wrong number with the wrong label.</p><div class="spot"><b>Spot it</b>Compare parsed text with the page image for ten table questions.</div></li>
+        <li><div class="t">Pages silently dropped, or stamps and signatures ignored</div><p>A scanned appendix produced no text; or "is it signed?" cannot be answered.</p><div class="spot"><b>Spot it</b>Alert on near-zero characters per page at ingestion.</div></li>
         <li><div class="t">Trusting a hidden OCR layer</div><p>An old scan extracts "cleanly" but wrongly.</p><div class="spot"><b>Spot it</b>Re-OCR a sample and compare; check the share of unknown words.</div></li>
-        <li><div class="t">Arabic stored reversed or with unmatched forms and digits</div><p>Arabic searches return nothing, or only some documents, and the index looks fine.</p><div class="spot"><b>Spot it</b>Search a known phrase and amount in both digit styles. Print raw parsed Arabic and read it.</div></li>
-        <li><div class="t">Repeated headers and footers in every chunk</div><p>"Strictly confidential, Page 3 of 40" distorts retrieval.</p><div class="spot"><b>Spot it</b>Look for the most frequent lines across chunks.</div></li>
-        <li><div class="t">Stamps and signatures misread, or ignored when they were the fact</div><p>Stamp letters corrupt a paragraph; "is it signed?" cannot be answered.</p><div class="spot"><b>Spot it</b>Ask a stamp or signature question and see if any chunk carries it.</div></li>
-        <li><div class="t">Tuning the wrong half</div><p>Weeks on prompts while the passage was never retrieved, or on embeddings when the model ignored it.</p><div class="spot"><b>Spot it</b>Ask for hit rate at k and accuracy given the gold passage, separately. One number means that is the problem.</div></li>
-        <li><div class="t">An easy, English-prose evaluation set</div><p>Looks great, then fails on tables and Arabic scans in production.</p><div class="spot"><b>Spot it</b>Break results down by document type, language and table versus text.</div></li>
-        <li><div class="t">Grader and gold answer wrong</div><p>The system is blamed for a mistake in the test.</p><div class="spot"><b>Spot it</b>Hand-check a sample of "failures" first.</div></li>
-        <li><div class="t">No provenance</div><p>An answer with no page reference cannot be checked by a banker or validator.</p><div class="spot"><b>Spot it</b>Can I click an answer and see the highlighted region of the original page?</div></li>
+        <li><div class="t">Arabic stored reversed or with unmatched forms and digits</div><p>Arabic searches return nothing and the index looks fine.</p><div class="spot"><b>Spot it</b>Search a known phrase and amount in both digit styles. Print raw parsed Arabic and read it.</div></li>
+        <li><div class="t">Tuning the wrong half</div><p>Weeks on prompts while the passage was never retrieved.</p><div class="spot"><b>Spot it</b>Ask for hit rate and accuracy-given-passage separately.</div></li>
+        <li><div class="t">A flawed test set</div><p>Easy English prose looks great, then fails on tables and Arabic scans; or the gold answer is wrong.</p><div class="spot"><b>Spot it</b>Break results down by document type and language, and hand-check a sample of "failures".</div></li>
       </ul>
     </section>
 
@@ -319,13 +293,13 @@
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="prose"><p>Try each before opening the answer.</p></div>
       <div class="qa">
-        <details class="reveal"><summary>1. Why is a PDF "a drawing, not a text file", and what is lost on extraction?</summary><div class="ans"><p>It stores positioned glyphs, not sentences, tables or reading order. Table pairing, headers, column reading order and footnote links are the usual casualties.</p></div></details>
-        <details class="reveal"><summary>2. A scanned and a born-digital page look the same on screen. How do you tell them apart in code, and why does it matter?</summary><div class="ans"><p>Count extractable characters per page. Near zero means a scan needing OCR; many non-words means a poor hidden OCR layer. OCR adds character errors and needs different tools, and a bad hidden layer gives wrong text that looks clean.</p></div></details>
-        <details class="reveal"><summary>3. CER is 2%. A field has 15 characters. Probability it is read correctly? A document with 8 such fields?</summary><div class="ans"><p>0.98<sup>15</sup> ≈ 74%. Eight fields: 0.739<sup>8</sup> ≈ 9%, under independence. Real errors cluster, but the lesson stands: validate and review.</p></div></details>
-        <details class="reveal"><summary>4. Name three extraction faults that make an exact Arabic search fail though the text "looks right".</summary><div class="ans"><p>Visual (reversed) order; presentation-form characters instead of base letters; Arabic-Indic digits against a Western-digit query. Also spelling variants (hamza, ta marbuta/ha), diacritics and tatweel.</p></div></details>
-        <details class="reveal"><summary>5. Hit rate 60%, correct-given-passage 85%, correct-without-passage 10%. Accuracy? Which +10 points is worth more?</summary><div class="ans"><p>0.6 × 0.85 + 0.4 × 0.10 = 55%. +10 points of retrieval gains 0.1 × 0.75 = 7.5 points; +10 of generation gains 0.1 × 0.6 = 6. Retrieval first, but it is close, and parsing losses cap retrieval too.</p></div></details>
-        <details class="reveal"><summary>6. The right chunk was retrieved at rank 3 of 5 and the model still gave the wrong figure. Which stage failed and what do you check?</summary><div class="ans"><p>Generation or context assembly. Check for a conflicting distractor chunk, an instruction that permitted guessing, a needed computation, and an ambiguous chunk (a row without a header). If the chunk is ambiguous, the true fault is parsing.</p></div></details>
-        <details class="reveal"><summary>7. Why keep page numbers and bounding boxes with every chunk?</summary><div class="ans"><p>So an answer can cite and highlight its source for a human check, and reviewers can compare parse with picture when debugging. It also supports audit and validation for assistants that influence credit or compliance work.</p></div></details>
+        <details class="reveal"><summary>1. Why is a PDF "a drawing, not a text file", and what is lost on extraction?</summary><div class="ans"><p>It stores positioned glyphs, not sentences or tables. Table pairing, headers and reading order are the usual casualties.</p></div></details>
+        <details class="reveal"><summary>2. A scanned and a born-digital page look the same on screen. How do you tell them apart in code, and why does it matter?</summary><div class="ans"><p>Count extractable characters per page. Near zero means a scan needing OCR; many non-words means a poor hidden layer. OCR adds errors, and a bad hidden layer gives wrong text that looks clean.</p></div></details>
+        <details class="reveal"><summary>3. Why can a 1% character error rate still mean many documents need a human check?</summary><div class="ans"><p>A fact is only right if every character is right, and a document depends on many facts. Small per-character errors multiply across a field and then across fields. Validate with check digits and cross-field rules, and review the rest.</p></div></details>
+        <details class="reveal"><summary>4. Name three extraction faults that make an exact Arabic search fail though the text "looks right".</summary><div class="ans"><p>Visual (reversed) order; presentation-form characters instead of base letters; Arabic-Indic digits against a Western-digit query.</p></div></details>
+        <details class="reveal"><summary>5. Retrieval hit rate is 60% and the model answers correctly 85% of the time when it has the passage. Where do you look first, and why?</summary><div class="ans"><p>Retrieval, because 40% of questions never give the model a fair chance. Check parsing first, since a dropped answer caps the hit rate. As hit rate climbs towards 95%, generation becomes the better target.</p></div></details>
+        <details class="reveal"><summary>6. The right chunk was retrieved at rank 3 of 5 and the model still gave the wrong figure. Which stage failed and what do you check?</summary><div class="ans"><p>Generation or context assembly. Look for a conflicting distractor chunk, an instruction that permitted guessing, or an ambiguous chunk (a row without a header), in which case the true fault is parsing.</p></div></details>
+        <details class="reveal"><summary>7. Why keep page numbers and bounding boxes with every chunk?</summary><div class="ans"><p>So an answer can cite and highlight its source for a human check, and reviewers can compare parse with picture. It also supports audit.</p></div></details>
       </div>
     </section>
 

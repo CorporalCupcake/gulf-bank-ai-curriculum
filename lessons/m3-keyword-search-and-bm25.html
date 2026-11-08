@@ -70,15 +70,15 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>Retrieval picks the few passages worth showing the language model. In a RAG system (<a href="m2-prompting-versus-rag-versus-fine.html">M2.3</a>) the answer is no better than what retrieval finds: if the right passage is not in the top five, no prompt rescues it. Think of a librarian fetching books before an expert answers.</p>
-        <p>Example: a copilot for relationship managers sits on 40,000 policy pages, product sheets and circulars. Two ways to fetch from it:</p>
+        <p>Retrieval picks the few passages worth showing the language model. In a RAG system (<a href="m2-prompting-versus-rag-versus-fine.html">M2.3</a>) the answer is no better than what retrieval finds. Think of a librarian fetching books before an expert answers.</p>
+        <p>Two ways to fetch from a 40,000-page policy library:</p>
         <ul>
-          <li><strong>Lexical (keyword) search.</strong> Find the query's words in documents; rare words count more. Like Ctrl+F with a smart ranking. The standard recipe is <strong>BM25</strong>.</li>
-          <li><strong>Dense (semantic) search.</strong> An embedding model turns query and passages into vectors so similar meanings sit close (<a href="f1-vectors-matrices-geometry.html">F1.1</a>). Like filing by topic rather than by title. "I can't get into my app" lands near "reset your online banking password" with no shared word.</li>
+          <li><strong>Lexical (keyword) search.</strong> Find the query's words, with rare words counting more. Like Ctrl+F with a smart ranking. The standard recipe is <strong>BM25</strong>.</li>
+          <li><strong>Dense (semantic) search.</strong> An embedding model turns query and passages into vectors so similar meanings sit close (<a href="f1-vectors-matrices-geometry.html">F1.1</a>). "I can't get into my app" lands near "reset your online banking password" with no shared word.</li>
         </ul>
-        <p>The blind spots are opposite. Lexical cannot see meaning: "my money was taken by a thief" shares no word with "report an unauthorised transaction". Dense cannot see exact strings: SWIFT references <code>TXN4471</code> and <code>TXN9920</code> look almost identical to an embedding, yet are different payments.</p>
+        <p>The blind spots are opposite. Lexical cannot see meaning: "my money was taken by a thief" shares no word with "report an unauthorised transaction". Dense cannot see exact strings: <code>TXN4471</code> and <code>TXN9920</code> look almost identical to an embedding, yet are different payments.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Retrieval has two jobs: match the words (names, codes, amounts) and match the meaning (paraphrase, complaint language, cross-language). BM25 does the first, embeddings the second. Production usually needs both (<a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a>, next lesson).</div>
+      <div class="callout key"><span class="k">Hold onto this</span>BM25 matches words (names, codes, amounts); embeddings match meaning (paraphrase, other languages). Production usually needs both (<a href="m3-hybrid-search-and-reciprocal-rank.html">hybrid search</a>, next lesson).</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -87,22 +87,19 @@
 
       <h3 class="sub" id="m-bm25">M3.1 Keyword search and BM25</h3>
       <div class="prose">
-        <p><strong>The index.</strong> Like the index at the back of a textbook, an <em>inverted index</em> (Lucene, Elasticsearch, OpenSearch, Solr, PostgreSQL full-text) lists, for every term, the documents containing it and how often. Queries touch only the query terms' lists, so search is fast on millions of documents with no GPU. First, an <em>analyser</em> lower-cases, splits into tokens, and may drop stop words and stem ("transfers" becomes "transfer"). Most real lexical failures hide in the analyser (see Arabic below).</p>
-        <p><strong>The score.</strong> For each query term, BM25 multiplies three ideas, then sums over terms.</p>
+        <p><strong>The index.</strong> Like the index at the back of a textbook, an <em>inverted index</em> (Lucene, Elasticsearch, OpenSearch, PostgreSQL full-text) lists, for every term, the documents containing it. Search is fast with no GPU. Before indexing, an <em>analyser</em> lower-cases, splits into tokens and may stem ("transfers" becomes "transfer"). Most real lexical failures hide there.</p>
+        <p><strong>The score.</strong> For each query word found in a document, BM25 combines three ideas, then adds up over the query words.</p>
         <ol>
-          <li><strong>Rarity (IDF).</strong> A word in nearly every document says nothing. "Account" in a bank corpus is worth little; "murabaha" or "MT103" is worth a lot, like a rare surname narrowing a search far more than "Smith". A higher IDF means a rarer term. Misreading to avoid: IDF is not importance to the user, only rarity in the corpus.</li>
-          <li><strong>Term frequency with saturation.</strong> More occurrences suggest relevance, with diminishing returns: the tenth "card" adds far less than the second. Saturation stops a keyword-stuffed document winning.</li>
-          <li><strong>Length normalisation.</strong> A match inside a 3,000-word manual is weaker evidence than the same match in a 20-word FAQ entry, so longer-than-average documents are discounted.</li>
+          <li><strong>Rarity (IDF).</strong> "Account" in a bank corpus is worth little; "murabaha" or "MT103" is worth a lot, like a rare surname narrowing a search far more than "Smith". It is rarity, not importance to the user.</li>
+          <li><strong>Term frequency with saturation.</strong> More occurrences help, with diminishing returns: the tenth "card" adds far less than the second. The knob is <b>k<sub>1</sub></b> (typically 1.2).</li>
+          <li><strong>Length normalisation.</strong> A match in a 3,000-word manual is weaker evidence than the same match in a 20-word FAQ entry. The knob is <b>b</b> (typically 0.75).</li>
         </ol>
-      </div>
-      <div class="formula">
-        <math display="block"><mtext>score</mtext><mo stretchy="false">(</mo><mi>q</mi><mo>,</mo><mi>d</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mrow><mi>t</mi><mo>∈</mo><mi>q</mi></mrow></munder><mtext>IDF</mtext><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo><mo>·</mo><mfrac><mrow><mi>f</mi><mo>·</mo><mo stretchy="false">(</mo><msub><mi>k</mi><mn>1</mn></msub><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo></mrow><mrow><mi>f</mi><mo>+</mo><msub><mi>k</mi><mn>1</mn></msub><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>b</mi><mo>+</mo><mi>b</mi><mo>·</mo><mfrac><mrow><mo stretchy="false">|</mo><mi>d</mi><mo stretchy="false">|</mo></mrow><mtext>avgdl</mtext></mfrac><mo stretchy="false">)</mo></mrow></mfrac></math>
-        <p class="where"><i>f</i> = occurrences of the term in the document, |<i>d</i>| = document length in tokens, avgdl = average length. IDF(<i>t</i>) = ln(1 + (<i>N</i> − <i>n</i> + 0.5) ÷ (<i>n</i> + 0.5)), with <i>N</i> documents and <i>n</i> containing the term (Lucene's form). Two knobs: <b>k<sub>1</sub></b> (typically 1.2) sets how fast frequency saturates; <b>b</b> (typically 0.75) sets how hard length is penalised. The frequency part never exceeds k<sub>1</sub> + 1. Scores only rank documents for one query; they are not comparable across queries.</p>
+        <p>Scores only rank documents for one query; they are not comparable across queries. Stop words ("the", "of") have near-zero IDF, so they barely matter.</p>
       </div>
 
       <figure class="figure" id="fig-bm25">
         <div class="fig-head"><span class="fig-title">Score a query by hand, term by term</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> "lost card": long guide 9 says "card" eight times, short document 1 three times. See who wins, then set <b>b</b> to 0 and watch the long guide climb. Type <b>MT103</b> or <b>TXN4471</b>: a rare code dominates. Last, try common words like "card account".</p>
+        <p class="try"><b>Try:</b> "lost card": long guide 9 says "card" eight times, short document 1 three times. See who wins, then set <b>b</b> to 0 and watch the long guide climb. Type <b>MT103</b>: a rare code dominates.</p>
         <div class="btns" role="group" aria-label="Example queries">
           <button class="btn" type="button" data-q="lost card">lost card</button>
           <button class="btn" type="button" data-q="MT103 TXN4471">MT103 TXN4471</button>
@@ -116,16 +113,12 @@
         </div>
         <div class="table-wrap"><div id="q1-table"></div></div>
         <div class="verdict" id="s1-verdict"></div>
-        <p class="sim-note">Simulated: ten invented bank help-desk snippets (shown in the rows). Lower-cased, split on non-letters/digits, a short stop-word list removed, no stemming. Scores are exact BM25 with the Lucene IDF given above.</p>
+        <p class="sim-note">Simulated: ten invented bank help-desk snippets. Lower-cased, split on non-letters/digits, short stop-word list removed, no stemming. Scores are exact BM25 (Lucene IDF).</p>
       </figure>
-
-      <div class="prose">
-        <p>Two details. Stop words ("the", "of") have near-zero IDF, so they are irrelevant even if kept. Without stemming, "stolen" does not match "stole"; stemmers fix some misses and create others ("organisation" and "organ").</p>
-      </div>
 
       <figure class="figure" id="fig-sat">
         <div class="fig-head"><span class="fig-title">Saturation and length: the two knobs, drawn</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> at k<sub>1</sub> = 1.2 the average-length curve flattens by about ten occurrences. At k<sub>1</sub> = 0 it is a step: present or not. At 3 it is nearly raw counting. Slide <b>b</b> up and the long document's curve drops below the short one's.</p>
+        <p class="try"><b>Try:</b> at k<sub>1</sub> = 1.2 the average-length curve flattens by about ten occurrences. At 0 it is a step: present or not. At 3 it is nearly raw counting.</p>
         <div class="chart-wrap" id="sat-chart"></div>
         <div class="legend">
           <span><i style="background:var(--accent)"></i>Short document (half the average length)</span>
@@ -138,98 +131,69 @@
           <div class="ctl"><label for="s2-b">b <output for="s2-b"></output></label><input type="range" id="s2-b" min="0" max="1" step="0.05" value="0.75"></div>
         </div>
         <div class="verdict" id="s2-verdict"></div>
-        <p class="sim-note">Simulated: plots the frequency part of the BM25 formula only, f(k<sub>1</sub>+1) ÷ (f + k<sub>1</sub>(1 − b + b·length ratio)), for f from 0 to 20. Exact formula, no data. To get a full score, multiply by IDF.</p>
+        <p class="sim-note">Simulated: plots only the term-frequency part of BM25 for 0 to 20 occurrences. No data. Multiply by IDF for a full score.</p>
       </figure>
 
       <div class="prose">
-        <p><strong>Strong:</strong> exact strings such as account and reference numbers, SWIFT message types, product codes, names, "Article 12", error codes. Rare terms get high IDF automatically. No training, no GPU, and explainable: you can say which words matched. In BEIR, 18 retrieval datasets (Thakur et al., 2021), BM25 was a hard baseline to beat on data models were not trained on.</p>
-        <p><strong>Weak:</strong> vocabulary mismatch ("thief" versus "unauthorised transaction"), other languages, spelling variants, and sentence-style questions. Boilerplate also hurts: a disclaimer in every product sheet makes queries about it match everything equally.</p>
+        <p><strong>Strong:</strong> exact strings such as account and reference numbers, SWIFT message types, product codes, names, "Article 12". No training, no GPU, and explainable: you can say which words matched.</p>
+        <p><strong>Weak:</strong> vocabulary mismatch ("thief" versus "unauthorised transaction"), other languages and spelling variants.</p>
         <h4 style="font-family:var(--font-display);font-size:18px;margin-top:18px">Arabic and mixed-language bank text</h4>
-        <p>Arabic is hard for analysers because words carry prefixes and suffixes: "والتحويلات" (and the transfers) contains the stem of "تحويل" (transfer) but is a different token. Letter variants (أ إ آ ا; ى versus ي; ة versus ه) and optional diacritics make two spellings of one word fail to match. Fix: normalise letters, strip diacritics and tatweel (the elongation character), add a light stemmer or morphological analyser, and test on real queries. Customers also mix Arabic, English and Arabizi (Arabic in Latin letters, "tahweel"). Treat "supports Arabic" as a hypothesis to test.</p>
-        <pre><code># The core of BM25 in a few lines (illustrative; use a library in practice)
-import math
-from collections import Counter
-
-def bm25(query_terms, doc_terms, df, N, avgdl, k1=1.2, b=0.75):
-    tf = Counter(doc_terms)
-    score = 0.0
-    for t in query_terms:
-        if t not in tf: continue
-        idf = math.log(1 + (N - df[t] + 0.5) / (df[t] + 0.5))
-        norm = tf[t] * (k1 + 1) / (tf[t] + k1 * (1 - b + b * len(doc_terms) / avgdl))
-        score += idf * norm
-    return score</code></pre>
-        <p><strong>BM25F</strong> weights fields differently (title, headings, body), so a title match beats a footnote match. Cheap and effective for policy libraries.</p>
+        <p>Arabic words carry prefixes and suffixes: "والتحويلات" (and the transfers) is a different token from "تحويل" (transfer). Letter variants (أ إ آ ا) and optional diacritics make two spellings of one word fail to match. Fix: normalise letters, strip diacritics, add a light stemmer, and test on real queries. Treat "supports Arabic" as a hypothesis to test.</p>
       </div>
 
       <h3 class="sub" id="m-dense">M3.2 Dense retrieval: searching by meaning</h3>
       <div class="prose">
-        <p>A <strong>bi-encoder</strong> is a transformer (<a href="f5-attention.html">F5.5</a>) that reads a text and outputs one vector of 384 to 3,072 numbers. The query is encoded the same way. The score is cosine similarity (<a href="f1-vectors-matrices-geometry.html">F1.1</a>): the angle between the vectors, ignoring length. Think of GPS coordinates for meaning: nearby points mean similar topics. A cosine near 1 is very similar; near 0 is unrelated. The number is only meaningful for ranking within one model, not as a "70% match". Documents are encoded once, offline; only the query needs the model at search time.</p>
-        <p><strong>How it learns.</strong> Contrastively (<a href="f5-self-supervised-and-contrastive-learning.html">F5.7</a>), on huge numbers of pairs (question and answering passage, title and article, sentence and translation). The loss pulls matching pairs together and pushes them away from other passages in the batch. "I can't log in" and "reset your password" become neighbours because they appeared as a pair, not because they share words. The catch: the model knows only the similarity it was shown. Web-trained embeddings may not know that "CDD", "KYC refresh" and "periodic review" are one task at your bank.</p>
-        <p><strong>Searching fast.</strong> Comparing a query to millions of vectors is slow, so vector databases use <em>approximate nearest neighbour</em> indexes, usually HNSW (a layered graph you walk towards the query). Results are almost, not exactly, the true nearest; a setting trades speed for recall. PostgreSQL (pgvector), OpenSearch and Elasticsearch now include vector search, often removing the need for a separate product.</p>
-        <p><strong>Practicalities that bite.</strong></p>
+        <p>A <strong>bi-encoder</strong> is a transformer (<a href="f5-attention.html">F5.5</a>) that reads a text and outputs one vector of a few hundred to a few thousand numbers. The query is encoded the same way. The score is cosine similarity (<a href="f1-vectors-matrices-geometry.html">F1.1</a>): it compares direction only, so 1 means pointing the same way, 0 means unrelated. Think of GPS coordinates for meaning: nearby points mean similar topics. The number only ranks results within one model; it is not a "70% match".</p>
+        <p><strong>How it learns.</strong> Contrastively (<a href="f5-self-supervised-and-contrastive-learning.html">F5.7</a>): the model sees huge numbers of matching pairs (question and answer, title and article) and learns to pull them together. "I can't log in" and "reset your password" become neighbours because they appeared as a pair, not because they share words. The catch: it knows only the similarity it was shown. It may not know that "CDD", "KYC refresh" and "periodic review" are one task at your bank.</p>
+        <p><strong>Searching fast.</strong> Vector databases use <em>approximate nearest neighbour</em> indexes (usually HNSW): fast search that trades a little recall for speed.</p>
+        <p><strong>Practicalities that bite:</strong></p>
         <ul>
-          <li><strong>Query and document differ.</strong> Many models expect a prefix such as "query: " or an instruction; skipping it silently lowers quality. Read the model card.</li>
-          <li><strong>Context length.</strong> Maximum input is 512 tokens for older models, 8,192 or more for newer. The rest is cut off, one reason chunking matters (<a href="m3-chunking-strategies.html">M3.3</a>).</li>
-          <li><strong>One vector averages meaning.</strong> A paragraph on two topics gets a vector between them, matching neither well. ColBERT-style late interaction keeps one vector per token (more precise, more storage); SPLADE gives weighted keywords including related terms.</li>
-          <li><strong>Similar is not relevant.</strong> The nearest passage to "daily ATM limit for a Platinum card" may be the Gold card one. Embeddings are weak at negation, numbers and fine distinctions ("Do not" versus "Do").</li>
+          <li><strong>Prefixes.</strong> Many models expect "query: " or similar. Skipping it silently lowers quality. Read the model card.</li>
+          <li><strong>Context length.</strong> Input beyond the model's maximum is cut off, one reason chunking matters (<a href="m3-chunking-strategies.html">M3.3</a>).</li>
+          <li><strong>Similar is not relevant.</strong> One vector averages meaning, and the nearest passage to "daily ATM limit for a Platinum card" may be the Gold card one. Embeddings are weak at negation, numbers and fine distinctions.</li>
         </ul>
       </div>
 
       <figure class="figure" id="fig-vs">
         <div class="fig-head"><span class="fig-title">Same ten snippets, same question: keywords against meaning</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> run each question. "My money was taken by a thief" gives BM25 nothing. "I can't get into my app" fools BM25 with "app" in a lost-card snippet, while dense finds the login help. On the code query, BM25 separates two near-identical wire confirmations; dense scores barely differ. Green rows are correct.</p>
+        <p class="try"><b>Try:</b> run each question. "My money was taken by a thief" gives BM25 nothing. "I can't get into my app" fools BM25 with "app" in a lost-card snippet. On the code query, dense barely separates two near-identical wire confirmations. Green rows are correct.</p>
         <div class="btns" role="group" aria-label="Questions" id="vs-btns"></div>
         <div class="cols2">
           <div><h4>BM25 (keywords)</h4><ol class="rk" id="vs-bm"></ol></div>
           <div><h4>Dense (meaning)</h4><ol class="rk" id="vs-dn"></ol></div>
         </div>
         <div class="verdict" id="s3-verdict"></div>
-        <p class="sim-note">Simulated: the ten snippets from Simulation 1. BM25 uses k<sub>1</sub> = 1.2, b = 0.75. The "embeddings" are not from a real model: each snippet and each question is a hand-assigned six-number vector (card loss, transfers, fraud and disputes, login, financing, fees and limits), and the dense score is the exact cosine. The codes MT103/MT202 and TXN4471/TXN9920 are deliberately not represented in the vectors, which is the point: real models also blur them. Real results vary by model.</p>
+        <p class="sim-note">Simulated: the ten snippets from Simulation 1. The "embeddings" are not from a real model: each text is a hand-assigned six-number vector and the dense score is the exact cosine. The codes are deliberately not represented in the vectors, which is the point: real models also blur them.</p>
       </figure>
 
       <h3 class="sub" id="m-choose">Choosing an embedding model</h3>
       <div class="prose">
-        <p>Use the public leaderboard (MTEB, Muennighoff et al., 2022) to build a shortlist, never to decide. It is like choosing a car by overall magazine score when you need one that tows. The average mixes tasks you do not care about, test sets are public and can be tuned toward, your language and documents differ, and vendor numbers are unverified.</p>
-        <p><strong>Decide on your own evaluation set.</strong> Build 100 to 300 realistic questions, each with its answering passage(s), written or checked by someone who knows the business (ten good compliance-desk questions beat a thousand synthetic ones). Mix English, Arabic, mixed queries, exact-code lookups and paraphrased complaints. Then measure each candidate:</p>
+        <p>Use the public leaderboard (MTEB, Muennighoff et al., 2022) to build a shortlist, never to decide. It is like choosing a car by overall magazine score when you need one that tows: the average mixes tasks you do not care about, and your language and documents differ.</p>
+        <p><strong>Decide on your own evaluation set.</strong> Build 100 to 300 realistic questions, each with its answering passage, checked by someone who knows the business. Mix English, Arabic, exact-code lookups and paraphrased complaints. Then measure each candidate:</p>
         <ul>
-          <li><strong>Recall@k</strong>: the share of questions where a correct passage is in the top <em>k</em> (5 or 20). Going from 62% to 70% at k=5 means 8 more questions in 100 give the generator what it needs. It is the key RAG number because the generator sees only the top few. It says nothing about order within the top k.</li>
-          <li><strong>MRR or nDCG@10</strong> (<a href="f7-forecast-and-regression-metrics-mae.html">F7.6</a>): how high the first correct passage sits (MRR 0.5 means about rank 2 on average) and how good the ranking is overall.</li>
+          <li><strong>Recall@k</strong>: the share of questions where a correct passage is in the top <em>k</em> (5 or 20). Going from 62% to 70% at k=5 means 8 more questions in 100 give the generator what it needs.</li>
+          <li><strong>MRR or nDCG@10</strong> (<a href="f7-forecast-and-regression-metrics-mae.html">F7.6</a>): how high the first correct passage sits, and how good the ranking is overall.</li>
           <li><strong>Intervals.</strong> With 150 questions, a 4-point recall@5 gap is noise (<a href="f2-uncertainty-intervals-bootstrap.html">F2.1</a>).</li>
         </ul>
-        <pre><code># Minimal retrieval evaluation: recall@k and MRR
-def evaluate(retrieve, questions, k=5):
-    hits, rr = 0, 0.0
-    for q in questions:                       # q = {"text": ..., "gold": {doc_id, ...}}
-        ranked = retrieve(q["text"], top=20)  # list of doc ids, best first
-        if q["gold"] &amp; set(ranked[:k]): hits += 1
-        for i, d in enumerate(ranked, 1):
-            if d in q["gold"]: rr += 1 / i; break
-    n = len(questions)
-    return {"recall@%d" % k: hits / n, "mrr": rr / n}</code></pre>
-        <p>Practical criteria, in the order that usually ends the argument:</p>
+        <p>Practical criteria:</p>
       </div>
       <div class="table-wrap">
         <table class="data">
           <thead><tr><th>Criterion</th><th>What to check</th><th>Why it matters at a bank</th></tr></thead>
           <tbody>
-            <tr><td><b>Languages</b></td><td>Arabic (MSA and Gulf dialect), English, mixed; cross-lingual.</td><td>Many models are English-first. ArabicMTEB (with the Swan models) exists; still test your own text.</td></tr>
-            <tr><td><b>Where it runs</b></td><td>Vendor API, or open weights you host.</td><td>External APIs raise data-residency and outsourcing questions (<a href="p4-hybrid-and-on-premises-deployment.html">P4.2</a>); open weights can run on-premises.</td></tr>
-            <tr><td><b>Maximum input</b></td><td>512, 8,192 or more tokens.</td><td>Caps chunk size.</td></tr>
-            <tr><td><b>Dimension and storage</b></td><td>384 to 3,072 numbers; some allow truncation (<a href="r10-matryoshka-embeddings.html">R10 Matryoshka</a>).</td><td>Drives index size and memory (Simulation 4).</td></tr>
-            <tr><td><b>Speed and cost</b></td><td>Throughput per GPU; price per million tokens.</td><td>The corpus is re-embedded on any model or chunking change.</td></tr>
-            <tr><td><b>Licence and support</b></td><td>Commercial use? Versioned, maintained?</td><td>Model risk wants a stable, documented dependency (<a href="g3-what-counts-as-a-model.html">G3.1</a>).</td></tr>
-            <tr><td><b>Fine-tunability</b></td><td>Can you train on your own query-passage pairs?</td><td>A few thousand in-domain pairs often beat switching to a bigger general model.</td></tr>
+            <tr><td><b>Languages</b></td><td>Arabic (MSA and Gulf dialect), English, mixed.</td><td>Many models are English-first. Test your own text.</td></tr>
+            <tr><td><b>Where it runs</b></td><td>Vendor API, or open weights you host.</td><td>External APIs raise data-residency questions (<a href="p4-hybrid-and-on-premises-deployment.html">P4.2</a>); open weights can run on-premises.</td></tr>
+            <tr><td><b>Input length and dimension</b></td><td>512 to 8,192+ tokens; 384 to 3,072 numbers (<a href="r10-matryoshka-embeddings.html">R10 Matryoshka</a>).</td><td>Caps chunk size; drives index size and memory (Simulation 4).</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p><strong>Lock-in.</strong> Vectors from different models are not comparable, like prices in different currencies. A model change means re-embedding everything and rebuilding the index. Store model name and version with each vector, and keep the source text.</p>
+        <p><strong>Lock-in.</strong> Vectors from different models are not comparable, like prices in different currencies. A model change means re-embedding everything, so store the model version with each vector.</p>
       </div>
 
       <figure class="figure" id="fig-size">
         <div class="fig-head"><span class="fig-title">What your embedding choice does to the index</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> 40,000 pages at about 12 chunks each is roughly half a million chunks; any setting copes. Slide to 200 million (every email and chat) and compare 3,072 float numbers with 512 numbers stored as 8-bit.</p>
+        <p class="try"><b>Try:</b> half a million chunks fit anywhere. Slide to 200 million and compare 3,072 float numbers with 512 stored as 8-bit.</p>
         <div class="controls">
           <div class="ctl"><label for="s-n">Number of chunks <output for="s-n"></output></label><input type="range" id="s-n" min="4" max="9" step="0.05" value="5.7"></div>
           <div class="ctl"><label for="s-dim">Dimensions per vector <output for="s-dim"></output></label><input type="range" id="s-dim" min="0" max="5" step="1" value="2"></div>
@@ -241,11 +205,11 @@ def evaluate(retrieve, questions, k=5):
           <div class="stat"><div class="k">Against the biggest setting</div><div class="v" id="st4-rel"></div><div class="s">3,072 numbers at 4 bytes</div></div>
         </div>
         <div class="verdict" id="s4-verdict"></div>
-        <p class="sim-note">Simulated: pure arithmetic, number of vectors × dimensions × bytes per number (4, 2, 1, or 1/8 byte for binary), plus an assumed 128 bytes per vector of graph overhead (HNSW with 16 links per node; real indexes vary). Quality is not modelled: shrinking vectors costs some recall, by an amount you must measure on your own set.</p>
+        <p class="sim-note">Simulated: pure arithmetic (vectors × dimensions × bytes per number) plus an assumed 128 bytes per vector of index overhead. Quality is not modelled: shrinking vectors costs some recall.</p>
       </figure>
 
       <div class="prose">
-        <p>The cheapest gains rarely come from the biggest model. In order: fix chunking and metadata, add the lexical leg (hybrid), add a reranker over the top 50, <em>then</em> fine-tune or go bigger. Measure each on the same evaluation set.</p>
+        <p>The cheapest gains rarely come from the biggest model. In order: fix chunking and metadata, add the lexical leg (hybrid), add a reranker, <em>then</em> fine-tune or go bigger. Measure each on the same evaluation set.</p>
       </div>
     </section>
 
@@ -254,14 +218,11 @@ def evaluate(retrieve, questions, k=5):
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
         <li><div class="t">Picking the model from the leaderboard</div><p>"Number one on MTEB, so we use it." Your Arabic, jargon and documents are not in the average.</p><div class="spot"><b>Spot it</b>Ask for recall@5 on a bank-specific, bilingual question set, with an interval.</div></li>
-        <li><div class="t">Dense-only search loses exact codes</div><p>A staff member pastes a circular number and gets three vaguely related circulars.</p><div class="spot"><b>Spot it</b>Put identifier queries in the test set. If recall is below BM25's, add the lexical leg.</div></li>
-        <li><div class="t">Keyword-only search misses paraphrase</div><p>Zero results for a complaint in the customer's own words.</p><div class="spot"><b>Spot it</b>Log no-result and weak-result queries; review weekly.</div></li>
-        <li><div class="t">Arabic analyser left on default</div><p>Alef variants, the definite article and clitics break matching; mixed Arabic and English fields are tokenised as one language.</p><div class="spot"><b>Spot it</b>Run one query with and without the hamza and the prefix; results should not change.</div></li>
-        <li><div class="t">Missing query or document prefix</div><p>The model wants "query:" and "passage:" or an instruction; the pipeline omits it and quality drops quietly.</p><div class="spot"><b>Spot it</b>Compare with the model card's example on a few known pairs.</div></li>
-        <li><div class="t">Silent truncation</div><p>Chunks beyond the input limit are cut; their ends are never embedded.</p><div class="spot"><b>Spot it</b>Check chunk token lengths against the model maximum.</div></li>
-        <li><div class="t">Wrong passage, high similarity</div><p>The Gold-card limit comes back for a Platinum-card question; they read almost the same.</p><div class="spot"><b>Spot it</b>Add near-duplicate pairs to the test set; use metadata filters (product, date, version) and a reranker.</div></li>
-        <li><div class="t">Stale or mixed-version indexes</div><p>Vectors from old and new models mixed, or superseded policies still indexed.</p><div class="spot"><b>Spot it</b>Store model name, version and effective date per vector; test that only current versions return.</div></li>
-        <li><div class="t">Testing on questions made from the chunks</div><p>LLM-generated questions copy the chunk's wording, so every method looks excellent.</p><div class="spot"><b>Spot it</b>Use real user queries; compare synthetic and real scores.</div></li>
+        <li><div class="t">Dense-only loses exact codes; keyword-only misses paraphrase</div><p>A pasted circular number returns vaguely related circulars; or a complaint in the customer's own words returns nothing.</p><div class="spot"><b>Spot it</b>Test identifier and paraphrase queries; log no-result queries. Add the other leg (hybrid).</div></li>
+        <li><div class="t">Arabic analyser left on default</div><p>Alef variants, the definite article and clitics break matching.</p><div class="spot"><b>Spot it</b>Run one query with and without the hamza and the prefix; results should not change.</div></li>
+        <li><div class="t">Missing prefix or silent truncation</div><p>A missing "query:" prefix, or chunks longer than the input limit, quietly degrade results.</p><div class="spot"><b>Spot it</b>Compare with the model card; check chunk lengths against the maximum.</div></li>
+        <li><div class="t">Wrong passage, high similarity</div><p>The Gold-card limit comes back for a Platinum-card question; they read almost the same.</p><div class="spot"><b>Spot it</b>Test near-duplicate pairs; add metadata filters and a reranker.</div></li>
+        <li><div class="t">Stale indexes or flattering test questions</div><p>Mixed model versions or superseded policies still indexed; or LLM-generated test questions that copy the chunk's wording, so every method looks excellent.</p><div class="spot"><b>Spot it</b>Store model version and date per vector; use real user queries.</div></li>
       </ul>
     </section>
 
@@ -269,13 +230,13 @@ def evaluate(retrieve, questions, k=5):
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A corpus has 10,000 documents. "account" appears in 6,000 and "murabaha" in 20. Which gets the higher IDF, and roughly by how much?</summary><div class="ans"><p>"Account": ln(1 + 4000.5/6000.5) ≈ 0.51. "Murabaha": ln(1 + 9980.5/20.5) ≈ 6.19. Murabaha is worth about twelve times as much.</p></div></details>
-        <details class="reveal"><summary>2. What does k<sub>1</sub> = 0 do? What does b = 0 do?</summary><div class="ans"><p>k<sub>1</sub> = 0 makes the frequency part 1 whenever the term appears: presence only. b = 0 removes the length penalty.</p></div></details>
-        <details class="reveal"><summary>3. A term appears 50 times in one document and 5 times in another, same average length. With k<sub>1</sub> = 1.2, which frequency part is larger and by how much?</summary><div class="ans"><p>f = 50: 50 × 2.2 / 51.2 ≈ 2.15. f = 5: 5 × 2.2 / 6.2 ≈ 1.77. Ten times the occurrences give 21% more; the ceiling is 2.2.</p></div></details>
+        <details class="reveal"><summary>1. "Account" appears in 6,000 of 10,000 documents and "murabaha" in 20. Which gets the higher IDF, and what does that mean for a query containing both?</summary><div class="ans"><p>Murabaha, by a large margin (roughly twelve times). A document containing "murabaha" outranks one that only repeats "account", because the rare word carries the signal.</p></div></details>
+        <details class="reveal"><summary>2. What does k<sub>1</sub> = 0 do? What does b = 0 do?</summary><div class="ans"><p>k<sub>1</sub> = 0 counts presence only: a word appearing once or fifty times scores the same. b = 0 removes the length penalty, so long documents are not discounted.</p></div></details>
+        <details class="reveal"><summary>3. A term appears 50 times in one document and 5 times in another. Why does the first not score ten times higher?</summary><div class="ans"><p>Saturation. Extra repeats add very little, which stops keyword-stuffed documents winning.</p></div></details>
         <details class="reveal"><summary>4. Why can two wire confirmations with different reference numbers look the same to an embedding model but not to BM25?</summary><div class="ans"><p>An embedding captures overall topic, so a short identifier barely moves it, and the tokeniser splits it into meaningless fragments. BM25 indexes the whole token and gives a rare one a very high IDF.</p></div></details>
-        <details class="reveal"><summary>5. A teammate says model A has a higher MTEB average than model B, so use A. Give reasons that is not enough.</summary><div class="ans"><p>The average covers tasks and languages unlike ours; public test sets can be targeted and vendor numbers may be unverified; it ignores cost, hosting, input length and licence; and it says nothing about Arabic banking text. Test on our own set.</p></div></details>
-        <details class="reveal"><summary>6. You have 50 million chunks. Compare the vector storage of 1,024-dimension float32 and 256-dimension int8.</summary><div class="ans"><p>50M × 1,024 × 4 bytes = 204.8 GB. 50M × 256 × 1 byte = 12.8 GB, sixteen times smaller. Some recall is lost, which you measure; a reranker often recovers it.</p></div></details>
-        <details class="reveal"><summary>7. Recall@5 is 62% on 100 evaluation questions. How sure are you?</summary><div class="ans"><p>Standard error ≈ √(0.62 × 0.38 / 100) ≈ 4.9 points, so a 95% interval of roughly 52% to 72%. A rival at 66% is indistinguishable. Use more questions or a paired comparison on the same questions.</p></div></details>
+        <details class="reveal"><summary>5. A teammate says model A has a higher MTEB average than model B, so use A. Give reasons that is not enough.</summary><div class="ans"><p>The average covers tasks and languages unlike ours, ignores cost, hosting and input length, and says nothing about Arabic banking text. Test on our own set.</p></div></details>
+        <details class="reveal"><summary>6. You have 50 million chunks. Why might you choose 256-dimension int8 vectors over 1,024-dimension float32, and what must you check?</summary><div class="ans"><p>They are sixteen times smaller (about 13 GB against 205 GB), which can decide whether the index fits in memory. Some recall is lost, so measure it on your own set; a reranker often recovers it.</p></div></details>
+        <details class="reveal"><summary>7. Recall@5 is 62% on 100 evaluation questions. How sure are you?</summary><div class="ans"><p>Not very: the true figure could plausibly be anywhere from about 52% to 72%. A rival at 66% is indistinguishable. Use more questions or a paired comparison on the same questions.</p></div></details>
         <details class="reveal"><summary>8. A customer asks in Gulf Arabic and the policy is in Modern Standard Arabic. Which method struggles, and what would you test?</summary><div class="ans"><p>BM25, since dialect words differ from formal terms. A multilingual embedding may bridge it, but dialect coverage varies. Test real dialect queries against MSA documents and compare recall@k per candidate, with and without hybrid.</p></div></details>
       </div>
     </section>
