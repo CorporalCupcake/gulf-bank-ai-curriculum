@@ -66,24 +66,21 @@
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Running a model is mostly about moving numbers through memory, not about arithmetic, so you make it cheaper by storing fewer or smaller numbers (quantization, pruning, distillation), by never waiting on the slowest part of a request (latency budgets) and by keeping the GPU busy with many users at once (batching).</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Running a model is mostly about moving numbers through memory, so you make it cheaper by storing fewer or smaller numbers (quantization, pruning, distillation), by never waiting on the slowest step of a request (latency budgets) and by keeping the GPU busy with many users at once (batching).</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A GPU is a very fast chef in a tiny kitchen. Cooking is quick. The slow part is walking to the cold store for ingredients. Cook one plate per trip and most of the shift is walking. Cook forty plates per trip and the walk is shared.</p>
-        <p>An 8-billion-parameter model at 16 bits is 16 GB of weights. To produce <em>one</em> token the GPU reads all 16 GB from memory. At about 3.35 TB/s (an H100 SXM) that takes about 5 ms. The arithmetic takes a fraction of that. So the GPU waits for memory, not maths. This is <strong>memory-bound</strong>, and it explains nearly everything here.</p>
-      </div>
-      <div class="prose">
-        <p>Three families of tricks follow.</p>
+        <p>A GPU is a very fast chef in a tiny kitchen. Cooking is quick. The slow part is walking to the cold store. Cook one plate per trip and the shift is mostly walking. Cook forty per trip and the walk is shared.</p>
+        <p>An 8-billion-parameter model at 16 bits is 16 GB of weights, and producing <em>one</em> token means reading all of it from memory. The GPU waits for memory, not for arithmetic. This is <strong>memory-bound</strong>, and it explains nearly everything below. Three families of tricks follow.</p>
         <ul>
-          <li><strong>Move fewer bytes.</strong> Store weights in 8 or 4 bits instead of 16 (<em>quantization</em>), remove weights that barely matter (<em>pruning</em>), or train a small model to imitate a big one (<em>distillation</em>).</li>
-          <li><strong>Never wait on the slowest piece.</strong> A fraud decision has a fixed window and the model is one step in it. The <em>latency budget</em> divides that window. The danger is the slow tail, not the average.</li>
+          <li><strong>Move fewer bytes.</strong> Store weights in fewer bits (<em>quantization</em>), remove weights that barely matter (<em>pruning</em>), or train a small model to imitate a big one (<em>distillation</em>).</li>
+          <li><strong>Never wait on the slowest piece.</strong> A fraud decision has a fixed window. The <em>latency budget</em> divides it among the steps. The danger is the slow tail, not the average.</li>
           <li><strong>Share each trip to memory.</strong> Read the weights once and serve many users together (<em>batching</em>).</li>
         </ul>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Compression is a trade, not a free lunch: every method gives back some accuracy for memory, speed or cost. Measure the loss on your own task and data instead of trusting "4-bit loses almost nothing". In real-time systems the number that matters is the slow 1%.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Compression is a trade, not a free lunch. Measure the loss on your own task and data instead of trusting "4-bit loses almost nothing". In real-time systems the number that matters is the slow 1%.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -92,21 +89,13 @@
 
       <h3 class="sub" id="m-quant">Quantization: fewer bits per weight</h3>
       <div class="prose">
-        <p>A weight is normally a 16-bit float (FP16 or BF16, see F6.5). <strong>Quantization</strong> stores a small integer plus a shared scale instead. 8 bits gives 256 levels, 4 bits only 16. It is like rounding prices to the nearest 5 dirhams: smaller to store, slightly wrong.</p>
-        <p>The simplest scheme, <em>symmetric absmax rounding</em>: take a block of weights, find the largest magnitude <i>m</i>, space levels evenly from −<i>m</i> to +<i>m</i>, and round each weight to its nearest level. To rebuild a weight, multiply the integer by the scale.</p>
-      </div>
-      <div class="formula">
-        <math display="block"><mi>s</mi><mo>=</mo><mfrac><mrow><mo>max</mo><mo stretchy="false">|</mo><mi>w</mi><mo stretchy="false">|</mo></mrow><mrow><msup><mn>2</mn><mrow><mi>b</mi><mo>−</mo><mn>1</mn></mrow></msup><mo>−</mo><mn>1</mn></mrow></mfrac><mo>,</mo><mspace width="1em"></mspace><mover><mi>w</mi><mo>^</mo></mover><mo>=</mo><mi>s</mi><mo>·</mo><mo>round</mo><mo stretchy="false">(</mo><mi>w</mi><mo>/</mo><mi>s</mi><mo stretchy="false">)</mo></math>
-        <p class="where"><i>b</i> is the bit count, <i>s</i> the step between levels. At 4 bits there are 7 steps each side of zero. A weight's rounding error is at most half a step, so error scales with the <em>largest weight in the block</em>. Each bit removed roughly doubles the step, so error climbs fast below 4 bits.</p>
-      </div>
-
-      <div class="prose" style="margin-top:1.2em">
-        <p><strong>Outliers are the enemy.</strong> If one weight is 15 times larger than the rest, the step <i>s</i> stretches to cover it, and the ordinary small weights all round to zero or one level. It is like measuring everyone in a room with a ruler marked only in metres because a giraffe walked in. LLMs have such outliers, especially in a few activation channels, which is why naive 8- and 4-bit conversion once ruined models that looked fine in FP16 (Dettmers et al., 2022). The cure is <strong>group-wise</strong> quantization: many small blocks, each with its own scale. A block of 128 weights costs one extra 16-bit scale, so "4-bit" really means about 4.125 bits per weight. An outlier now ruins only its own block.</p>
+        <p><strong>Quantization</strong> stores each weight as a small integer plus a shared scale, instead of a 16-bit float. 8 bits gives 256 levels, 4 bits only 16. It is like rounding prices to the nearest 5 dirhams: smaller to store, slightly wrong.</p>
+        <p><strong>Outliers are the enemy.</strong> The scale is set by the largest weight in a block. If one weight is 15 times bigger than the rest, the levels stretch to cover it and the ordinary weights all round to zero. It is like measuring a room with a ruler marked only in metres because a giraffe walked in. The cure is <strong>group-wise</strong> quantization: a separate scale for each small block (say 128 weights), so an outlier ruins only its own block. The extra scales mean "4-bit" really costs about 4.125 bits per weight.</p>
       </div>
 
       <figure class="figure" id="fig-quant">
         <div class="fig-head"><span class="fig-title">Rounding weights to a few levels</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> set 4 bits, one scale for the whole tensor, outliers off. Then switch the outliers on: nearly every grey dot collapses to zero. Now change to groups of 128 and the damage shrinks to the one block that holds the outlier. Finally slide the bits to 3 and 2 and watch the error climb steeply.</p>
+        <p class="try"><b>Try:</b> 4 bits, one scale, outliers off. Switch outliers on: nearly every grey dot collapses to zero. Change to groups of 128 and the damage shrinks to one block. Then slide the bits to 3 and 2 and watch the error climb.</p>
         <div class="chart-wrap" id="q-chart"></div>
         <div class="legend">
           <span><i class="sq" style="background:var(--neutral);opacity:.85"></i>Original weight</span>
@@ -129,55 +118,33 @@
           <div class="stat"><div class="k">8B model / 70B model</div><div class="v" id="q-mem"></div><div class="s">weights only, GB</div></div>
         </div>
         <p class="verdict" id="q-verdict"></p>
-        <p class="sim-note">Simulated: 4,096 weights drawn from a normal distribution with standard deviation 0.02 (a fixed random seed). With outliers on, three weights are set to about 15 standard deviations. The chart shows the first 96 weights, with an outlier at position 20. Rounding is exact symmetric absmax as in the formula. The relative error is the root-mean-square error divided by the root-mean-square weight. It measures the weights, not the accuracy of a real model.</p>
+        <p class="sim-note">Simulated: 4,096 random weights; with outliers on, three are about 15 standard deviations out. The chart shows the first 96. The relative error is the root-mean-square error divided by the root-mean-square weight. It measures the weights, not the accuracy of a real model.</p>
       </figure>
 
       <div class="prose">
-        <p>That is plain <em>round to nearest</em>. Smarter methods keep the same storage but pick better integers.</p>
+        <p>Smarter methods keep the same storage but pick better integers. <strong>GPTQ</strong> adjusts remaining weights to cancel each rounding error. <strong>AWQ</strong> protects the roughly 1% of weights that matter most. <strong>SmoothQuant</strong> shifts difficulty from activations to weights so both fit in 8 bits. You only need to know these exist and ask which one was used. Very low bits (2 to 3) are in <a href="r12-very-low-bit-quantization-gptq.html">the edge lesson</a>. Two distinctions come up in meetings.</p>
         <ul>
-          <li><strong>GPTQ</strong> quantizes a layer column by column and adjusts the remaining weights to cancel the error just introduced, using a small calibration set (Frantar et al., 2022).</li>
-          <li><strong>AWQ</strong> notices that about 1% of weights matter far more because they multiply large activations, and scales those channels up before rounding (Lin et al., 2024).</li>
-          <li><strong>SmoothQuant</strong> shifts difficulty from activations to weights with per-channel rescaling, so both fit in 8 bits (Xiao et al., 2023).</li>
+          <li><strong>Weights only, or weights and activations.</strong> Weight-only saves memory and speeds memory-bound decoding. Quantizing activations too speeds the arithmetic but loses accuracy more easily.</li>
+          <li><strong>After training (PTQ), or during it (QAT).</strong> PTQ takes minutes to hours and is the default. QAT recovers more accuracy at 4 bits and below, at the cost of a training run.</li>
         </ul>
-        <p>Very low bits (2–3, QuIP, AQLM) are in <a href="r12-very-low-bit-quantization-gptq.html">the edge lesson</a>. Four distinctions for meetings:</p>
-      </div>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <thead><tr><th>Choice</th><th>Options</th><th>Why it matters</th></tr></thead>
-          <tbody>
-            <tr><td><b>What is quantized</b></td><td>Weights only (W4A16), or weights and activations (W8A8, FP8, W4A4)</td><td>Weight-only saves memory and speeds memory-bound decoding. Adding activations also speeds the arithmetic (long inputs, big batches) but loses accuracy more easily.</td></tr>
-            <tr><td><b>When</b></td><td>Post-training (PTQ) or quantization-aware training (QAT)</td><td>PTQ takes minutes to hours and is the default. QAT trains with rounding in the loop and recovers more accuracy at 4 bits and below, at the cost of a training run.</td></tr>
-            <tr><td><b>Format</b></td><td>INT8, INT4, FP8, FP4 (MXFP4, NVFP4)</td><td>Floating-point formats spend bits on range, so cope better with outliers. Speed-up needs native hardware support.</td></tr>
-            <tr><td><b>What stays high precision</b></td><td>KV cache, embeddings, last layer, norms</td><td>The KV cache (M1.5) can dominate memory at long context and is often quantized separately. Sensitive layers usually stay at 16 bits.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Two caveats. <strong>Memory saved is not speed gained:</strong> a 4-bit model on a GPU without native 4-bit support may unpack to 16-bit inside the kernel. <strong>Error is uneven:</strong> perplexity barely moves while a rarely used skill degrades first, such as arithmetic, Arabic dialects or long-context retrieval. Always evaluate on your own task.</p>
+        <p>Two caveats. <strong>Memory saved is not speed gained:</strong> on a GPU without native 4-bit support the model may unpack to 16-bit inside the kernel. <strong>Error is uneven:</strong> overall scores barely move while a rarely used skill, such as arithmetic or Arabic dialects, degrades first. Always evaluate on your own task.</p>
       </div>
 
       <h3 class="sub" id="m-prune">Pruning: removing what barely matters</h3>
       <div class="prose">
-        <p>Pruning sets weights to zero. The classic rule is <strong>magnitude pruning</strong>: remove the weights closest to zero, like trimming the faintest strokes from a drawing. Han et al. (2015) showed many networks lose 80–90% of weights this way with short retraining. The "lottery ticket" work (Frankle and Carbin, 2019) asked why.</p>
-        <p>Sparse is not the same as fast. Zeros scattered arbitrarily ("unstructured") leave the matrix the same shape, and normal GPU kernels multiply the zeros anyway. More structure buys more real speed and costs more accuracy:</p>
-      </div>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <thead><tr><th>Type</th><th>What is removed</th><th>Real speed-up</th><th>Accuracy cost</th></tr></thead>
-          <tbody>
-            <tr><td><b>Unstructured</b></td><td>Individual weights anywhere</td><td>Little, unless sparse kernels are used. Memory savings need a sparse storage format.</td><td>Lowest</td></tr>
-            <tr><td><b>Semi-structured (2:4)</b></td><td>In every group of 4 consecutive weights, exactly 2 are zero</td><td>NVIDIA's sparse tensor cores (Ampere onward) can use this pattern. Up to about 2x on the matrix multiplications themselves; end-to-end gains are smaller.</td><td>Moderate, usually recovered by short fine-tuning</td></tr>
-            <tr><td><b>Structured</b></td><td>Whole neurons, attention heads or layers</td><td>Real, on any hardware, because the matrices shrink</td><td>Highest, needs retraining or distillation to recover</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Retraining LLMs is expensive, so one-shot methods dominate. <strong>SparseGPT</strong> prunes a GPT-scale model in hours and holds quality near 50% sparsity (Frantar and Alistarh, 2023). <strong>Wanda</strong> scores each weight by its magnitude <em>times the typical size of its input</em>, with no weight update (Sun et al., 2024). A small weight on a huge input can matter more than a large weight on a tiny one. The simulation shows this.</p>
+        <p>Pruning sets weights to zero. The classic rule, <strong>magnitude pruning</strong>, removes the weights closest to zero, like trimming the faintest strokes from a drawing. Many networks lose 80 to 90% of weights this way with short retraining.</p>
+        <p>But sparse is not the same as fast. Zeros scattered anywhere leave the matrix the same shape, and normal GPU kernels multiply the zeros anyway. Real speed needs structure:</p>
+        <ul>
+          <li><strong>Unstructured:</strong> individual weights. Lowest accuracy cost, little speed-up without special kernels.</li>
+          <li><strong>Semi-structured (2:4):</strong> two of every four weights are zero. NVIDIA GPUs from Ampere onward can exploit it. Moderate cost, usually recovered by short fine-tuning.</li>
+          <li><strong>Structured:</strong> whole neurons, heads or layers. Real speed on any hardware, highest accuracy cost, needs retraining.</li>
+        </ul>
+        <p>For LLMs, retraining is expensive, so one-shot methods dominate. <strong>Wanda</strong> scores each weight by its size <em>times how large its input typically is</em>: a small weight on a huge input can matter more than a large weight on a tiny one. The simulation shows this.</p>
       </div>
 
       <figure class="figure" id="fig-prune">
         <div class="fig-head"><span class="fig-title">What each pruning rule costs in output error</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> slide the sparsity to 50%. Random pruning damages the layer badly, magnitude pruning far less, and the activation-aware rule less again. Push to 80–90% and watch every curve climb. Structured pruning (whole rows) is the one that gives genuine speed-up anywhere, and it is the worst per weight removed.</p>
+        <p class="try"><b>Try:</b> slide the sparsity to 50%. Random pruning damages the layer badly, magnitude far less, the input-aware rule less again. Push to 80 to 90% and every curve climbs. Whole-row pruning is the only one that gives speed anywhere, and the worst per weight removed.</p>
         <div class="chart-wrap" id="p-chart"></div>
         <div class="legend">
           <span><i style="background:var(--bad)"></i>Random</span>
@@ -196,50 +163,34 @@
           <div class="stat"><div class="k">2:4 pattern (always 50%)</div><div class="v" id="p-24"></div><div class="s">output error, input-aware</div></div>
         </div>
         <p class="verdict" id="p-verdict"></p>
-        <p class="sim-note">Simulated: one 64×64 layer with heavy-tailed random weights and input features whose typical sizes vary by a factor of several. Output error is the expected relative size of the change in the layer's output, computed exactly from the weights and the feature sizes (assuming independent features). One layer, no retraining, so real networks differ: they recover some loss when fine-tuned and show interactions between layers. The 2:4 row keeps the two best-scoring weights in every group of four, using the input-aware score.</p>
+        <p class="sim-note">Simulated: one 64×64 layer with random weights and inputs of varying size. Output error is the relative change in the layer's output. One layer, no retraining, so real networks differ and recover some loss when fine-tuned.</p>
       </figure>
 
       <h3 class="sub" id="m-distill">Distillation: teaching a small model to imitate a big one</h3>
       <div class="prose">
-        <p>Quantization and pruning edit a model. <strong>Distillation</strong> builds a new, smaller one, like an apprentice learning from a master's worked answers, not just the answer key. A large <em>teacher</em> runs on many inputs. A small <em>student</em> learns to reproduce the teacher's outputs, not only the labels.</p>
-        <p>Why beat training on labels? The teacher's full output carries more than the label. For a five-class transaction classifier, the label says "legitimate". The teacher says "legitimate 91%, card-testing 7.5%, account takeover 1%...", telling the student this transaction <em>resembles card-testing more than a mule account</em>. Hinton and colleagues (2015) called this <em>dark knowledge</em>: the relative sizes of the small probabilities.</p>
-        <p>Those probabilities are tiny, so the teacher's logits are divided by a <strong>temperature</strong> <i>T</i> before the softmax. Higher <i>T</i> flattens the distribution and exposes the hidden structure.</p>
-      </div>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <thead><tr><th>Class</th><th>Teacher logit</th><th>Probability, T = 1</th><th>Probability, T = 4</th></tr></thead>
-          <tbody>
-            <tr><td>Legitimate</td><td>7.0</td><td>91.2%</td><td>45.1%</td></tr>
-            <tr><td>Card testing</td><td>4.5</td><td>7.5%</td><td>24.1%</td></tr>
-            <tr><td>Account takeover</td><td>2.5</td><td>1.0%</td><td>14.6%</td></tr>
-            <tr><td>Merchant fraud</td><td>1.0</td><td>0.2%</td><td>10.1%</td></tr>
-            <tr><td>Mule account</td><td>−1.0</td><td>0.03%</td><td>6.1%</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>The student's loss blends cross-entropy against the true label (F6.1) with the divergence (F1.7) between its softened outputs and the teacher's, the second term usually scaled by <i>T</i>² so the gradients stay comparable. For language models there are three forms:</p>
+        <p>Quantization and pruning edit a model. <strong>Distillation</strong> builds a new, smaller one, like an apprentice learning from a master's worked answers, not just the answer key. A large <em>teacher</em> runs on many inputs, and a small <em>student</em> learns to reproduce its outputs.</p>
+        <p>Why beat plain labels? For a transaction, the label says "legitimate". The teacher says "legitimate 91%, card-testing 7.5%, account takeover 1%...", which tells the student this one <em>resembles card-testing more than a mule account</em>. Hinton called this <em>dark knowledge</em>: the relative sizes of the small probabilities. A <strong>temperature</strong> setting flattens the teacher's probabilities so those small ones become big enough to learn from (at T = 4, card testing rises from 7.5% to 24%).</p>
+        <p>For language models there are two common forms.</p>
         <ul>
-          <li><strong>Logit (soft-label).</strong> Match the teacher's whole next-token distribution. Richest signal, but needs the teacher's logits, which closed APIs do not give.</li>
-          <li><strong>Sequence-level.</strong> The teacher <em>writes</em> answers or reasoning traces and the student fine-tunes on them as text. Works with any API and is how many small reasoning models were made in 2025. Check the teacher's licence terms.</li>
-          <li><strong>Pruning plus distillation.</strong> Prune a big model to a smaller shape, then retrain by distilling from the original, using a fraction of the usual tokens (Muralidharan et al., 2024; Llama 3.2 1B and 3B were announced as made this way).</li>
+          <li><strong>Logit (soft-label).</strong> Match the teacher's whole next-token distribution. Richest signal, but closed APIs do not expose it.</li>
+          <li><strong>Sequence-level.</strong> The teacher <em>writes</em> answers or reasoning traces and the student fine-tunes on them as text. Works with any API and is how many small reasoning models were made. Check the teacher's licence terms.</li>
         </ul>
-        <p>Distillation costs a training run but gives a model smaller in <em>every</em> sense: parameters, compute per token, KV cache. It can also specialise. A 1B model distilled for one job, such as classifying complaints in Arabic and English, can match a general 70B model there and lose everywhere else.</p>
+        <p>Distillation costs a training run but gives a model smaller in <em>every</em> sense: parameters, compute, KV cache. It can also specialise: a 1B model distilled for one job, such as classifying complaints in Arabic and English, can match a general 70B model there and lose everywhere else.</p>
       </div>
 
       <h3 class="sub" id="m-latency">Latency budgets in real-time scoring</h3>
       <div class="prose">
-        <p>A card payment is approved or declined while the customer stands at the till. The fraud score is one link in a chain with a fixed deadline: network call, feature fetch (F3.4), model, rules, response. A <strong>latency budget</strong> gives each stage a number of milliseconds that adds up to less than the deadline, plus a plan for when a stage is late. Ask your payments team for the real deadline rather than assuming one.</p>
+        <p>A card payment is approved or declined while the customer stands at the till. The fraud score is one link in a chain with a fixed deadline: network call, feature fetch, model, rules, response. A <strong>latency budget</strong> gives each stage some milliseconds, adding up to less than the deadline, plus a plan for when a stage is late. Ask your payments team for the real deadline.</p>
         <ul>
-          <li><strong>Percentiles, not averages.</strong> A train that is on time on average but a quarter-hour late one day in a hundred still ruins commutes. If the mean is 12 ms but p99 (the 99th percentile) is 60 ms, one request in a hundred misses the deadline: at 100 payments a second, one customer every second. Meet the budget at p99 or p99.9.</li>
-          <li><strong>The slowest of several calls sets the pace.</strong> Ten parallel lookups, each slow 1% of the time: chance at least one is slow is 1 − 0.99<sup>10</sup> ≈ <strong>9.6%</strong>. Dean and Barroso (2013) called this "the tail at scale": fan-out turns rare slowness into common slowness. Run the lookups one after another and the delays add instead.</li>
-          <li><strong>A fallback when the clock runs out.</strong> Approve on a cheap rule, use a smaller model, or score on the features that arrived. Which one is a business and risk decision, and it must be logged so monitoring (P2.4) sees it.</li>
+          <li><strong>Percentiles, not averages.</strong> A train on time on average but a quarter-hour late one day in a hundred still ruins commutes. If the mean is 12 ms but p99 (the 99th percentile) is 60 ms, one request in a hundred misses the deadline: at 100 payments a second, one customer every second.</li>
+          <li><strong>The slowest of several calls sets the pace.</strong> Ten parallel lookups, each slow 1% of the time, give about a 10% chance that at least one is slow. Fan-out turns rare slowness into common slowness. Run them one after another and the delays add instead.</li>
+          <li><strong>A fallback when the clock runs out.</strong> Approve on a cheap rule, use a smaller model, or score on the features that arrived. That is a business and risk decision, and it must be logged so monitoring (P2.4) sees it.</li>
         </ul>
       </div>
 
       <figure class="figure" id="fig-lat">
         <div class="fig-head"><span class="fig-title">One request, four stages, one deadline</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> start with 1 lookup and a 30 ms deadline: almost everything is on time. Raise the number of feature lookups to 10 and watch the red tail grow while the median hardly moves. Switch the lookups to "one after another" and it worsens. Then swap in a heavier model and see how much of the budget it eats.</p>
+        <p class="try"><b>Try:</b> 1 lookup, 30 ms deadline: almost everything is on time. Raise lookups to 10 and the red tail grows while the median hardly moves. Switch to "one after another" and it worsens. Then use a heavier model and see how much budget it eats.</p>
         <div class="chart-wrap" id="l-chart"></div>
         <div class="legend">
           <span><i class="sq" style="background:var(--neutral);opacity:.6"></i>Within the deadline</span>
@@ -262,40 +213,33 @@
           <div class="stat"><div class="k">Chance a lookup is in its slow 1%</div><div class="v" id="l-any"></div><div class="s">at least one of the lookups</div></div>
         </div>
         <p class="verdict" id="l-verdict"></p>
-        <p class="sim-note">Simulated: 20,000 requests from a fixed random seed, so the numbers are Monte Carlo estimates good to roughly a percentage point, not exact. Each stage's time is lognormal: network about 5 ms typical, rules about 2 ms, each feature lookup about 2 ms with a long tail, and the model at the chosen typical time (1, 4, 15 or 40 ms). The stage times are invented to show shape, not measured from any bank system.</p>
+        <p class="sim-note">Simulated: 20,000 requests, good to roughly a percentage point. Stage times are invented to show shape, not measured from any bank system.</p>
       </figure>
 
       <div class="prose">
         <p>How teams buy back milliseconds, most reliable first:</p>
         <ul>
-          <li><strong>Precompute features.</strong> Keep running totals ready in an online store (<a href="p1-feature-stores-and-online-offline.html">P1.3</a>) so one lookup replaces twelve queries.</li>
-          <li><strong>Co-locate and keep connections warm.</strong> Model next to feature store, connections reused. Cold starts and garbage-collection pauses are classic p99 spikes.</li>
-          <li><strong>Use a simpler model on the hot path.</strong> A gradient-boosted tree (F4.4) scores in under a millisecond on CPU. A big neural net or LLM may not fit. Common pattern: a fast model for everyone, a slow strong one only for the uncertain middle band or after approval.</li>
-          <li><strong>Compress.</strong> A quantized or distilled model runs faster and fits a cheaper machine.</li>
-          <li><strong>Hedge and time out.</strong> Send a duplicate to a second replica if the first is slow, and cut off anything over its slice.</li>
+          <li><strong>Precompute features</strong> in an online store (<a href="p1-feature-stores-and-online-offline.html">P1.3</a>), so one lookup replaces twelve queries.</li>
+          <li><strong>Use a simpler model on the hot path.</strong> A gradient-boosted tree scores in under a millisecond on CPU. Common pattern: a fast model for everyone, a slow strong one only for the uncertain middle band.</li>
+          <li><strong>Compress, and time out.</strong> A quantized or distilled model runs faster. Cut off anything over its slice, and keep connections warm: cold starts are classic p99 spikes.</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-serving">LLM serving and batching engines</h3>
-        <p>A language model writes one token at a time, and each token needs a full pass that reads all the weights from memory. That is the memory-bound problem from Part 1. Reading the weights costs the same whether the GPU multiplies them by one user's data or sixty-four users'. So <strong>batch</strong> many users together and share the read, like a bus instead of sixty-four taxis.</p>
-        <p>Per-user speed barely changes as the batch grows, while total throughput rises almost in proportion, until a limit is hit. Either compute becomes the bottleneck, or (often first) <strong>KV-cache memory</strong> runs out (M1.5): each user's conversation needs its own cache, which grows with context length.</p>
-      <div class="formula">
-        <math display="block"><msub><mi>t</mi><mtext>step</mtext></msub><mo>≈</mo><mo>max</mo><mo stretchy="false">(</mo><mfrac><mrow><mtext>weights</mtext><mo>+</mo><mi>B</mi><mo>·</mo><mtext>KV per user</mtext></mrow><mtext>memory bandwidth</mtext></mfrac><mo>,</mo><mspace width="0.5em"></mspace><mfrac><mrow><mn>2</mn><mo>·</mo><mtext>parameters</mtext><mo>·</mo><mi>B</mi></mrow><mtext>compute speed</mtext></mfrac><mo stretchy="false">)</mo></math>
-        <p class="where"><i>B</i> is the batch size. For an 8B model in FP16 the weights are 16 GB, so the memory term is about 4.8 ms at <i>B</i> = 1 and barely grows with <i>B</i>. The compute term grows with <i>B</i> but starts tiny. They cross near <i>B</i> of about 300 on an H100 at peak numbers; real engines reach half to two-thirds of peak, so read this as shape, not benchmark.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Four ideas turned this into modern engines such as vLLM, SGLang and TensorRT-LLM.</p>
+      <div class="prose">
+        <p>A language model writes one token at a time, and each token needs a full pass reading all the weights. Reading them costs the same whether the GPU serves one user or sixty-four, so <strong>batch</strong> many users together and share the read, like a bus instead of sixty-four taxis.</p>
+        <p>Per-user speed barely changes as the batch grows, while total throughput rises almost in proportion, until a limit is hit. Usually <strong>KV-cache memory</strong> runs out first (M1.5): each user's conversation needs its own cache, which grows with context length.</p>
+        <p>Modern engines such as vLLM add three ideas worth knowing.</p>
         <ul>
-          <li><strong>Continuous batching.</strong> Like a restaurant that seats new guests the moment a table frees, instead of waiting for the slowest table in the group. Static batching waits for the longest answer while short ones sit idle. Continuous batching lets a finished request leave and a waiting one join at every step (Orca; Yu et al., 2022).</li>
-          <li><strong>PagedAttention.</strong> Like virtual memory in an operating system. One contiguous KV block per user wastes memory. vLLM stores it in small fixed pages, so memory is almost fully used and a shared system prompt can be shared between users. Kwon et al. (2023) reported 2–4x higher throughput at the same latency.</li>
-          <li><strong>Chunked prefill and prefill/decode split.</strong> Reading a long prompt (<em>prefill</em>) is compute-heavy. Generating (<em>decode</em>) is memory-heavy. Mixing them stalls other users, so engines cut prompts into chunks or run the phases on different GPUs.</li>
-          <li><strong>Speculative decoding.</strong> A junior drafts, the senior checks. A small draft model proposes several tokens and the big model verifies them in one pass, keeping those it agrees with (Leviathan et al., 2023). Output matches the big model alone. The speed-up depends on how often the draft is right.</li>
+          <li><strong>Continuous batching.</strong> Like a restaurant that seats new guests the moment a table frees, instead of waiting for the slowest table. A finished request leaves and a waiting one joins at every step.</li>
+          <li><strong>PagedAttention.</strong> Like virtual memory in an operating system: the KV cache is stored in small pages, so little memory is wasted and more users fit.</li>
+          <li><strong>Speculative decoding.</strong> A junior drafts, the senior checks. A small model proposes several tokens and the big one verifies them in one pass. Output matches the big model alone; the speed-up depends on how often the draft is right.</li>
         </ul>
       </div>
 
       <figure class="figure" id="fig-serve">
         <div class="fig-head"><span class="fig-title">One GPU, many users</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> at batch 1, one user gets a fast stream but the GPU is nearly idle. Move the batch up: total tokens per second climbs while each user's speed barely falls. Then lengthen the context and see the KV cache cap how many users fit. Switch the weights to 4-bit and watch both the speed and the capacity improve. Finally flip static batching on to see its waste.</p>
+        <p class="try"><b>Try:</b> at batch 1 the GPU is nearly idle. Raise the batch: total tokens per second climbs while each user's speed barely falls. Lengthen the context and the KV cache caps how many users fit. Switch to 4-bit weights for more speed and capacity. Flip static batching on to see its waste.</p>
         <div class="chart-wrap" id="s-chart"></div>
         <div class="legend">
           <span><i style="background:var(--accent)"></i>Total tokens per second (left axis)</span>
@@ -321,12 +265,12 @@
           <div class="stat" id="v-max-b"><div class="k">Memory limit on users</div><div class="v" id="v-max"></div><div class="s" id="v-max-s"></div></div>
         </div>
         <p class="verdict" id="v-verdict"></p>
-        <p class="sim-note">Simulated with a simple model, not a benchmark. An 8B-parameter model (32 layers, 8 key-value heads of size 128, so 128 KiB of KV cache per token in 16-bit) on one 80 GB GPU with 3.35 TB/s of bandwidth and 989 TFLOPs of 16-bit compute (1,979 for 8-bit weights), 90% of memory usable, attention arithmetic ignored. The "4-bit" setting is 0.52 bytes per weight including scales and its arithmetic stays 16-bit. Real engines reach perhaps half to two-thirds of these peaks. Static batching assumes answer lengths are exponentially distributed, where the useful share of each slot is exactly 1 divided by the harmonic number of the batch size. The GPU price is yours to set; it is not a quote.</p>
+        <p class="sim-note">Simulated with a simple model, not a benchmark: an 8B model on one 80 GB GPU at 3.35 TB/s. Real engines reach perhaps half to two-thirds of these peaks. The GPU price is yours to set; it is not a quote.</p>
       </figure>
 
       <div class="prose">
-        <p><strong>Cost per token falls sharply with batch size.</strong> A busy shared GPU is far cheaper per token than a private idle one, which is why a central model platform beats each team renting its own. A vendor's price per million tokens is really the price of a well-batched GPU.</p>
-        <p><strong>Two speeds, two jobs.</strong> <em>Time to first token</em> (driven by prefill) is how long until the answer starts. <em>Tokens per second</em> (driven by decode) is how fast it streams. Interactive assistants need both. Overnight summarising needs neither and wants maximum total throughput in huge batches. Know which you are sizing.</p>
+        <p><strong>Cost per token falls sharply with batch size.</strong> A busy shared GPU is far cheaper per token than a private idle one, which is why a central model platform beats each team renting its own.</p>
+        <p><strong>Two speeds, two jobs.</strong> <em>Time to first token</em> is how long until the answer starts. <em>Tokens per second</em> is how fast it streams. Interactive assistants need both. Overnight summarising wants maximum total throughput. Know which you are sizing.</p>
       </div>
     </section>
 
@@ -339,12 +283,9 @@
         <li><div class="t">Confusing memory saved with speed gained</div><p>A 4-bit model fits a small GPU but runs no faster, because the hardware unpacks it to 16-bit.</p><div class="spot"><b>Spot it</b>Ask for measured tokens per second on the target GPU and engine, not the compression ratio.</div></li>
         <li><div class="t">A sparse model that is no quicker</div><p>"We pruned 70%." The matrices are the same size and the kernels dense, so latency is unchanged.</p><div class="spot"><b>Spot it</b>Ask what pattern and what kernel. Measure latency, not zeros.</div></li>
         <li><div class="t">Quoting the average latency</div><p>"Scoring takes 12 ms." The p99 is 70 ms and the deadline is 30.</p><div class="spot"><b>Spot it</b>Ask for p95, p99 and p99.9 under realistic load, and the share of requests hitting the fallback.</div></li>
-        <li><div class="t">Load testing at the wrong load</div><p>Latency is fine at 10 requests a second and collapses on salary day, when queues build.</p><div class="spot"><b>Spot it</b>Ask what request rate was tested, whether it was a burst, and how the system degrades above capacity.</div></li>
         <li><div class="t">An unmonitored fallback</div><p>The slow path silently approves everything on a default rule for hours.</p><div class="spot"><b>Spot it</b>Ask for the fallback rate on a dashboard with an alert. A rising fallback rate is a fraud-loss event.</div></li>
-        <li><div class="t">Teacher mistakes inherited by the student</div><p>A distilled model copies the teacher's errors and biases, just as confidently.</p><div class="spot"><b>Spot it</b>Evaluate the student against human labels, not agreement with the teacher.</div></li>
-        <li><div class="t">Benchmarks from a different setting</div><p>"The engine does 10,000 tokens per second": short prompt, large batch, favourable draft model.</p><div class="spot"><b>Spot it</b>Ask for prompt and output length, concurrency and time to first token on your hardware.</div></li>
-        <li><div class="t">Sizing for the average user</div><p>Plans assume 2,000-token contexts, then staff paste 60-page documents and the KV cache fills the GPU.</p><div class="spot"><b>Spot it</b>Size from the context-length distribution and the memory limit, not the mean.</div></li>
-        <li><div class="t">Skipping re-validation after compression</div><p>The compressed model goes live under the old model's sign-off, yet its scores and calibration have shifted.</p><div class="spot"><b>Spot it</b>Ask whether it passed the same validation and shadow run as any new model version (G3.2).</div></li>
+        <li><div class="t">Sizing and load-testing for the average</div><p>Plans assume 2,000-token contexts and calm traffic, then staff paste 60-page documents and salary day arrives. The KV cache fills and queues build.</p><div class="spot"><b>Spot it</b>Ask for the context-length distribution, the request rate and burst tested, and how the system degrades above capacity.</div></li>
+        <li><div class="t">Skipping re-validation after compression</div><p>The compressed model goes live under the old model's sign-off, yet its scores and calibration have shifted. A distilled student also inherits the teacher's mistakes.</p><div class="spot"><b>Spot it</b>Ask whether it passed the same validation and shadow run as any new model version (G3.2), judged against human labels.</div></li>
       </ul>
     </section>
 
@@ -353,14 +294,14 @@
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="prose"><p>Try each one before opening the answer.</p></div>
       <div class="qa">
-        <details class="reveal"><summary>1. How much memory do the weights of a 70-billion-parameter model need at 16 bits, 8 bits, and 4 bits with groups of 128 (16-bit scale per group)?</summary><div class="ans"><p>16-bit: 70e9 × 2 bytes = 140 GB. 8-bit: 70 GB. 4-bit: 4 + 16/128 = 4.125 bits per weight, so 70e9 × 4.125 ÷ 8 ≈ 36 GB. The KV cache and runtime overhead come on top.</p></div></details>
-        <details class="reveal"><summary>2. Why does one huge outlier weight ruin 4-bit quantization of a whole tensor, and what is the fix?</summary><div class="ans"><p>The largest weight sets the scale, so the step between levels becomes very wide and ordinary small weights round to zero. Fix: a separate scale per small group (for example 128 weights), so an outlier damages only its own group. AWQ and SmoothQuant also rescale channels to tame outliers.</p></div></details>
-        <details class="reveal"><summary>3. A team prunes 60% of the weights with magnitude pruning. Latency does not improve. Why, and what could help?</summary><div class="ans"><p>Unstructured zeros leave the matrices the same size, and ordinary GPU kernels still multiply them. Speed needs a hardware-supported pattern (2:4 sparsity at 50%), sparse kernels, or structured pruning of whole neurons or heads, usually followed by retraining or distillation.</p></div></details>
-        <details class="reveal"><summary>4. Why does distillation with a temperature give the student more than hard labels would?</summary><div class="ans"><p>A hard label says only which class is right. The softened probabilities also show how the wrong classes relate, for example that this transaction looks more like card testing than a mule account. Temperature flattens the distribution so the small probabilities are big enough to learn from.</p></div></details>
-        <details class="reveal"><summary>5. A payment decision has 8 feature lookups in parallel, each slow 1% of the time. What fraction of requests includes at least one slow lookup? What if they run one after another?</summary><div class="ans"><p>In parallel: 1 − 0.99<sup>8</sup> ≈ 7.7%, because the request is as slow as its slowest call. In sequence the same fraction meets a slow lookup, but delays also add, so the typical time rises too. Either way p99 is set by the lookup tail, not the median.</p></div></details>
-        <details class="reveal"><summary>6. Why does an 8B model on an H100 give roughly the same tokens per second per user at batch 1 and batch 32, yet 30 times the total?</summary><div class="ans"><p>Decoding is memory-bound: each step reads all the weights once, whatever the number of users. More users add only a small KV-cache read and a little arithmetic, so step time barely grows while each step yields 32 tokens instead of one. It stops when the KV cache fills memory or arithmetic becomes the bottleneck.</p></div></details>
+        <details class="reveal"><summary>1. Roughly how does the memory for a 70-billion-parameter model change from 16-bit to 8-bit to 4-bit with groups?</summary><div class="ans"><p>It halves each time: about 140 GB, 70 GB, then a little over 35 GB (the group scales add a bit). The KV cache and runtime overhead come on top.</p></div></details>
+        <details class="reveal"><summary>2. Why does one huge outlier weight ruin 4-bit quantization of a whole tensor, and what is the fix?</summary><div class="ans"><p>The largest weight sets the scale, so the steps become very wide and ordinary small weights round to zero. Fix: a separate scale per small group, so an outlier damages only its own group.</p></div></details>
+        <details class="reveal"><summary>3. A team prunes 60% of the weights with magnitude pruning. Latency does not improve. Why, and what could help?</summary><div class="ans"><p>Unstructured zeros leave the matrices the same size, and ordinary GPU kernels still multiply them. Speed needs a hardware-supported pattern (2:4), sparse kernels, or structured pruning of whole neurons or heads, usually followed by retraining or distillation.</p></div></details>
+        <details class="reveal"><summary>4. Why does distillation with a temperature give the student more than hard labels would?</summary><div class="ans"><p>A hard label says only which class is right. The softened probabilities also show how the wrong classes relate, for example that this transaction looks more like card testing than a mule account. Temperature makes those small probabilities big enough to learn from.</p></div></details>
+        <details class="reveal"><summary>5. A payment decision makes 8 feature lookups, each slow 1% of the time. Why is the request slow far more than 1% of the time, and does running them in sequence help?</summary><div class="ans"><p>In parallel, the request is as slow as its slowest call, so any one slow lookup is enough: roughly 8% of requests. Running them in sequence does not help, because delays then add up and the typical time rises too. Either way p99 is set by the lookup tail, not the median.</p></div></details>
+        <details class="reveal"><summary>6. Why does an 8B model on an H100 give roughly the same tokens per second per user at batch 1 and batch 32, yet far more in total?</summary><div class="ans"><p>Decoding is memory-bound: each step reads all the weights once, whatever the number of users. More users add only a small KV-cache read, so step time barely grows while each step yields 32 tokens instead of one. It stops when the KV cache fills memory or arithmetic becomes the bottleneck.</p></div></details>
         <details class="reveal"><summary>7. What problem does continuous batching solve over static batching?</summary><div class="ans"><p>Static batching runs a group until the longest answer finishes, so finished slots sit idle. Continuous batching refills a slot the moment a request ends. PagedAttention solves a different problem: wasted KV-cache memory.</p></div></details>
-        <details class="reveal"><summary>8. A vendor says the 4-bit version of a model is "lossless". What do you ask?</summary><div class="ans"><p>Which method and group size; which tasks and languages were measured, and how big the differences are with intervals; whether the speed-up was measured on our hardware; and whether the calibration data resembled our domain. Then run our own evaluation.</p></div></details>
+        <details class="reveal"><summary>8. A vendor says the 4-bit version of a model is "lossless". What do you ask?</summary><div class="ans"><p>Which method and group size; which tasks and languages were measured and how big the differences are; whether the speed-up was measured on our hardware; and whether the calibration data resembled our domain. Then run our own evaluation.</p></div></details>
       </div>
     </section>
 
