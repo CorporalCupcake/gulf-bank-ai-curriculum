@@ -59,27 +59,26 @@
         <span>About 40 minutes</span>
       </div>
       <h1>Searching Document Images: ColPali, Late Interaction and Contextual Retrieval</h1>
-      <p class="dek">How to retrieve a scanned letter of credit without ever running OCR on it, why keeping many small vectors per page beats one big vector, what that costs in storage, and how a sentence of added context rescues text chunks that have lost their owner.</p>
+      <p class="dek">How to retrieve a scanned letter of credit without OCR, why many small vectors per page beat one big one, what that costs in storage, and how one added sentence rescues text chunks that have lost their owner.</p>
     </header>
 
     <div class="mobile-toc">
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Keep one small vector per page patch (or token) and let each query word find its own best match, so a stamp or table cell is not averaged away; this is more accurate on scans and costs one to two orders of magnitude more storage, and for plain text a cheaper cousin is to prepend a line of context to each chunk before indexing.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Keep one small vector per page patch so each query word finds its own best match and a stamp is not averaged away; it is more accurate on scans but costs far more storage, and for plain text a cheaper cousin is to prepend a line of context to each chunk before indexing.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A trade-finance team has two million scanned pages: letters of credit, bills of lading, amendments, KYC packs. Many are Arabic and English together, with stamps, handwriting and skewed photocopies. An officer asks: <em>"Which credit carried the amendment stamp about the shipment date?"</em></p>
-        <p>The M3 pipeline is OCR, layout parsing, chunking, one vector per chunk, search. On a scan every step can lose something: OCR garbles an Arabic stamp, a table loses its rows, a clause is cut from its heading. Like photocopying a photocopy, the thing the officer wants may be gone before you search.</p>
-        <p><strong>ColPali skips the pipeline.</strong> A vision-language model sees the page as an image and outputs one small vector per patch (roughly a 32 by 32 grid). The query gets one vector per word-piece. Each query word asks <em>"which patch on this page matches me best?"</em>, and the page score is the sum of those answers. This rule is <strong>late interaction</strong>, borrowed from the text model ColBERT.</p>
-        <p>"Late" means query and page are encoded separately and meet only at the end, so page vectors are computed once, offline. "Interaction" means the comparison is token against patch, not one summary against one summary.</p>
+        <p>A trade-finance team has two million scanned pages, many in Arabic and English with stamps, handwriting and skewed copies. An officer asks: <em>"Which credit carried the amendment stamp about the shipment date?"</em></p>
+        <p>The usual pipeline is OCR, layout parsing, chunking, one vector per chunk. On a scan every step can lose something, like photocopying a photocopy: the stamp may be gone before you search.</p>
+        <p><strong>ColPali skips the pipeline.</strong> A vision-language model sees the page as an image and outputs one small vector per patch (roughly a 32 by 32 grid). The query gets one vector per word-piece. Each query word asks <em>"which patch on this page matches me best?"</em>, and the page score is the sum of those answers. This is <strong>late interaction</strong>: query and page are encoded separately, so page vectors are computed once, offline, and compared token against patch at the end.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>A single-vector embedding is like a page's average colour: fine for the gist, hopeless for a small red stamp. Late interaction keeps the detail and pays in storage and compute. Most of this lesson follows from that trade.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>A single-vector embedding is like a page's average colour: fine for the gist, hopeless for a small red stamp. Late interaction keeps the detail and pays in storage and compute.</div>
       <div class="prose" style="margin-top:20px">
-        <p><strong>Contextual retrieval</strong> fixes a different loss. <em>"Revenue grew 3% over the previous quarter"</em> fits a thousand companies. Have an LLM write one situating sentence per chunk and index the two together. Part 2 lets you try both.</p>
+        <p><strong>Contextual retrieval</strong> fixes a different loss. <em>"Revenue grew 3% over the previous quarter"</em> fits a thousand companies. Have an LLM write one situating sentence per chunk and index the two together.</p>
       </div>
     </section>
 
@@ -89,27 +88,16 @@
 
       <h3 class="sub" id="m-colpali">Page image to patch vectors, and MaxSim scoring (A6.1)</h3>
       <div class="prose">
-        <p>The recipe, from Faysse and colleagues (ICLR 2025):</p>
-        <ol>
-          <li><strong>Start with a vision-language model</strong> (VLM). ColPali uses PaliGemma-3B: an image encoder cuts the page into patches and feeds them into a language model (F5.3, attention; F5.4, self-supervised learning). Attention lets patches see each other, so a patch holding "5,000" knows it sits under "Amount".</li>
-          <li><strong>Project each patch to 128 dimensions</strong> with a small linear layer. About 1,000 patches gives about 1,000 vectors per page: the "bag of embeddings".</li>
-          <li><strong>Encode the query</strong> through the same model: one 128-d vector per query token.</li>
-          <li><strong>Score with MaxSim.</strong> For each query token, take its cosine with every patch, keep the maximum, and sum over tokens.</li>
-        </ol>
-      </div>
-      <div class="formula">
-        <math display="block"><mi>S</mi><mo stretchy="false">(</mo><mi>q</mi><mo>,</mo><mi>d</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mrow><mi>i</mi><mo>∈</mo><mi>q</mi></mrow></munder><munder><mo>max</mo><mrow><mi>j</mi><mo>∈</mo><mi>d</mi></mrow></munder><mo stretchy="false">⟨</mo><msub><mi>q</mi><mi>i</mi></msub><mo>,</mo><msub><mi>d</mi><mi>j</mi></msub><mo stretchy="false">⟩</mo></math>
-        <p class="where"><i>q</i><sub>i</sub> is the vector of query token <i>i</i>; <i>d</i><sub>j</sub> is the vector of page patch <i>j</i>. The inner <b>max</b> says "find the one patch that best answers this word". The outer <b>sum</b> says "a good page answers all the words". Nothing is averaged across the page, so a small region can score fully.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p><strong>Reading a score.</strong> Each term is a cosine, so at most 1, and a page can score at most the number of query tokens. If a 12-token query scores 9.5, the average word found a patch at about 0.8. Compare scores only for the same query across pages; a raw score means nothing alone. A high score says matching patches exist, not that the answer is right. Going from 9.5 to 10.5 means one more word's best patch got closer, or a missing word finally found a home.</p>
-        <p>Training is contrastive (F5.4): for a query and its page, push the MaxSim score above that of the other pages in the batch. ColPali used about 120,000 query-page pairs, public document question sets plus synthetic queries a language model wrote about web-crawled PDF pages. The authors also released <strong>ViDoRe</strong>, a page-retrieval benchmark. The model beat OCR + captioning + text-embedding pipelines and indexed faster, with no OCR or layout stage.</p>
-        <p>Try the rule yourself. The toy page has 48 patches, each with a hidden topic (amount, goods, stamp, others). A "query token" points at one topic. Cell brightness is its cosine to the chosen token; the ringed cell is the maximum.</p>
+        <p>ColPali (Faysse and colleagues, ICLR 2025) starts from a vision-language model, PaliGemma-3B, which cuts the page into patches and lets them see each other (attention, F5.3), so a patch holding "5,000" knows it sits under "Amount". Each patch becomes a 128-number vector, so a page is a bag of about 1,000 vectors. The query becomes one vector per token.</p>
+        <p><strong>MaxSim</strong> scores a page: for each query token, find the most similar patch, then add up those best matches. Similarity is cosine, which compares direction only: 1 means pointing the same way, 0 unrelated. Nothing is averaged across the page, so a small region can score fully.</p>
+        <p><strong>Reading a score.</strong> Each best match is at most 1, so a page can score at most the number of query tokens. A 12-token query scoring 9.5 means the average word found a patch at about 0.8. Compare scores only for the same query across pages; a high score does not mean the answer is right.</p>
+        <p>ColPali beat OCR + text-embedding pipelines on its <strong>ViDoRe</strong> benchmark and indexed faster.</p>
+        <p>Try the rule yourself. The toy page has 48 patches with hidden topics; cell brightness is its cosine to the chosen token, and the ringed cell is the maximum.</p>
       </div>
 
       <figure class="figure" id="fig-grid">
         <div class="fig-head"><span class="fig-title">Each query word finds its own best patch</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> pick "amount", then "goods", then "stamp". Each lights up different cells and the ring jumps. The page score is the sum of the three ringed values. Then drag the stamp size down to 1 patch: the stamp token still finds its patch and still scores near the top, because nothing was averaged.</p>
+        <p class="try"><b>Try:</b> pick each token in turn and watch the ring jump. Then drag the stamp size down to 1 patch: the stamp token still finds it and scores near the top, because nothing was averaged.</p>
         <div class="btns" role="group" aria-label="Query token">
           <button class="btn" type="button" data-tok="0" aria-pressed="true">Token: amount</button>
           <button class="btn" type="button" data-tok="1" aria-pressed="false">Token: goods</button>
@@ -130,23 +118,23 @@
           <div class="stat" id="g-s-b"><div class="k">Best match, stamp token</div><div class="v" id="g-s"></div><div class="s" id="g-s-s"></div></div>
           <div class="stat"><div class="k">Page MaxSim score</div><div class="v" id="g-tot"></div><div class="s">sum of the three</div></div>
         </div>
-        <p class="sim-note">Simulated: an invented 6 by 8 page of patches. Each patch vector is its topic's unit direction plus small random noise, in 8 dimensions instead of 128. Cosines are exact for that data. The stamp size changes how many background patches become stamp patches. Real models learn the vectors; here we only show how the scoring rule treats them.</p>
+        <p class="sim-note">Simulated: an invented 6 by 8 page of patches in 8 dimensions instead of 128. Real models learn the vectors; this only shows how the scoring rule treats them.</p>
       </figure>
 
       <div class="prose">
-        <p>Search-time cost: about 10 to 20 query tokens against about 1,000 patches per candidate page. That is cheap per page, not across millions, so systems fetch candidates first and run MaxSim as a second stage. ColPali has relatives: ColQwen2 and later models swap in other VLMs, and the <code>colpali-engine</code> library and vector stores like Vespa, Qdrant, Weaviate and Elastic support multi-vector fields. Check the current model card for language and licence.</p>
+        <p>MaxSim is cheap per page but not across millions, so systems fetch candidates first and run MaxSim as a second stage. Vector stores such as Vespa, Qdrant and Elastic support multi-vector fields. Check the current model card for language and licence.</p>
       </div>
 
       <h3 class="sub" id="m-late">Why late interaction beats one vector per page (A6.2)</h3>
       <div class="prose">
-        <p>A normal dense retriever (bi-encoder, F1.1) squeezes a page into <em>one</em> vector, its average meaning. Averages capture <em>gist</em> and lose <em>needles</em>. A stamp covering 3% of the page contributes 3% of the average, and a distractor page that talks about amounts and goods at length outvotes it.</p>
-        <p>A <strong>cross-encoder</strong> sits at the other end: it reads query and page together, so it is accurate but must rerun for every pair and can only rerank a short list. Late interaction is the middle: precomputed and indexable, but with a fine-grained comparison. ColBERT (Khattab and Zaharia, 2020) brought it close to cross-encoder quality at a fraction of the cost.</p>
-        <p>The simulation has 24 toy pages and a query for an amount, goods and a stamp. The 23 distractors mention amounts and goods heavily (7 to 14 patches each) but have no stamp. The correct page is ordinary on amounts and goods (5 to 7 patches each) and has the stamp. Slide the stamp size and watch the correct page's rank.</p>
+        <p>A normal dense retriever (bi-encoder, F1.1) squeezes a page into <em>one</em> vector, its average meaning. Averages capture <em>gist</em> and lose <em>needles</em>: a stamp covering 3% of the page gets 3% of the average, and a distractor page that talks about amounts and goods at length outvotes it.</p>
+        <p>A <strong>cross-encoder</strong> reads query and page together: accurate, but too slow beyond reranking a short list. Late interaction sits in the middle: precomputed and indexable, with a fine-grained comparison.</p>
+        <p>In the simulation, 23 distractor pages mention amounts and goods heavily but have no stamp; the correct page is ordinary on those and has the stamp. Slide the stamp size and watch the correct page's rank.</p>
       </div>
 
       <figure class="figure" id="fig-rank">
         <div class="fig-head"><span class="fig-title">One vector per page versus one vector per patch</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> at stamp size 3 the single-vector method buries the right page near the bottom of 24, while MaxSim puts it first. Drag the stamp up to 12 patches (a quarter of the page) and the single-vector rank slowly recovers. Set it to 0 to see what happens when the page does not contain the stamp at all.</p>
+        <p class="try"><b>Try:</b> at stamp size 3 the single-vector method buries the right page near the bottom of 24, while MaxSim puts it first. Drag the stamp up to 12 and the single-vector rank slowly recovers.</p>
         <div class="chart-wrap" id="rank-chart"></div>
         <div class="legend">
           <span><i style="background:var(--warn)"></i>Single mean vector per page</span>
@@ -162,29 +150,27 @@
           <div class="stat"><div class="k">Share of the page that is stamp</div><div class="v" id="r-share"></div><div class="s">the dilution in a mean vector</div></div>
         </div>
         <p class="verdict" id="s2-verdict"></p>
-        <p class="sim-note">Simulated: the same invented 24-page corpus as Simulation 1, 8 dimensions, seeded so the result is repeatable. One seed is one example, not a measured accuracy: with other seeds the exact ranks move but the direction does not. "Single vector" is the cosine between the mean patch vector and the mean query-token vector. No sampling noise beyond the fixed seed.</p>
+        <p class="sim-note">Simulated: the same invented 24-page corpus, seeded so it is repeatable. One seed is one example, not a measured accuracy: other seeds move the exact ranks but not the direction.</p>
       </figure>
 
       <div class="prose">
-        <p>This is arithmetic, not a model bug: the mean of many patches is dominated by whatever fills most of the page. Better training and bigger vectors help, but the bottleneck stays. It is the same pressure behind hybrid search (M3.2). Late interaction is the dense version of BM25 (M3.1): every query term finds its own match.</p>
+        <p>The mean of many patches is dominated by whatever fills most of the page. Late interaction is the dense version of BM25 (M3.1): every query term finds its own match.</p>
       </div>
 
       <h3 class="sub" id="m-cost">The price: storage, and how people shrink it</h3>
       <div class="prose">
-        <p>One vector per patch is the cost. In 16-bit floats, a ColPali page is 1,030 × 128 × 2 bytes ≈ 264 kB, against 2 kB for one 1,024-d vector: about 130 times more, before index overhead. Two million pages: about 0.5 TB against 4 GB. At a hundred million pages it is a different conversation.</p>
-        <p>The ways to shrink it each trade a little accuracy for a lot of space:</p>
+        <p>One vector per patch is the cost. A ColPali page is about 264 kB against 2 kB for one 1,024-number vector: roughly 130 times more. Two million pages is about 0.5 TB against 4 GB. The usual ways to shrink it each trade a little accuracy for a lot of space:</p>
         <ul>
-          <li><strong>Pool patches.</strong> Average neighbours (merge 2 to 3) before storing. Reported results show a large saving for a modest quality drop on typical documents. A tiny stamp may suffer, so test on your own needles.</li>
-          <li><strong>Quantise the numbers.</strong> 8-bit halves the size; binary (one bit per number) cuts it by 16, with a rescore of a short list at full precision. Same idea as P3.1, applied to the index.</li>
-          <li><strong>Shrink the dimension.</strong> Matryoshka-style embeddings (R10.1) truncate with graceful loss; some newer multi-vector models are trained for this.</li>
-          <li><strong>Two-stage retrieval.</strong> A cheap first stage (single vector, BM25 or compressed form) finds a few hundred candidates; exact MaxSim rescores only those. ColBERTv2 and PLAID (2021 to 22) did this for text with residual compression and centroid-based pruning. MUVERA (Google, NeurIPS 2024) turns a vector set into one fixed-size vector whose dot product approximates MaxSim, so ordinary single-vector search does the candidate stage, retrieving several times fewer candidates for the same recall.</li>
+          <li><strong>Pool patches.</strong> Average neighbours (merge 2 to 3) before storing. A big saving for a modest quality drop on typical documents, but a tiny stamp may suffer, so test on your own needles.</li>
+          <li><strong>Quantise the numbers.</strong> 8-bit halves the size; binary cuts it by 16, with a full-precision rescore of a short list (P3.1).</li>
+          <li><strong>Two-stage retrieval.</strong> A cheap first stage (single vector or BM25) finds a few hundred candidates; exact MaxSim rescores only those.</li>
         </ul>
         <p>Use the calculator to feel the shape of the problem.</p>
       </div>
 
       <figure class="figure" id="fig-cost">
         <div class="fig-head"><span class="fig-title">What a page index costs</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> keep full precision and no pooling and slide the corpus to 10 million pages: terabytes. Now pool by 4 and store binary vectors: it falls by a factor of 64 to a size a single machine holds in memory. Whether recall survives is an experiment on your documents, not something this arithmetic can tell you.</p>
+        <p class="try"><b>Try:</b> slide the corpus to 10 million pages at full precision: terabytes. Now pool by 4 and store binary vectors: it falls 64 times, to something one machine can hold. Whether recall survives is an experiment on your documents.</p>
         <div class="chart-wrap" id="cost-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-pages">Pages in the corpus <output for="s-pages"></output></label><input type="range" id="s-pages" min="4" max="8" step="0.05" value="6.3"></div>
@@ -198,19 +184,19 @@
           <div class="stat"><div class="k">Whole corpus, one 1,024-d vector</div><div class="v" id="c-one"></div><div class="s">16-bit, for comparison</div></div>
         </div>
         <p class="verdict" id="s3-verdict"></p>
-        <p class="sim-note">Simulated: pure arithmetic with the published shape of ColPali (about 1,030 vectors of 128 dimensions per page) and an assumed single-vector baseline of 1,024 dimensions at 16 bits. Sizes use 1 TB = 10<sup>12</sup> bytes. Index structures, replicas and metadata add to real totals. Quality loss from pooling or quantisation is not simulated.</p>
+        <p class="sim-note">Simulated: pure arithmetic (about 1,030 vectors of 128 dimensions per page; single-vector baseline 1,024 dimensions at 16 bits). Index overhead is excluded, and quality loss from pooling or quantisation is not simulated.</p>
       </figure>
 
       <h3 class="sub" id="m-context">Contextual retrieval: giving a chunk its owner back (A6.2)</h3>
       <div class="prose">
-        <p>Chunking (M3.3) cuts a report into passages, and each passage loses its owner. <em>"The provision charge rose to AED 95 million."</em> Which bank, which period? Both the embedding and the keyword index see only the sentence. It is like a page torn from a book with the cover gone.</p>
-        <p>Anthropic's <strong>contextual retrieval</strong> (September 2024) fixes this at indexing time. For each chunk, give an LLM the whole document plus the chunk and ask for a sentence that situates it ("From Gulf Mercantile Bank's Q2 2025 results; group revenue growth"). Prepend it, then embed <em>and</em> BM25-index the enriched text. Anthropic reported about 49% fewer failed top-20 retrievals, and about 67% with a reranker (from memory of their post, internal benchmarks; verify before quoting). A cut in failures from 10% to 5% would be a 50% reduction, so read these as relative, not absolute, gains.</p>
-        <p><strong>Late chunking</strong> (Jina, 2024) gets context another way: run a long-context embedding model over the whole document, then pool token vectors into chunk vectors, so each has already "seen" the rest. The three approaches differ in where context lives: in extra words (contextual retrieval), in the vector (late chunking), or in many vectors (late interaction).</p>
+        <p>Chunking (M3.3) cuts a report into passages, and each loses its owner. <em>"The provision charge rose to AED 95 million."</em> Which bank, which period?</p>
+        <p>Anthropic's <strong>contextual retrieval</strong> (September 2024) fixes this at indexing time: an LLM reads the whole document plus the chunk and writes a sentence that situates it ("From Gulf Mercantile Bank's Q2 2025 results; group revenue growth"). Prepend it, then embed <em>and</em> BM25-index the enriched text. Anthropic reported about 49% fewer failed top-20 retrievals, about 67% with a reranker (internal benchmarks, from memory; verify before quoting). Read these as relative gains.</p>
+        <p><strong>Late chunking</strong> (Jina, 2024) embeds the whole document first, then pools into chunk vectors, so each chunk has seen the rest.</p>
       </div>
 
       <figure class="figure" id="fig-ctx">
         <div class="fig-head"><span class="fig-title">The same query, with and without context</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> on raw chunks, the Q2 and Q1 revenue sentences, and even another bank's, all look alike to a keyword scorer. Switch on the generated context and the right chunk separates from the rest.</p>
+        <p class="try"><b>Try:</b> on raw chunks, several revenue sentences look alike to a keyword scorer. Switch on the generated context and the right chunk separates.</p>
         <div class="btns" role="group" aria-label="Indexing mode">
           <button class="btn" type="button" id="b-raw" aria-pressed="true">Index raw chunks</button>
           <button class="btn" type="button" id="b-ctx" aria-pressed="false">Index chunk + generated context</button>
@@ -218,11 +204,11 @@
         <p style="margin:12px 0 4px;font-size:14px"><b>Query:</b> <span id="q-text"></span></p>
         <div class="chunks" id="chunk-list"></div>
         <p class="verdict" id="s4-verdict" style="margin-top:12px"></p>
-        <p class="sim-note">Simulated: five invented chunks and invented context lines (an LLM would write these in a real system). Scoring is a simplified keyword scorer: the sum of inverse document frequency weights ln(1 + N/df) over distinct query terms found in the text, with N = 5 documents. Real systems use BM25 and embeddings and add a reranker; this only shows why added context changes what a lexical index can see.</p>
+        <p class="sim-note">Simulated: five invented chunks and context lines (an LLM would write these), scored by a simplified keyword scorer. Real systems use BM25, embeddings and a reranker; this only shows why added context changes what a keyword index can see.</p>
       </figure>
 
       <div class="prose">
-        <p>Costs: one LLM call per chunk at indexing (cheap with prompt caching, since the document repeats), longer chunks to embed, and a new failure mode. A wrong "this is from Q2 2025" becomes an index-level fact. Validate a sample, and log the model and prompt version (P2.3), because regenerating changes your index.</p>
+        <p>Costs: one LLM call per chunk at indexing (cheap with prompt caching), and a new failure mode: a wrong "this is from Q2 2025" becomes an index-level fact. Validate a sample and log the model and prompt version (P2.3).</p>
       </div>
     </section>
 
@@ -231,13 +217,12 @@
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
         <li><div class="t">Benchmark scores taken as bank scores</div><p>ViDoRe-style benchmarks use public, mostly English and French documents. An Arabic bill of lading with handwriting is out of distribution.</p><div class="spot"><b>Spot it</b>Build 100 to 200 real queries with known right pages. Measure recall at 5 and 20, per language and document type.</div></li>
-        <li><div class="t">Retrieval without reading</div><p>Visual retrieval finds the page; it does not extract the amount. A generator that misreads a digit moves the error downstream.</p><div class="spot"><b>Spot it</b>For any number that drives a decision, require a second path: checked field extraction, or a human view of the highlighted region.</div></li>
-        <li><div class="t">Storage and latency surprise</div><p>A pilot on 5,000 pages works; the full archive does not fit in memory.</p><div class="spot"><b>Spot it</b>Do the Simulation 3 arithmetic before the pilot, and test pooled or binary variants for recall loss.</div></li>
-        <li><div class="t">Pooling erases the needle</div><p>Merging patches blurs small stamps, digits and signatures, the things KYC cares about.</p><div class="spot"><b>Spot it</b>Include small-feature queries in the test set and compare recall before and after pooling.</div></li>
-        <li><div class="t">Images carry instructions</div><p>A page can hide tiny text such as "ignore previous instructions". Once a VLM reads it, that is prompt injection (A3.1).</p><div class="spot"><b>Spot it</b>Treat retrieved pages as untrusted input; keep tool permissions narrow in the generating step.</div></li>
+        <li><div class="t">Retrieval without reading</div><p>Visual retrieval finds the page; it does not extract the amount. A misread digit moves the error downstream.</p><div class="spot"><b>Spot it</b>For any number that drives a decision, require a second path: checked field extraction, or a human view of the highlighted region.</div></li>
+        <li><div class="t">Pooling and storage surprises</div><p>A 5,000-page pilot works but the full archive does not fit in memory; and pooling blurs small stamps, digits and signatures, the things KYC cares about.</p><div class="spot"><b>Spot it</b>Do the Simulation 3 arithmetic before the pilot, and compare recall on small-feature queries before and after pooling.</div></li>
+        <li><div class="t">Images carry instructions</div><p>A page can hide tiny text such as "ignore previous instructions". Once a VLM reads it, that is prompt injection (A3.1).</p><div class="spot"><b>Spot it</b>Treat retrieved pages as untrusted input; keep tool permissions narrow.</div></li>
         <li><div class="t">Wrong context baked into the index</div><p>The LLM guesses the period or entity wrongly, so every retrieval of that chunk is misdirected, consistently.</p><div class="spot"><b>Spot it</b>Have a person check 100 sampled context lines. Store the prompt and model version with the index.</div></li>
-        <li><div class="t">No audit trail from an image embedding</div><p>A vector cannot say why a page was returned.</p><div class="spot"><b>Spot it</b>Show the best-matching patches per query token (as in Simulation 1): a rough built-in explanation.</div></li>
-        <li><div class="t">Near-duplicate pages</div><p>Template letters differ in one number, score almost the same, and the system picks one.</p><div class="spot"><b>Spot it</b>Inspect ranks 1 to 5 for near-identical pairs; add metadata filters (customer, date, reference) before the vector search.</div></li>
+        <li><div class="t">No audit trail from an image embedding</div><p>A vector cannot say why a page was returned.</p><div class="spot"><b>Spot it</b>Show the best-matching patches per query token (as in Simulation 1).</div></li>
+        <li><div class="t">Near-duplicate pages</div><p>Template letters differ in one number and score almost the same.</p><div class="spot"><b>Spot it</b>Add metadata filters (customer, date, reference) before the vector search.</div></li>
       </ul>
     </section>
 
@@ -245,12 +230,12 @@
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A query has 12 tokens; a page has 1,030 patch vectors. How many dot products does one MaxSim score need, and which operations are max and which are sum?</summary><div class="ans"><p>12 × 1,030 = 12,360. For each query token take the max over the 1,030 patches, then sum the 12 maxima. Over 1,000 candidates that is about 12 million dot products: trivial for a GPU, not for a naive scan of 100 million pages, hence the candidate stage.</p></div></details>
-        <details class="reveal"><summary>2. Compute the storage for 5 million pages at 1,030 vectors × 128 dims in 16-bit, and after pooling by 4 and binarising.</summary><div class="ans"><p>Per page 1,030 × 128 × 2 = 263,680 bytes; × 5 million ≈ 1.32 TB. Pooling by 4 gives about 258 vectors; binary is 258 × 128 / 8 = 4,128 bytes per page; × 5 million ≈ 20.6 GB. A factor of 64.</p></div></details>
-        <details class="reveal"><summary>3. Why does a single mean vector lose a stamp that covers 3 patches of 48?</summary><div class="ans"><p>The stamp gets 3/48 ≈ 6% of the page vector, while amounts and goods covering many patches dominate its direction. A distractor strong on those scores higher. MaxSim lets the stamp token match its patch at full strength.</p></div></details>
-        <details class="reveal"><summary>4. What is the difference between a bi-encoder, a cross-encoder and a late-interaction model?</summary><div class="ans"><p>Bi-encoder: one precomputed vector per item, one dot product; fast, coarse. Cross-encoder: reads query and item together; accurate but per pair, so for reranking. Late interaction: many precomputed vectors per item, compared token against token; in between on accuracy and cost.</p></div></details>
+        <details class="reveal"><summary>1. In MaxSim, what does the max do and what does the sum do? Why do we still need a candidate stage?</summary><div class="ans"><p>The max lets each query word find its single best patch wherever it sits; the sum rewards pages that answer all the words. Every query token is compared with every patch, which is fine for a few hundred candidates but not a naive scan of 100 million pages.</p></div></details>
+        <details class="reveal"><summary>2. Pooling by 4 and binary vectors together shrink a page index about 64 times. What can go wrong, and how would you check?</summary><div class="ans"><p>Small features such as stamps, digits and signatures can blur, so recall may fall. Build queries about small features and compare recall before and after on your own documents. The size arithmetic tells you nothing about quality.</p></div></details>
+        <details class="reveal"><summary>3. Why does a single mean vector lose a stamp that covers 3 patches of 48?</summary><div class="ans"><p>The stamp gets about 6% of the page vector, while amounts and goods covering many patches dominate its direction, so a distractor strong on those scores higher. MaxSim lets the stamp token match its patch at full strength.</p></div></details>
+        <details class="reveal"><summary>4. What is the difference between a bi-encoder, a cross-encoder and a late-interaction model?</summary><div class="ans"><p>Bi-encoder: one precomputed vector per item; fast, coarse. Cross-encoder: reads query and item together; accurate but per pair, so for reranking. Late interaction: many precomputed vectors per item, compared token against token; in between on accuracy and cost.</p></div></details>
         <details class="reveal"><summary>5. Name two ways contextual retrieval can make results worse.</summary><div class="ans"><p>Wrong generated context (entity or period) misdirects every query reaching that chunk. Generic added words can make many chunks look alike. It also raises indexing cost, and regenerating changes the index, so version it.</p></div></details>
-        <details class="reveal"><summary>6. A vendor says their visual retriever "scores 90% on ViDoRe". What do you ask?</summary><div class="ans"><p>Which version, subsets and languages; the metric (nDCG@5 or recall@k); corpus size versus ours; whether training data overlapped; storage per page; and the result on a sample of our own Arabic and English documents.</p></div></details>
+        <details class="reveal"><summary>6. A vendor says their visual retriever "scores 90% on ViDoRe". What do you ask?</summary><div class="ans"><p>Which subsets and languages; the metric (nDCG@5 or recall@k); corpus size versus ours; storage per page; and the result on a sample of our own Arabic and English documents.</p></div></details>
         <details class="reveal"><summary>7. When would you still prefer the OCR text pipeline?</summary><div class="ans"><p>For born-digital PDFs with a clean text layer, when you need exact quotes, filters, field extraction or audit trails, or when storage and latency are tight. Often both: text as the backbone, visual retrieval as a second index for hard pages.</p></div></details>
       </div>
     </section>
