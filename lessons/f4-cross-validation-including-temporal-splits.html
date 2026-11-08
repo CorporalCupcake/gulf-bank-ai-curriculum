@@ -123,18 +123,21 @@
       <div class="prose">
         <p>Split the rows into K folds, train on K&minus;1 of them, score on the held-out fold, repeat and average. It estimates how well a procedure (algorithm plus settings) does, not the final model, which you refit on all the data.</p>
         <p>Everything learned from data, such as scaling, imputing or SMOTE, must happen inside the fold, using a pipeline. Otherwise test information leaks into training. Stratified K-fold keeps the positive rate equal in each fold, which matters for rare fraud.</p>
+        <p>K trades cost against bias. With K = 5, each model trains on 80% of the data, so the score is slightly pessimistic. With K = 10 or leave-one-out, training sets are bigger and the score is less pessimistic, but you pay for more fits and the folds overlap more, so the estimates are strongly correlated. Five or ten is the usual choice. Fold scores are also a rough guide to uncertainty only: the training sets overlap, so the spread understates the real error bars. Repeat the whole thing with different shuffles, or bootstrap, when a decision hangs on a small gap.</p>
       </div>
 
       <h3 class="sub" id="m-groups">Groups: the same customer on both sides</h3>
       <div class="prose">
         <p>If a customer has 40 transactions and folds are random, the other 39 are likely in training when row 40 is scored. The model learns "this card" instead of "what fraud looks like", yet production meets new customers.</p>
         <p>Split at the level at which you will generalise. For new customers, hold out whole customers. For tomorrow's transactions, hold out time. Often both.</p>
+        <p>Group K-fold keeps every row of one entity (customer, account, device, household) in the same fold. It costs some folds' balance: a customer with 5,000 rows makes one fold lopsided, and with few groups you get noisy folds. Combine it with stratification where you can. Leakage also hides in the features: a "customer's average spend" computed over all time quietly carries the future into each row.</p>
       </div>
 
       <h3 class="sub" id="m-temporal">Temporal splits: train on the past, test on the future</h3>
       <div class="prose">
         <p>The deployed model predicts forwards, so validate forwards. Expanding-window validation trains on everything up to a date, tests on the next block, then moves the date on.</p>
         <p>Add a gap for label delay. If fraud labels are trusted only after 45 days, training must stop 45 days before the test block (see <a href="b1-delayed-labels-and-feedback-loops.html">B1</a>). Avoid "blocked" K-fold, which still trains on the future.</p>
+        <p>Two designs are common. Expanding window keeps all history, so later folds are trained on more data and early folds are small and noisy. Rolling window keeps a fixed length, which suits behaviour that goes stale, such as fraud tactics. Use three to six forward folds covering different seasons (Ramadan, year-end, summer travel) so you see how the model copes with each. Report the spread across folds: a model that is strong in four periods and poor in one is telling you something an average hides.</p>
       </div>
 
       <figure class="figure" id="fig-drift">
@@ -163,6 +166,7 @@
       <h3 class="sub" id="m-select">Tuning and selection: nested CV and the final test set</h3>
       <div class="prose">
         <p>Try 200 settings (<a href="f4-hyperparameter-tuning-grid-random-and.html">F4.7</a>) and report the best CV score, and the number is biased upwards because you picked it for being high. Nested CV fixes this, but it is costly. The usual equivalent is a time-ordered train, validation and test split, with the test set touched once. Peek at it to decide anything and it becomes another validation set.</p>
+        <p>When comparing models, score them on the same folds and look at the per-fold difference. If the gap is smaller than the fold-to-fold wobble, call it a tie and take the simpler or cheaper model. Pick the metric to match the decision (precision at the review capacity for fraud, not accuracy), because CV faithfully optimises whatever you give it.</p>
       </div>
 
       <h3 class="sub" id="m-cluster">Clustering: finding groups when nobody told you the answer</h3>
@@ -171,6 +175,7 @@
         <ul>
           <li><strong>Scaling is a modelling choice.</strong> If spend runs to 40,000 AED and tenure to 15 years, distance is almost all spend. Standardise first, and take a log of heavy-tailed money amounts.</li>
           <li><strong>You choose k, and the data will not object.</strong> k-means returns k groups even on a featureless cloud. The <em>silhouette</em> runs from &minus;1 to 1: about 0.7 is strong, about 0.4 weak. Also check <em>stability</em>, meaning the same groups on a different sample.</li>
+          <li><strong>The algorithm shapes the groups.</strong> k-means starts from random centres, so use several restarts (k-means++ seeding helps). It favours round blobs of similar size, and a few extreme customers can drag a centre. Hierarchical clustering gives a tree you can cut at any height. DBSCAN and HDBSCAN find dense regions of any shape and label the rest as noise, which suits odd shapes but needs a distance scale to be set. With hundreds of features, distances blur, so reduce the features first.</li>
         </ul>
       </div>
 
@@ -206,6 +211,42 @@
         <p>A label such as "young high spenders" summarises how the algorithm grouped the columns you chose. It is not a cause, like sorting a wardrobe by colour. Change the features and the segments change.</p>
         <p>Customers who look alike need not respond alike to a promotion, so use an experiment (F3.6) for that. Segments can also proxy protected traits, so check their make-up before they drive pricing (<a href="g2-fairness-definitions-and-their-trade.html">G2</a>). A useful segment is actionable, stable, distinct and sizeable.</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Telling you the truth about a model before launch.</strong> Every row is scored by a model that never saw it, so overfitting shows up as a gap between training and fold scores.</li>
+          <li><strong>Using small data efficiently.</strong> Every row serves as both training and test across folds, which beats a single hold-out when you have a few thousand rows or a few hundred frauds.</li>
+          <li><strong>Comparing and tuning models fairly.</strong> Same folds, same metric, so differences reflect the model and not a lucky split.</li>
+          <li><strong>Copying deployment when you design it to.</strong> Group and forward folds let the same machinery answer "new customers?" and "next month?".</li>
+          <li><strong>Segmenting cheaply.</strong> k-means is fast, runs on millions of rows and gives a first look at structure that people can read in a workshop.</li>
+        </ul>
+        <p><strong>Weak at, or do not use when:</strong></p>
+        <ul>
+          <li><strong>Time-ordered data with plain K-fold.</strong> Shuffling lets the model borrow from the future, so forward folds are the right tool for transactions, balances and defaults.</li>
+          <li><strong>Regime changes.</strong> A new rule, product or fraud ring is not in any past fold. CV measures how well the past predicts a similar future, so pair it with <a href="f7-drift-monitoring-psi-ks-and.html">monitoring</a>.</li>
+          <li><strong>Huge models.</strong> K fits of a model that takes days to train are rarely affordable. Use one time-ordered validation split instead.</li>
+          <li><strong>Tiny positive counts.</strong> With 20 frauds, each fold holds four. The score is noise, however carefully you split.</li>
+          <li><strong>Clustering when you need a cause, a forecast or an effect.</strong> Clusters describe the features you chose. They do not say who will churn or who will respond.</li>
+        </ul>
+      </div>
+
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+        <tbody>
+          <tr><td><b>Random (stratified) K-fold</b></td><td>Rows are exchangeable and independent, such as a one-off survey or images.</td><td>Time order or repeat customers exist.</td></tr>
+          <tr><td><b>Group K-fold</b></td><td>The model must score new customers, accounts or devices.</td><td>Time also matters, unless you also add a time rule.</td></tr>
+          <tr><td><b>Expanding or rolling window, with a gap</b></td><td>The model predicts forwards and labels arrive late. This is the default for banking.</td><td>You have too little history for several folds.</td></tr>
+          <tr><td><b>Single hold-out (latest months)</b></td><td>The model is expensive, or you need a final sign-off number.</td><td>The set is small, so one split is noisy.</td></tr>
+          <tr><td><b>Nested CV</b></td><td>You tune heavily and need an honest estimate of the whole procedure.</td><td>Fits are slow. Use a train, validation, test split.</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="prose">
+        <p>For segmentation the choice is similar. <strong>k-means</strong> suits round, similar-sized groups on scaled numeric features. <strong>Hierarchical clustering</strong> suits a few thousand customers when you want a tree to explain. <strong>DBSCAN or HDBSCAN</strong> suit odd shapes and outlier hunting. A <strong>business rule</strong> (balance band times product) is often better when the segments must be stable and explainable to a regulator.</p>
+        <p><strong>In practice.</strong> Start with a forward split that matches deployment: say, train on 12 months, test on the next one, with a gap equal to the label delay, repeated three to six times. Wrap preprocessing in a pipeline. Use K = 5 where random folds are valid. Use a metric tied to the decision, and always compare against a simple baseline. Costs scale with K times one fit, which is fine for gradient-boosted trees on a few million rows and painful for deep nets. In banks this is the backbone of fraud, credit-scoring and AML model validation, and model-risk teams will ask for out-of-time results, not shuffled ones. For segments, banks use clustering to explore (affluent, mass, digital-first) and then decide the official segments by rule and review them quarterly.</p>
+      </div>
     </section>
 
     <!-- ============================== 5. FAILS ============================== -->
@@ -217,6 +258,8 @@
         <li><div class="t">Ignoring label delay</div><p>Training includes rows whose labels were not yet known.</p><div class="spot"><b>Spot it</b>Ask which labels existed on the day the model would have been trained.</div></li>
         <li><div class="t">Reporting the best score from a big search</div><p>The tuned CV number presented as expected performance.</p><div class="spot"><b>Spot it</b>Ask how many configurations were tried and how often the test set was scored.</div></li>
         <li><div class="t">Choosing k to make a nice story, or reading clusters as causes</div><p>"Five segments" picked by taste, or "segment 3 churns because it is digital-first".</p><div class="spot"><b>Spot it</b>Ask for silhouette and stability at several k. Without an experiment, say "associated with".</div></li>
+        <li><div class="t">Too few positives per fold</div><p>Ten frauds across five folds, then a confident ranking of models on a difference that is noise.</p><div class="spot"><b>Spot it</b>Count positives per fold and repeat the CV with other seeds. If the winner changes, there is no winner.</div></li>
+        <li><div class="t">Clustering on unscaled or redundant features</div><p>One big-unit column, or five near-copies of spend, decides the segments.</p><div class="spot"><b>Spot it</b>Check feature scales and correlations, then re-run standardised and see whether the groups survive.</div></li>
       </ul>
     </section>
 
@@ -229,6 +272,8 @@
         <details class="reveal"><summary>3. AUC is 0.97 in shuffled CV and 0.83 on the last two months. What are the likely causes?</summary><div class="ans"><p>Time leakage or drift, the same customers on both sides, or preprocessing outside the fold. Re-run with forward folds, group folds and a pipeline.</p></div></details>
         <details class="reveal"><summary>4. Why does k-means on a featureless cloud still look decent?</summary><div class="ans"><p>It always cuts space into k regions. The tell is a modest silhouette with no peak at any k.</p></div></details>
         <details class="reveal"><summary>5. Why is "segment 2 churns more because it is young" unsupported?</summary><div class="ans"><p>Clusters only group by features. Income, products or channel may drive churn instead, and a cause needs an experiment.</p></div></details>
+        <details class="reveal"><summary>6. Your credit-default model must score applicants it has never seen, three months after training. Which validation would you choose and why?</summary><div class="ans"><p>A forward window with a three-month gap, plus grouping by customer if people can reappear. Forward folds copy the time shift and group folds copy the unseen applicants. Random folds would flatter both.</p></div></details>
+        <details class="reveal"><summary>7. A transformer takes two days to train and you have 3 million rows. K-fold, or one hold-out? Why?</summary><div class="ans"><p>One time-ordered hold-out. Five fits is ten days of compute, and with millions of rows a single recent split is already stable. Keep CV for cheap models and small data.</p></div></details>
       </div>
     </section>
 

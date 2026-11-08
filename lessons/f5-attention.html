@@ -103,12 +103,15 @@
       <h3 class="sub" id="m-qkv">Queries, keys and values</h3>
       <div class="prose">
         <p>Think of a library. Your search words are the <strong>query</strong>, the catalogue entries are the <strong>keys</strong>, and the book you take home is the <strong>value</strong>. Every token gets all three views. Score each query against every key, turn the scores into weights that sum to 1, then take the weighted average of the values.</p>
-        <p>A row of weights reads as "how much of my new vector comes from each other token". A high weight does not mean "this token caused the answer".</p>
+        <p>The three views are not given. Each is the token's embedding multiplied by its own learned matrix, so the model learns what to ask, what to advertise and what to hand over. That split matters: what makes a token easy to find (key) can differ from what it contributes once found (value).</p>
+        <p>A row of weights reads as "how much of my new vector comes from each other token". A high weight does not mean "this token caused the answer". Each extra point of score multiplies a weight by about 2.7, so small score gaps become clear favourites.</p>
+        <p>A weighted average ignores order, so "bank robbed the man" and "man robbed the bank" would look identical. Transformers therefore add position information to the embeddings before the first layer.</p>
       </div>
 
       <h3 class="sub" id="m-scale">Why divide by &radic;d</h3>
       <div class="prose">
         <p>Big vectors make attention all-or-nothing: scores grow with vector size, one key takes nearly all the weight, and the layer stops learning. Dividing scores by the square root of the vector size keeps them sane. It is a stability trick, nothing more.</p>
+        <p>The link is the <strong>softmax</strong>, the step that turns scores into weights. It exaggerates gaps: when the top score is far ahead, its weight approaches 1 and the others approach 0. A nearly one-hot softmax has almost no gradient (no learning signal), so the other keys stop being trained. The same idea appears at generation time as "temperature", where a lower value gives more predictable output.</p>
       </div>
 
       <figure class="figure" id="fig-scale">
@@ -134,12 +137,14 @@
       <h3 class="sub" id="m-heads">Multi-head attention and what heads learn</h3>
       <div class="prose">
         <p>One attention pattern is not enough. <strong>Multi-head attention</strong> runs several side by side, each with its own questions, like several readers highlighting a contract for different things. Heads do recognisable jobs, but attention weights are not a reliable explanation of an answer. Never show an attention heat map to a validator as "the model's reasoning".</p>
+        <p>The heads split the vector into slices, so the cost is about that of one wide head. A word may need its subject, a number three words back and an earlier mention of a name, all at once. One well-known job is the <strong>induction head</strong>: it sees "A B ... A" and predicts "B", which is a basis for in-context learning. Many heads turn out redundant and can be pruned.</p>
+        <p>Each layer pairs attention, which moves information <em>between</em> tokens, with a feed-forward block that transforms each token <em>alone</em>. Much of a model's stored knowledge sits in those feed-forward blocks rather than in attention.</p>
       </div>
 
       <h3 class="sub" id="m-mask">Causal masks, cost, and the KV cache</h3>
       <div class="prose">
-        <p><strong>Causal mask.</strong> A model predicting the next token must not see it, so generation models let each token attend only backwards. Encoders (for embeddings and classification) let every token see every other.</p>
-        <p><strong>Cost.</strong> The score table quadruples when text doubles. The <strong>KV cache</strong> stores earlier keys and values so each new token is cheap, but it grows with every token, so memory becomes the bottleneck (see <a href="m1-context-windows-and-the-kv.html">context windows and the KV cache</a>). Sharing keys and values across heads, as grouped-query attention does, shrinks it sharply.</p>
+        <p><strong>Causal mask.</strong> A model predicting the next token must not see it, so generation models let each token attend only backwards. Encoders (for embeddings and classification) let every token see every other, which suits a representation of a whole text.</p>
+        <p><strong>Cost.</strong> The score table quadruples when text doubles. FlashAttention computes the exact same result with far less memory traffic, which made long context affordable. The <strong>KV cache</strong> stores earlier keys and values so each new token is cheap, but it grows with every token, so memory becomes the bottleneck (see <a href="m1-context-windows-and-the-kv.html">context windows and the KV cache</a>). Sharing keys and values across heads, as grouped-query attention does, shrinks it sharply.</p>
       </div>
 
       <figure class="figure" id="fig-mask">
@@ -164,7 +169,7 @@
 
       <h3 class="sub" id="m-embed">Embeddings: turning things into points</h3>
       <div class="prose">
-        <p>An embedding layer is a table with one row per token. Training moves the rows so tokens used alike end up close; nobody tells the model that petrol and fuel are related. Directions in the space then encode relations, as in king &minus; man + woman &approx; queen (fragile, but the geometry is real). Kinds you will meet:</p>
+        <p>An embedding layer is a table with one row per token. Training moves the rows so tokens used alike end up close; nobody tells the model that petrol and fuel are related. Directions in the space then encode relations, as in king &minus; man + woman &approx; queen (fragile, but the geometry is real). The number of dimensions is a design choice: 256 to 1,536 is typical for text, and 16 to 64 is usual for merchant or customer vectors. Kinds you will meet:</p>
       </div>
       <div class="table-wrap" style="margin-top:12px">
         <table class="data">
@@ -177,9 +182,10 @@
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p><strong>Sentence embeddings</strong> are trained contrastively (<a href="f5-self-supervised-and-contrastive-learning.html">F5.7</a>). Multilingual ones put "cash withdrawal" and "سحب نقدي" together.</p>
-        <p><strong>Measuring closeness.</strong> <em>Cosine similarity</em> compares direction only and is the default for text. <em>Dot product</em> also rewards length, so use it only if the model was trained with it. Use the ruler the model was trained with; a mismatch returns wrong neighbours silently.</p>
-        <p><strong>Entity embeddings.</strong> Instead of one-hot encoding 200,000 merchants, learn a small vector per merchant so rare ones borrow strength from similar ones. If learned from data that includes the test period or the label, they carry the answer (<a href="f3-leakage-point-in-time.html">F3.1</a>).</p>
+        <p><strong>Sentence embeddings</strong> are trained contrastively (<a href="f5-self-supervised-and-contrastive-learning.html">F5.7</a>). Multilingual ones put "cash withdrawal" and "سحب نقدي" together, because they train on translation pairs. That is what makes cross-lingual search work.</p>
+        <p><strong>Measuring closeness.</strong> <em>Cosine similarity</em> compares direction only and is the default for text. <em>Dot product</em> also rewards length, so use it only if the model was trained with it. Use the ruler the model was trained with; a mismatch returns wrong neighbours silently. <em>Euclidean distance</em> is the straight-line gap and ranks exactly as cosine does if vectors are scaled to length 1.</p>
+        <p><strong>Vector search.</strong> Embed the query, then return the nearest stored vectors. At scale, an approximate index trades a little recall for large speed gains. Compression is another lever: a 1,024-number vector costs about 4 KB, so ten million documents cost about 40 GB before any index.</p>
+        <p><strong>Entity embeddings.</strong> Instead of one-hot encoding 200,000 merchants, learn a small vector per merchant so rare ones borrow strength from similar ones, then feed the vectors to a gradient-boosted model. If learned from data that includes the test period or the label, they carry the answer (<a href="f3-leakage-point-in-time.html">F3.1</a>).</p>
       </div>
 
       <figure class="figure" id="fig-geom">
@@ -198,7 +204,43 @@
       </figure>
 
       <div class="prose">
-        <p>A transformer repeatedly refines embeddings by letting them consult each other.</p>
+        <p>A transformer repeatedly refines embeddings by letting them consult each other. The embedding table is a fixed lookup; after each attention layer a token's vector is rewritten using its neighbours.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Long-range links.</strong> Any token reads any other in one step, so "it" in a long sentence finds its noun. Older recurrent models had to pass information along a chain and forgot.</li>
+          <li><strong>Parallel training.</strong> All positions are processed at once on a GPU, which is why models could grow to billions of parameters.</li>
+          <li><strong>Transfer.</strong> Embeddings learned on huge unlabelled text carry over to small tasks, so a few hundred labelled examples can be enough.</li>
+          <li><strong>Similarity across wording and language.</strong> Search by meaning finds "reverse a payment" when the policy says "recall a transfer", and across Arabic and English.</li>
+          <li><strong>Handling sparse categories.</strong> A learned merchant vector lets rare merchants borrow from similar ones, where one-hot encoding gives each its own empty column.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>Very long inputs.</strong> Cost grows with the square of length and the cache with length, so 300-page files need chunking, retrieval or a cheaper attention variant.</li>
+          <li><strong>Small tabular data.</strong> With a few thousand rows and clean columns, gradient boosting usually beats a transformer and trains in seconds.</li>
+          <li><strong>Exact facts and negation.</strong> Embeddings capture topic better than polarity or precise numbers. "Waivable" and "not waivable" sit together.</li>
+          <li><strong>Explanations.</strong> Attention weights are not a faithful reason for an output, so they cannot carry a model-risk sign-off on their own.</li>
+          <li><strong>Cold start and drift.</strong> A new merchant has no learned vector, and vectors trained on last year's behaviour go stale.</li>
+        </ul>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Attention and transformers</b></td><td>Text, code or event sequences where context and long-range links matter; you can use a pretrained model.</td><td>Small tidy tables, or hard latency and memory limits on very long inputs.</td></tr>
+            <tr><td><b>Recurrent networks (LSTM, GRU)</b></td><td>Small streaming sequences on tight hardware, where a fixed memory is acceptable.</td><td>Long dependencies or large-scale pretraining.</td></tr>
+            <tr><td><b>Bag of words or TF-IDF</b></td><td>Exact keywords, product codes and names matter; you need a fast, explainable baseline.</td><td>Synonyms, paraphrase or mixed Arabic and English.</td></tr>
+            <tr><td><b>Gradient-boosted trees with hand-built features</b></td><td>Structured data of up to millions of rows; you need speed and explainability.</td><td>Raw text, or sequences with no sensible hand-built summary.</td></tr>
+            <tr><td><b>Learned entity embeddings</b></td><td>High-cardinality IDs (merchants, devices) with plenty of history per ID.</td><td>Mostly new entities, or when training data overlaps the test period.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice.</strong> Start with a pretrained embedding model and cosine similarity on a small labelled test set from your own data, before any fine-tuning. Try keyword search first as a baseline; a hybrid of keyword and vector search is often best. Use the dimension the model ships with, normalise vectors, and store the model version. Fine-tuning a small encoder needs hundreds to thousands of labelled pairs and a single GPU; training a transformer from scratch is rarely sensible for a bank.</p>
+        <p>In banking, embeddings drive complaint triage, policy search and retrieval for assistants, merchant-name matching for AML screening, and entity vectors as inputs to fraud and credit models. Attention sits inside every chat assistant and document-extraction model. Where decisions need explanation, keep the transformer for text and let a simpler model make the scored decision.</p>
       </div>
     </section>
 
@@ -209,8 +251,9 @@
         <li><div class="t">Reading attention maps as explanations</div><p>Weights show where information flowed, not what the answer depended on.</p><div class="spot"><b>Spot it</b>Was the claim tested by altering the highlighted words? If not, it is illustration only (<a href="f8-global-versus-local-explanations.html">F8</a>).</div></li>
         <li><div class="t">Length surprises</div><p>A prototype on five-page documents works; 300-page loan files are slow and costly, or the key facts mid-prompt are ignored.</p><div class="spot"><b>Spot it</b>Time three input lengths and move the key passage around.</div></li>
         <li><div class="t">Wrong ruler or mixed models</div><p>A dot-product index on a cosine-trained model, or queries and documents embedded by different model versions. Nothing crashes; retrieval is quietly worse.</p><div class="spot"><b>Spot it</b>Store model name and version with every vector and refuse mismatches.</div></li>
-        <li><div class="t">Near means similar, not true</div><p>The closest passage to "can staff waive the fee?" may say the opposite, because negation barely moves a vector. An English leaderboard winner may also do poorly on Gulf-dialect text.</p><div class="spot"><b>Spot it</b>Test on real Arabic and negated cases, and add a re-ranker.</div></li>
-        <li><div class="t">Leaks and entity-embedding traps</div><p>Vectors of customer data are personal data. Entity vectors learned over the whole year leak the future into a March fraud model.</p><div class="spot"><b>Spot it</b>Apply the source's access controls to the vector store. Check each embedding was trained before the prediction date.</div></li>
+        <li><div class="t">Near means similar, not true</div><p>The closest passage to "can staff waive the fee?" may say the opposite, because negation barely moves a vector.</p><div class="spot"><b>Spot it</b>Put negated and "except when" cases in the test set, and add a re-ranker.</div></li>
+        <li><div class="t">Trusting a leaderboard for Arabic or domain text</div><p>A model that tops an English average may do poorly on Gulf-dialect complaints or bilingual contracts.</p><div class="spot"><b>Spot it</b>Build 100 to 200 real query-and-passage pairs per language and measure recall at 5 for each candidate.</div></li>
+        <li><div class="t">Leaks and entity-embedding traps</div><p>Vectors of customer data are personal data, since text can often be partly rebuilt from its embedding. Entity vectors learned over the whole year leak the future into a March fraud model, and new merchants have no vector at all.</p><div class="spot"><b>Spot it</b>Apply the source's access controls to the vector store. Check each embedding was trained before the prediction date. Report new entities separately.</div></li>
       </ul>
     </section>
 
@@ -223,6 +266,8 @@
         <details class="reveal"><summary>3. Context doubles from 8,000 to 16,000 tokens. How do the score table and the KV cache grow?</summary><div class="ans"><p>The table grows 4 times, with the square of length. The cache grows 2 times, in proportion to length.</p></div></details>
         <details class="reveal"><summary>4. Two vectors point the same way, but one is five times longer. How do cosine and dot product treat them?</summary><div class="ans"><p>Cosine ignores length and calls them identical. Dot product rewards the long one. Use the measure the model was trained with.</p></div></details>
         <details class="reveal"><summary>5. Why can retrieval return a policy that says the opposite of what the user needs?</summary><div class="ans"><p>Embeddings capture topic far better than polarity, so "fees may be waived" and "fees may not be waived" sit nearly together. Add a re-ranker and test negated queries.</p></div></details>
+        <details class="reveal"><summary>6. You have 4,000 labelled card-fraud rows with 30 numeric columns and a request for a "transformer model". Which would you choose, and why?</summary><div class="ans"><p>Gradient boosting. The data is small and tabular, a transformer would overfit and be harder to explain, and boosting trains in seconds. Use a learned merchant embedding as one extra input only if there is enough history per merchant.</p></div></details>
+        <details class="reveal"><summary>7. For searching 50,000 bilingual policy pages, would you pick keyword search, vector search or both, and why?</summary><div class="ans"><p>Both. Vector search handles paraphrase and Arabic-English matches; keyword search catches exact clause numbers and product names that vectors blur. Add a re-ranker, then test on real queries per language.</p></div></details>
       </div>
       <div class="lesson-foot">
         <a href="../index.html">← Back to the curriculum</a>

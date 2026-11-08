@@ -82,7 +82,9 @@
 
       <h3 class="sub" id="m-grid">Grid versus random search</h3>
       <div class="prose">
-        <p>Usually one or two knobs move the score a lot and the rest barely matter. A grid tests only a few distinct values of the knob that matters. Random search draws every knob independently, so every trial is a new value of it. A grid is fine for one or two knobs; beyond that, go random, and sample scale-type knobs such as learning rate on a log scale.</p>
+        <p>Think of tuning a radio: one dial changes the station and the others barely matter. Validation error usually moves a lot along one or two knobs and hardly at all along the rest, and which knobs matter changes from dataset to dataset (Bergstra and Bengio, 2012). A learning rate that is too high ruins a boosted model; minimum leaf size shifts the score by a fraction of a point. Researchers call this <strong>low effective dimension</strong>.</p>
+        <p>A grid tests only a few distinct values of the knob that matters, because it spends its budget on combinations. With 25 trials over three knobs you get about three values of each. Random search draws every knob independently, so every trial is a new value of the important one. You can also stop at any time or add trials later, which a grid cannot do without starting again.</p>
+        <p>A grid is fine for one or two knobs. Beyond that, go random. Sample scale-type knobs such as learning rate and regularisation strength on a <strong>log scale</strong>, because their effect depends on order of magnitude. Set ranges from knowledge, so no trials go to absurd settings.</p>
       </div>
 
       <figure class="figure" id="fig-grid">
@@ -112,7 +114,7 @@
 
       <h3 class="sub" id="m-bayes">Bayesian search and early stopping</h3>
       <div class="prose">
-        <p>When trials are costly, learn from earlier ones. <strong>Bayesian optimisation</strong> fits a cheap surrogate model to the scores so far, then tries the next setting where the predicted error is low or the surrogate is unsure. Tools like Optuna do this for you. It pays off when each trial is expensive and the knobs are few.</p>
+        <p>When trials are costly, learn from earlier ones. <strong>Bayesian optimisation</strong> fits a cheap surrogate model to the scores so far, then tries the next setting where the predicted error is low or the surrogate is unsure. That balance of exploiting and exploring is scored by <strong>expected improvement</strong>, the orange curve below. Tools like Optuna do this for you. It pays off when each trial is expensive and the knobs are few.</p>
       </div>
 
       <figure class="figure" id="fig-bo">
@@ -140,18 +142,20 @@
       </figure>
 
       <div class="prose">
-        <p>It is not magic: on noisy scores it can chase noise, and for a model that trains in a minute, plain random search is often enough. The other lever is <strong>early stopping</strong>: stop adding trees once validation error stops improving, so the tree count stops being a knob.</p>
+        <p>Where the important knob's landscape is flat, grid and random tie. Where it is sharp, as learning rates often are, random wins clearly at small budgets. If a trial takes an hour, though, neither is a good way to spend 50 hours.</p>
+        <p>Bayesian search is not magic. It needs a sensible search space, and on noisy scores it can chase noise. The surrogate also gets harder to fit as knobs multiply. For a model that trains in a minute, 200 random trials may beat a careful 30. In practice you use TPE (the default in Optuna and Hyperopt) or SMAC, which cope with mixed and conditional knobs, such as "kernel width only matters if the kernel is RBF".</p>
+        <p>The second lever is <strong>not finishing bad trials</strong>. Like auditioning many singers and hearing only the best in full, <strong>successive halving</strong> gives many settings a small budget, keeps the best half and repeats with more budget. Boosting libraries also build in <strong>early stopping</strong>: stop adding trees once validation error stops improving, so the tree count becomes an outcome, not a knob. Set a high tree cap, a low learning rate, and let early stopping choose.</p>
       </div>
 
       <h3 class="sub" id="m-honest">Tuning on the test set</h3>
       <div class="prose">
-        <p>Twenty students of equal ability sit a quiz, and whoever tops the class got lucky. In the same way, the best of twenty equal models looks better than it is. This is the <strong>winner's curse</strong>. Use three sets, each for one job:</p>
+        <p>Twenty students of equal ability sit a 100-question quiz, and whoever tops the class got lucky. In the same way, suppose twenty models all truly have 80% recall. Scored on 100 frauds, they scatter by about 4 points through sampling noise, and the best of twenty reads around 87%. That is the number you would report, and it is wrong. This selection effect is the <strong>winner's curse</strong>. Use three sets, each for one job:</p>
         <ul>
           <li><strong>Training data</strong> fits the parameters.</li>
-          <li><strong>Validation data</strong> chooses hyperparameters, so its best score is optimistic.</li>
-          <li><strong>Test data</strong> is touched once, at the end.</li>
+          <li><strong>Validation data</strong> (or cross-validation folds) chooses hyperparameters, so its best score is optimistic.</li>
+          <li><strong>Test data</strong> is touched once, at the end. If you look, change something and look again, it has become validation data.</li>
         </ul>
-        <p>With little data, nested cross-validation scores the whole search on folds it never saw.</p>
+        <p>With little data, use <strong>nested cross-validation</strong>: an inner loop runs the search, and an outer loop scores the whole procedure on folds the search never saw. It is costly, so it suits small data, not nightly jobs. For anything that moves in time, the outer split must run forward in time, not shuffle.</p>
       </div>
 
       <figure class="figure" id="fig-opt">
@@ -179,25 +183,25 @@
       </figure>
 
       <div class="prose">
-        <p>Optimism depends on evaluation noise compared with real differences between candidates. When noise is bigger, extra trials just find noise, so cap trials in advance and prefer the simpler model.</p>
+        <p>Optimism depends on evaluation noise compared with real differences between candidates. If candidates differ by a point and noise is four points, tuning 200 settings finds noise. So cap trials in advance and log every trial so the search can be audited. Then apply the <strong>one-standard-error rule</strong>: choose the simplest model whose score is within one standard error of the best. A simpler model has fewer ways to have won by luck.</p>
       </div>
 
       <h3 class="sub" id="m-classic">k-NN, SVMs and naive Bayes</h3>
       <div class="prose">
-        <p>These older algorithms still appear as baselines. Each is a clear assumption about the world.</p>
+        <p>These older algorithms still turn up in interviews and in production, as baselines or components. Each is a clear assumption about the world, and knowing the assumption tells you where it fails.</p>
       </div>
       <div class="table-wrap" style="margin-top:16px">
         <table class="data">
-          <thead><tr><th>Algorithm</th><th>Core idea</th><th>Where it still wins</th></tr></thead>
+          <thead><tr><th>Algorithm</th><th>Core idea and assumption</th><th>Where it still wins</th></tr></thead>
           <tbody>
-            <tr><td><b>k-nearest neighbours</b></td><td>Vote among the <i>k</i> most similar training cases.</td><td>Small data; look-alike lookups; vector search.</td></tr>
-            <tr><td><b>Support vector machine</b></td><td>Find the widest-margin boundary between classes.</td><td>Small to medium data with many features, such as text.</td></tr>
-            <tr><td><b>Naive Bayes</b></td><td>Add up evidence per feature, treating features as independent.</td><td>Text baselines and tiny training sets.</td></tr>
+            <tr><td><b>k-nearest neighbours</b></td><td>Vote among the <i>k</i> most similar training cases; no training step. Assumes nearby points share labels.</td><td>Small data; look-alike lookups; vector search.</td></tr>
+            <tr><td><b>Support vector machine</b></td><td>Find the widest-margin boundary between classes; only points near it matter. Assumes a wide margin generalises.</td><td>Small to medium data with many features, such as text.</td></tr>
+            <tr><td><b>Naive Bayes</b></td><td>Add up evidence per feature. Assumes features are independent given the class, which is almost never true.</td><td>Text baselines and tiny training sets.</td></tr>
           </tbody>
         </table>
       </div>
       <div class="prose" style="margin-top:1.2em">
-        <p>k-NN needs scaled features, or an income in AED swamps age. With hundreds of raw features, nearest and farthest neighbours end up almost equally far, so it works best on a few features or a learned embedding.</p><p>An SVM picks the widest road between two groups of houses. It gets slow beyond about a hundred thousand rows, where boosted trees or a linear model take over.</p><p>Naive Bayes ranks well, but features like "transfer" and "urgent" co-occur, so it counts the same evidence twice and its probabilities come out too extreme. Use it as a first baseline, not as a source of probabilities.</p>
+        <p><strong>k-NN: scale first.</strong> k-NN needs scaled features, or an income in AED swamps age and the model quietly becomes "nearest by income". Then comes the <strong>curse of dimensionality</strong>: with hundreds of raw features, nearest and farthest neighbours end up almost equally far, like finding a "close" restaurant that must match 300 criteria. It works best on a few features or a learned embedding, which is what vector search does. It is also slow at prediction time, because every query compares against the stored data unless you use an index.</p><p><strong>SVM: the widest road.</strong> An SVM picks the widest road between two groups of houses. <i>C</i> sets how many points may sit on the wrong side, and a kernel (a recipe for curving the boundary) has its own width, γ; a large γ overfits. Tune C and γ together on a log scale. Training cost grows quickly with rows, so beyond about a hundred thousand rows boosted trees or a linear model take over. SVM scores are not probabilities.</p><p><strong>Naive Bayes: count the evidence.</strong> For a message, it tallies how typical each word is for each class and picks the class with the most evidence. It ranks well, but features like "transfer" and "urgent" co-occur, so it counts the same evidence twice and its probabilities come out too extreme. Use it as a first baseline, not as a source of probabilities. Logistic regression wins with enough data, naive Bayes with very little.</p>
       </div>
 
       <figure class="figure" id="fig-knn">
@@ -226,7 +230,43 @@
       </figure>
 
       <div class="prose">
-        <p>Here <i>k</i> is the bias-variance dial: <i>k</i> = 1 is high variance, huge <i>k</i> is high bias. Do scaling inside a pipeline fitted on training folds only.</p>
+        <p>Here <i>k</i> is the bias-variance dial: <i>k</i> = 1 is high variance, huge <i>k</i> is high bias. Do scaling inside a pipeline fitted on training folds only, or information from the validation data leaks into training.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Random search covers important knobs cheaply.</strong> Every trial is a fresh value of every knob, so it needs no assumptions about which knob matters and parallelises perfectly.</li>
+          <li><strong>Bayesian search saves expensive trials.</strong> The surrogate turns each past result into a guess about where to look next, so a 2-hour model can be tuned in 30 trials, not 300.</li>
+          <li><strong>A held-out test set gives an honest number.</strong> Because it never influenced a choice, its score has no selection bias, and that is what a risk committee needs.</li>
+          <li><strong>k-NN, SVMs and naive Bayes need little data and little tuning.</strong> Their assumptions act as strong priors, so they are hard to overfit with a few hundred rows. k-NN also needs no training, and naive Bayes trains in one pass.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when</strong></p>
+        <ul>
+          <li><strong>Grids over many knobs.</strong> The cost explodes while the important knob still gets few values.</li>
+          <li><strong>Bayesian search on cheap or very noisy trials.</strong> The surrogate has little signal and overhead dominates; plain random search wins.</li>
+          <li><strong>Any search when candidates differ by less than the noise.</strong> More trials only raise the winner's optimism.</li>
+          <li><strong>k-NN on many raw features or millions of rows.</strong> Distances lose meaning and prediction is slow.</li>
+          <li><strong>SVMs on large data, or where you need probabilities.</strong> Training is superlinear in rows and the scores need calibrating. Naive Bayes is weak when features overlap heavily and you need probabilities.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose</strong></p>
+      </div>
+      <div class="table-wrap" style="margin-top:8px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Grid search</b></td><td>One or two knobs, cheap model, want a full picture.</td><td>Three or more knobs.</td></tr>
+            <tr><td><b>Random search</b></td><td>Default for most work; trials are parallel and fairly cheap.</td><td>Each trial costs hours and budget is tiny.</td></tr>
+            <tr><td><b>Bayesian (TPE, GP)</b></td><td>Expensive trials, a moderate number of knobs, fairly clean scores.</td><td>Very noisy scores, dozens of knobs, or trials under a minute.</td></tr>
+            <tr><td><b>Successive halving / early stopping</b></td><td>Training can be cut short and partial results predict final ones.</td><td>Early scores mislead, as with slow-starting models.</td></tr>
+            <tr><td><b>k-NN / SVM / naive Bayes</b></td><td>Small data, text, or a quick baseline.</td><td>Large tabular data: use gradient boosting; need calibrated probabilities: use logistic regression.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice.</strong> Start with defaults and early stopping, then run 50 to 100 random trials on the three or four knobs that matter, scored on forward-in-time folds. For boosted trees those are usually learning rate, depth, minimum leaf size and subsampling. Move to Optuna if each trial is expensive. Freeze the choice, then score the test set once. Compute is rarely the limit: the hours go into the data, not the search.</p>
+        <p>In banking this is the routine step between a baseline and a model that goes to validation. A fraud model is tuned on earlier months and scored on a later month. Credit scorecards often keep a simpler setting because model risk teams value stability over a fraction of a point. Naive Bayes and k-NN appear in complaint triage and in look-alike customer or document search.</p>
       </div>
     </section>
 
@@ -237,7 +277,9 @@
         <li><div class="t">Quoting the best validation score as performance</div><p>The search's best score is reported as the live result.</p><div class="spot"><b>Spot it</b>Ask for the score on a separate, later period.</div></li>
         <li><div class="t">Grid search over many knobs</div><p>Five values on six knobs is 15,625 runs, and still only five learning rates.</p><div class="spot"><b>Spot it</b>Count the grid.</div></li>
         <li><div class="t">Leaky preprocessing</div><p>A scaler fitted before cross-validation, or shuffled folds on time-ordered data, rewards the leak.</p><div class="spot"><b>Spot it</b>Look for a pipeline and a forward-in-time splitter.</div></li>
-        <li><div class="t">Chasing differences smaller than the noise</div><p>Two hundred trials to move AUC from 0.912 to 0.914.</p><div class="spot"><b>Spot it</b>Compare the gain with the fold-to-fold spread.</div></li>
+        <li><div class="t">Chasing differences smaller than the noise</div><p>Two hundred trials to move AUC from 0.912 to 0.914.</p><div class="spot"><b>Spot it</b>Compare the gain with the fold-to-fold spread. Inside it, stop and pick the simpler model.</div></li>
+        <li><div class="t">Unscaled features</div><p>Income in AED drowns out age in k-NN or an SVM, so the model ignores most of your features.</p><div class="spot"><b>Spot it</b>Print feature ranges and check that scaling sits inside the pipeline.</div></li>
+        <li><div class="t">Trusting scores as probabilities</div><p>A naive Bayes 0.99 is not a 99% chance, and SVM margins are not probabilities at all.</p><div class="spot"><b>Spot it</b>Plot a calibration curve on held-out data before using scores as risk estimates.</div></li>
       </ul>
     </section>
 
@@ -249,6 +291,8 @@
         <details class="reveal"><summary>3. Twenty identical models are scored on 100 frauds. Why does the best look better, and is it?</summary><div class="ans"><p>Sampling noise scatters the scores, and the maximum of twenty sits above the true value. It is no better; you selected on luck.</p></div></details>
         <details class="reveal"><summary>4. What is the difference between validation and test data in tuning?</summary><div class="ans"><p>Validation data is used repeatedly, so its best score is optimistic. Test data is used once, after the choices are frozen.</p></div></details>
         <details class="reveal"><summary>5. You feed age (years) and income (AED) unscaled into k-NN. What goes wrong?</summary><div class="ans"><p>Income dominates the distance, so age is effectively ignored. Standardise inside a pipeline.</p></div></details>
+        <details class="reveal"><summary>6. Each training run takes 4 hours and you have a week on one GPU. Which search would you choose and why?</summary><div class="ans"><p>Bayesian search with early stopping or successive halving. With about 40 trials possible, a surrogate that learns from each one and stops bad runs early beats random draws. Random search would be fine only if you had many parallel machines.</p></div></details>
+        <details class="reveal"><summary>7. You have 800 labelled complaints and need a first classifier by tomorrow. Naive Bayes, an SVM or gradient boosting: which would you choose and why?</summary><div class="ans"><p>Naive Bayes or a linear SVM on word counts. Both train in seconds, cope with many sparse features and few rows, and give a baseline to beat. Boosting needs more data, and you would not trust naive Bayes probabilities, so use it only for ranking.</p></div></details>
       </div>
     </section>
 

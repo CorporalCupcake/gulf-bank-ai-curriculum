@@ -113,14 +113,17 @@
 
       <h3 class="sub" id="m-iforest">Isolation forests: counting cuts</h3>
       <div class="prose">
-        <p>A loner by the wall in a crowded square is picked out with a couple of questions; someone mid-crowd takes many. The forest asks such questions at random, cutting on random features and values. A far-out point takes few cuts, so a <strong>short path means odd</strong>. Small samples per tree stop similar anomalies hiding behind each other (<em>masking</em>).</p>
-        <p>It is cheap, needs no scaling and is a good first detector on tabular data. Its blind spot is a point that is ordinary on each feature but odd in combination. The features you give it decide what "anomalous" means. Set the number flagged from review capacity (<a href="f3-imbalanced-data.html">F3.5</a>), not from a score of 0.5.</p>
+        <p>A loner by the wall in a crowded square is picked out with a couple of questions; someone mid-crowd takes many. The forest asks such questions at random. Each tree takes a small random sample of rows, picks a random feature and a random split value between that feature's minimum and maximum, and repeats until every row is alone. A far-out point takes few cuts, because a random cut is likely to land in the empty gap between it and everyone else. Averaged over many trees, a <strong>short path means odd</strong>.</p>
+        <p>The average path length is turned into a score between 0 and 1: around 0.5 is a typical point, near 1 is strongly anomalous. No fixed value means "fraud". There is no loss function to tune and no need to scale features.</p>
+        <p>Three knobs matter. <strong>Number of trees</strong>: 100 to 200 is plenty; more only smooths the ranking. <strong>Subsample size</strong> (often 256 rows per tree): this is a feature, not a shortcut. If every tree saw every row, similar anomalies would hide behind each other (<em>masking</em>); small samples thin the crowd, as Simulation 1 shows. <strong>Contamination</strong>, the expected share of anomalies: it only sets where the library draws the line and never changes the ranking, so ignore it and cut by review capacity instead (<a href="f3-imbalanced-data.html">F3.5</a>).</p>
+        <p>Each tree sees only a small sample, so millions of rows are fine on a laptop. Cuts are made along one feature at a time, so it can miss a point that is ordinary on each feature but odd in combination (high spend, very low income). And the features you give it decide what "anomalous" means: ratios such as today's spend over the 30-day average (<a href="f3-feature-engineering.html">F3.4</a>) do most of the work.</p>
       </div>
 
       <h3 class="sub" id="m-ae">Autoencoders: compress, rebuild, measure the miss</h3>
       <div class="prose">
         <p>An autoencoder is a network trained to output its own input through a narrow middle (<a href="f5-neurons-layers-and-backpropagation.html">F5.1</a>), so it keeps only shared structure, like a courier packing from a short checklist.</p>
-        <p>An unusual combination is rebuilt as the nearest normal-looking record, and <strong>that reconstruction error is the anomaly score</strong>. Large means "does not fit", not "is fraud". With linear layers it learns exactly <strong>PCA</strong>.</p>
+        <p>An unusual combination is rebuilt as the nearest normal-looking record, and <strong>that reconstruction error is the anomaly score</strong>. Large means "does not fit", not "is fraud". With linear layers it learns exactly <strong>PCA</strong>; non-linear layers let it bend that straight line into a curve, which is the whole gain.</p>
+        <p>The error can be split by feature, so the alert says <em>which</em> inputs did not fit. That is worth a lot to analysts and to explanation later. To set an alert line, take a high percentile (say the 99th) of the error on held-out normal data, then adjust to review capacity.</p>
       </div>
 
       <figure class="figure" id="fig-ae">
@@ -153,7 +156,9 @@
       </figure>
 
       <div class="prose">
-        <p>Capacity is the dial: a bottleneck as wide as the input lets the network copy, and too narrow rebuilds normal data poorly. Train on mostly clean, standardised data. Local outlier factor and Mahalanobis distance are simpler alternatives.</p>
+        <p><strong>Capacity is the dial.</strong> A bottleneck as wide as the input lets the network copy, so error is near zero for everything, fraud included. Too narrow and normal data rebuilds poorly too, which buries the signal in noise.</p>
+        <p>Train on mostly clean, standardised data. If a recurring fraud pattern is common in the training set, the network learns to rebuild it and stops flagging it. Categorical fields such as merchant type need encoding, which is where autoencoders get fiddly. A small network on a few hundred thousand rows trains on a CPU in minutes.</p>
+        <p>Simpler alternatives deserve a trial first. <strong>Mahalanobis distance</strong> is a correlation-aware distance from the centre and is hard to beat in low dimensions. <strong>Local outlier factor</strong> compares a point's local density with its neighbours', which finds outliers next to a dense cluster that a global method misses.</p>
       </div>
 
       <h3 class="sub" id="m-eval">How to tell whether it works</h3>
@@ -164,6 +169,7 @@
       <h3 class="sub" id="m-pca">PCA: compressing correlated features</h3>
       <div class="prose">
         <p>Banking tables are full of features that move together, like balances this month, last month and the month before. PCA finds the few underlying factors, ordered by how much spread each explains, so you keep the first few as the best straight-line summary. "90% of the variance" is not "90% of the useful information".</p>
+        <p>To choose how many components to keep, look at the cumulative-variance curve in Simulation 3, or better, keep the number that gives the best result in the downstream model. The method assumes the structure is <strong>linear</strong> and that variance means signal. Both can be wrong: a few extreme records can tilt the components, and a low-variance direction may be the one that matters. It costs almost nothing. Rebuilding rows from the kept components also gives an explainable anomaly score.</p>
       </div>
 
       <figure class="figure" id="fig-pca">
@@ -197,6 +203,7 @@
       <div class="prose">
         <p>PCA is limited to straight lines. <strong>t-SNE</strong> and <strong>UMAP</strong> draw curved or messy data in 2-D so that neighbours stay neighbours, like a seating plan that keeps friends at the same table but ignores how far apart the tables are.</p>
         <p>They keep <strong>who is near whom</strong> and little else. Cluster size means nothing, gaps mean little, and settings or random starts can change the story.</p>
+        <p>The main knob is <strong>perplexity</strong> in t-SNE, or <code>n_neighbors</code> in UMAP: roughly how many neighbours each point cares about. Low values break one population into islands; high values blur groups together. Try several, from about 5 to 50. UMAP adds <code>min_dist</code>, which controls how tightly points pack. UMAP is faster on large data, keeps somewhat more of the overall layout, and can place new points on an existing map. Standard t-SNE cannot, so a map for monitoring needs UMAP or a re-run.</p>
       </div>
 
       <figure class="figure" id="fig-tsne">
@@ -225,6 +232,42 @@
       <div class="prose">
         <p>Use them to explore, not to prove. Cluster in the original or PCA space, then draw the result on the map.</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Finding what nobody labelled.</strong> It needs no fraud labels, only a picture of normal, so it can flag a brand-new attack that no supervised model has seen.</li>
+          <li><strong>Cold starts.</strong> A new channel has no fraud history, but normal behaviour accumulates fast.</li>
+          <li><strong>Cheap, fast baselines.</strong> An isolation forest needs no scaling, trains in seconds and scores millions of rows, because each tree only sees a small sample.</li>
+          <li><strong>Odd combinations.</strong> Autoencoders and PCA judge a record against the usual relationships between features, so a customer with ordinary numbers in an unusual mix still stands out.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when</strong></p>
+        <ul>
+          <li><strong>You have good labels for the thing you care about.</strong> A supervised model (F4.3) learns exactly which unusual patterns are fraud. The detector only knows "rare".</li>
+          <li><strong>Fraud looks normal, or is common.</strong> Fraud that mimics typical customers, or a pattern frequent enough to enter the training data, is learned as normal.</li>
+          <li><strong>Unusual is mostly innocent.</strong> VIP customers, payroll day and Ramadan all look odd. Precision can be poor, and analysts stop trusting the queue.</li>
+          <li><strong>You must explain each decision to a regulator or customer.</strong> "Odd" is a thin reason on its own. Per-feature error helps, but a rule or scorecard is easier to defend.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose</strong></p>
+      </div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+        <tbody>
+          <tr><td><b>Isolation forest</b></td><td>Tabular data, no labels, you want a fast first detector with little tuning</td><td>The oddness lives in feature combinations, or the data is images or text</td></tr>
+          <tr><td><b>Autoencoder</b></td><td>Many correlated features, or sequences and embeddings, where the shape of normal is complex</td><td>Small data, or you need quick, explainable results</td></tr>
+          <tr><td><b>PCA reconstruction error</b></td><td>Correlated numeric features and a need for a simple, explainable baseline</td><td>Relationships are strongly curved, or features are mostly independent</td></tr>
+          <tr><td><b>Mahalanobis or local outlier factor</b></td><td>Few features and moderate rows; a quick sanity check, or outliers sitting beside dense clusters</td><td>Dozens of features, or very large tables</td></tr>
+          <tr><td><b>Supervised gradient boosting</b></td><td>You have enough confirmed cases of the target</td><td>Labels are tiny, stale or biased toward what you already catch</td></tr>
+          <tr><td><b>t-SNE or UMAP</b></td><td>Exploring embeddings or segments by eye, and spotting duplicates</td><td>Proving cluster counts or sizes, or any model input that must be stable</td></tr>
+        </tbody>
+      </table></div>
+      <div class="prose">
+        <p><strong>In practice</strong></p>
+        <p>Start with an isolation forest on a few well-built behavioural features. Move to an autoencoder only if both miss something analysts care about. Cut the alert list by review capacity, grade the top 100 each cycle, and log the outcomes. That feedback is the labelled data you lacked, and it lets you move to a supervised model later (<a href="f3-imbalanced-data.html">F3.5</a>).</p>
+        <p>Sensible defaults: 100 to 200 trees and 256 rows per tree; an autoencoder bottleneck of a quarter to a half of the input width; standardised inputs; 90 to 95% of variance for PCA. All run on one machine.</p>
+        <p>In a bank this appears as new-pattern card and online-banking fraud monitoring, peer-group outliers in AML transaction monitoring, spotting unusual staff access, and data-quality checks on incoming feeds. PCA shows up in risk work to summarise correlated rates, and UMAP in exploring complaint-text embeddings.</p>
+      </div>
     </section>
 
 
@@ -237,6 +280,8 @@
         <li><div class="t">Unscaled features</div><p>Amount in fils dominates PCA or an autoencoder, so the "anomaly" is just the largest transaction.</p><div class="spot"><b>Spot it</b>Check which feature carries the error, then standardise.</div></li>
         <li><div class="t">Drift read as anomaly</div><p>Ramadan spending or salary days push scores up for everyone.</p><div class="spot"><b>Spot it</b>Plot the share flagged by week. A smooth rise across segments is seasonality.</div></li>
         <li><div class="t">Reading size and gaps off a t-SNE or UMAP plot</div><p>"Segment A is far more diverse than B" is usually an artefact.</p><div class="spot"><b>Spot it</b>Redraw with another perplexity or seed. If the claim changes, it was never real.</div></li>
+        <li><div class="t">Alerts with no reason attached</div><p>Analysts see a score of 0.93 and nothing else, so they cannot triage and stop trusting the queue.</p><div class="spot"><b>Spot it</b>Check whether each alert shows its top contributing features. If analysts ignore the list, this is why.</div></li>
+        <li><div class="t">Fitting the scaler or PCA before the split</div><p>Statistics from future or test data leak in, so offline scores look better than live ones.</p><div class="spot"><b>Spot it</b>Confirm the scaler and PCA sit inside the training pipeline and are fitted on training rows only.</div></li>
       </ul>
     </section>
 
@@ -249,6 +294,8 @@
         <details class="reveal"><summary>3. An autoencoder's bottleneck is as wide as its input. What happens?</summary><div class="ans"><p>It can copy its input, so error is near zero for everyone, fraud included. The bottleneck must be narrow enough that only common structure survives.</p></div></details>
         <details class="reveal"><summary>4. A customer is high on card spend and low on ATM cash, where the two normally move together. Is she an anomaly?</summary><div class="ans"><p>Yes, even though neither number is extreme alone. She is far from the line where normal customers sit, so her reconstruction error is large.</p></div></details>
         <details class="reveal"><summary>5. Name two things you must not conclude from a t-SNE plot.</summary><div class="ans"><p>That a bigger cluster is more diverse, or that clusters far apart are more different. Keep to "these points are neighbours".</p></div></details>
+        <details class="reveal"><summary>6. A card portfolio has three years of confirmed, labelled fraud. A new buy-now-pay-later channel launches with no labels. Which method do you pick for each, and why?</summary><div class="ans"><p>Use a supervised model such as gradient boosting for the card portfolio, since labels teach it which unusual patterns are fraud. For the new channel, start with an isolation forest, because there is nothing to train a classifier on.</p></div></details>
+        <details class="reveal"><summary>7. A steering committee wants one picture of customer segments and a count of how many there are. Would you use t-SNE, UMAP or PCA, and what do you tell them?</summary><div class="ans"><p>Cluster in the original or PCA space to get the count, and use UMAP or t-SNE only to draw it. PCA is the honest choice if sizes and gaps matter. Tell them the picture shows neighbours, not sizes or distances, and check that it holds under a different seed.</p></div></details>
       </div>
     </section>
 

@@ -102,16 +102,19 @@
       <h3 class="sub" id="m-metrics">Why rare events defeat the usual numbers</h3>
       <div class="prose">
         <p>Precision depends on how common fraud is, not just the model. Like a metal detector on a coin-poor beach, even a good one beeps mostly at bottle caps: a model catching 70% of fraud with a 1% false-alarm rate has only about <strong>26%</strong> real alerts at 0.5% fraud. <strong>ROC-AUC</strong> ignores the fraud rate; <strong>PR-AUC</strong> tracks alert workload, and a useless model scores about the fraud rate. Never quote PR-AUC without the fraud rate beside it. See <a href="f7-precision-recall-thresholds-calibration.html#m-curves">F7</a>.</p>
+        <p>Choose the headline metric from the decision. If analysts can review a fixed number of cases a day, report precision and recall at that alert volume. If a miss and a false alarm have known costs, report expected cost at the chosen threshold. ROC-AUC is fine for a quick ranking comparison, but its false-alarm axis is a share of legitimate transactions. A 1% rate looks tiny until you remember legitimate rows outnumber fraud 200 to 1.</p>
       </div>
 
       <h3 class="sub" id="m-ess">Your real sample size is the number of positives</h3>
       <div class="prose">
         <p>Five million rows feel like big data, but the information comes from the fraud rows: 20 shots tell you more about a footballer's finishing than 5,000 passes. Positives, not rows, limit model complexity and test precision. With 100 test frauds, recall is good to only about 8 points either way, so report intervals.</p>
+        <p>This sets how complex a model you can afford. With 200 positives, 300 features invite overfitting: use strong regularisation (penalising big coefficients), shallow trees, a low learning rate and a minimum number of positives per leaf. It also sets how you compare models. Bootstrap the test positives (F2.2) and say "not distinguishable on 40 cases" when true: 78% against 84% recall on 40 cases is noise. Doubling the legitimate rows changes little. Doubling the months of data, and so the positives, changes a lot.</p>
       </div>
 
       <h3 class="sub" id="m-resample">Weights, undersampling, oversampling, SMOTE</h3>
       <div class="prose">
-        <p>All of these stop the model ignoring the rare class: weights count each fraud row several times, undersampling drops legitimate rows, oversampling and SMOTE duplicate or invent frauds. The default to beat is doing nothing and choosing the threshold.</p>
+        <p>All of these stop the model ignoring the rare class. The default to beat is doing nothing and choosing the threshold.</p>
+        <p><strong>Class weights</strong> tell the loss that a missed fraud counts as several missed legitimate rows. No data is lost or invented, and most libraries expose it (<code>class_weight</code>, <code>scale_pos_weight</code>). Use it first if you use anything. <strong>Undersampling</strong> drops legitimate rows at random. It speeds up training on huge tables, but throws away information and makes the fit noisier; averaging several models, each trained on a different undersample, recovers much of that. <strong>Oversampling</strong> duplicates fraud rows. It is cheap, but a flexible model can memorise the copies, so duplicate only after the split. <strong>SMOTE</strong> invents new frauds by interpolating between a fraud and its nearest fraud neighbours. It suits numeric features, and struggles with categories, many dimensions, and classes that overlap, where it blurs the boundary.</p>
         <p>The side effect is inflated probabilities. Resampling changes how common fraud looks in training, not how well the model reads evidence. Keep 1 in 100 legitimate rows and the odds come out about 100 times too high: a shown 33% is really about 0.5%. The fix is to scale the odds back down (prior correction) or recalibrate on untouched data.</p>
       </div>
 
@@ -150,6 +153,7 @@
       <h3 class="sub" id="m-threshold">The threshold is the real lever</h3>
       <div class="prose">
         <p>A model gives a score; you choose where to draw the line, like smoke-alarm sensitivity. Moving it trades misses against false alarms along the same curve. Set it from business numbers: with a miss at AED 400 and a review at AED 40, alert above 10%. If capacity is the limit, alert on the top <i>k</i> scores a day (F7.3).</p>
+        <p>The 10% is simply review cost divided by cost of a miss, applied to a calibrated probability. Choose the cut on a validation set that looks like live data, and re-choose it when fraud rates, costs or analyst capacity change. Many banks use tiers rather than one line: block above a high score, ask for step-up authentication in the middle, queue for review below that, and let the rest pass.</p>
       </div>
 
             <figure class="figure" id="fig-thr">
@@ -185,7 +189,7 @@
 
       <h3 class="sub" id="m-split">Splitting without fooling yourself</h3>
       <div class="prose">
-        <p>Random splits mix tomorrow into yesterday: fine for benchmarks, rarely for live systems. Temporal splits match real use, at the cost of fewer positives per slice. Group splits keep a customer or device on one side, or the model memorises it.</p>
+        <p>Random splits mix tomorrow into yesterday: fine for benchmarks, rarely for live systems. Temporal splits match real use, at the cost of fewer positives per slice. Group splits keep a customer or device on one side, or the model memorises it. A sound design is walk-forward: train on months 1 to 9, validate on 10, then roll on, and keep one final forward slice untouched until the end. Stratifying (keeping fraud counts steady per fold) is worth doing inside that.</p>
       </div>
 
       <h3 class="sub" id="m-delay">Label delay: the fraud you cannot see yet</h3>
@@ -220,6 +224,37 @@
       <div class="prose">
         <p>This is why a model can shine in back-testing and disappoint in its first month: the test period had mature labels, the live period does not. When recall "falls", ask whether the labels have arrived. Also review a small random sample of unflagged transactions, since you confirm only what you alerted on.</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Rebalancing is strong at:</strong></p>
+        <ul>
+          <li><strong>Helping flexible models notice small pockets of fraud.</strong> Weights change the loss, so a tiny cluster of frauds matters to the fit instead of being averaged away.</li>
+          <li><strong>Cutting training time</strong> on tables with hundreds of millions of legitimate rows. Undersampling keeps the frauds and a slice of the rest.</li>
+          <li><strong>Rescuing weak or unstable learners</strong>, such as a plain decision tree or a small neural network, that otherwise predict "legitimate" every time.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>You need honest probabilities.</strong> Provisioning, expected loss and fixed alert rules all break unless you correct or recalibrate.</li>
+          <li><strong>Your model is already strong</strong> (gradient boosting with a tuned threshold). Gains are usually small, and the threshold does the real work.</li>
+          <li><strong>You have very few positives.</strong> Copies and synthetic points add no new information; 30 frauds stay 30 frauds.</li>
+          <li><strong>Labels are late or noisy.</strong> Resampling amplifies the noise, and cannot fix an unlabelled attack.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose:</strong></p>
+      </div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+        <tbody>
+          <tr><td><b>Do nothing, tune the threshold</b></td><td>Default for gradient boosting or logistic regression; ranking or cost-based alerts</td><td>The model ignores the rare class entirely</td></tr>
+          <tr><td><b>Class weights</b></td><td>Flexible model, small fraud pockets, no data to spare</td><td>You feed raw probabilities to a fixed rule</td></tr>
+          <tr><td><b>Undersampling (with bagging)</b></td><td>Huge tables, slow training, 1,000+ positives</td><td>Positives are few; discarded rows hold the signal</td></tr>
+          <tr><td><b>Oversampling or SMOTE</b></td><td>Weak learners, numeric features, tiny datasets as an experiment</td><td>Many categories, overlapping classes, or any leakage risk</td></tr>
+          <tr><td><b>Anomaly detection</b></td><td>Almost no labels, or novel attacks unlike past fraud</td><td>You have enough labels; supervised models win</td></tr>
+        </tbody>
+      </table></div>
+      <div class="prose">
+        <p><strong>In practice:</strong> train the plain model, pick the threshold from costs or capacity, then try weights and compare on a time-ordered test set with intervals. Keep resampling only if it wins by more than the interval. Most of the gain comes from better features and honest splits, not from resampling. In card fraud, rates of 0.1% to 0.5% are common, and teams often train on months of data with gradient boosting, recalibrated on a recent holdout. In AML, positives are rarer still and labels slower, so ranking for investigators matters more than calibration. In credit default, calibration matters most, because probabilities feed provisioning, so correct any resampling.</p>
+      </div>
     </section>
 
     <!-- ============================== 3. FAILS ============================== -->
@@ -231,6 +266,8 @@
         <li><div class="t">Using resampled probabilities as probabilities</div><p>Fed to a 10% alert rule or provisioning, they are many times too high.</p><div class="spot"><b>Spot it</b>Compare average predicted probability on a representative holdout with the actual fraud rate.</div></li>
         <li><div class="t">Random splits on drifting data, or repeating entities</div><p>Neat folds, then a poor first quarter live.</p><div class="spot"><b>Spot it</b>Ask for a forward-in-time test.</div></li>
         <li><div class="t">Treating missing labels as negatives</div><p>Recent transactions with no flag yet are used as legitimate.</p><div class="spot"><b>Spot it</b>Plot labelled rate by week. If the last weeks slope down, labels are still arriving.</div></li>
+        <li><div class="t">Comparing models without positive counts or intervals</div><p>Model B beats A by 3 points of recall on 60 cases. That is noise.</p><div class="spot"><b>Spot it</b>Ask for the positive count and an interval. At 60 cases, recall is good to about 10 points.</div></li>
+        <li><div class="t">Adding SMOTE or weights because "the data is imbalanced"</div><p>The strong model gains little, and the probabilities are now wrong.</p><div class="spot"><b>Spot it</b>Ask for the plain-model baseline with a tuned threshold, on the same untouched test set.</div></li>
       </ul>
     </section>
 
@@ -242,6 +279,8 @@
         <details class="reveal"><summary>2. You trained on all fraud rows and 1 in 50 legitimate rows. The model says 40%. Is the real probability higher or lower?</summary><div class="ans"><p>Much lower, nearer 1%. Legitimate rows were 50 times rarer in training, so fraud odds are overstated about 50 times. Correct them or recalibrate on untouched data.</p></div></details>
         <details class="reveal"><summary>3. Average chargeback delay is six weeks. You evaluate on the last two weeks and recall looks poor. Likely cause?</summary><div class="ans"><p>Most of those frauds are not yet labelled, so they count as legitimate. Embargo weeks younger than label maturity, or re-evaluate later.</p></div></details>
         <details class="reveal"><summary>4. When do you not need to correct probabilities after resampling?</summary><div class="ans"><p>When only ranking is used, such as sending the top 300 scores to analysts daily. Once a number meets a fixed threshold, an exposure or another model's score, correct it.</p></div></details>
+        <details class="reveal"><summary>5. You have 5 million transactions and 80 confirmed frauds. A colleague proposes SMOTE plus a deep network. Which would you choose and why?</summary><div class="ans"><p>A simple, regularised model (logistic regression or small boosted trees), a threshold from costs, and wide intervals. 80 positives limit complexity; SMOTE adds no new information, only interpolated copies. Spend effort on getting more labels and better features.</p></div></details>
+        <details class="reveal"><summary>6. Your bank wants every transaction above 10% fraud probability blocked. The model was trained with class weight 20. Do you retrain with resampling, move the threshold, or recalibrate? Which would you choose and why?</summary><div class="ans"><p>Recalibrate on an untouched, representative holdout (or apply the weight's prior correction), then keep the 10% rule. Moving the threshold also works for ranking, but the probability would still be wrong for provisioning or other uses. Retraining changes nothing about the miscalibration.</p></div></details>
       </div>
     </section>
 

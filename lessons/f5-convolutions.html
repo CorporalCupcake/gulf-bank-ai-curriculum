@@ -115,6 +115,8 @@
       <h3 class="sub" id="m-conv">Convolution: the operation, and why it is so cheap</h3>
       <div class="prose">
         <p>The filter multiplies the pixels under its window by its weights, adds them up and slides on. Because the same few weights are reused everywhere, the parameter count ignores image size. Padding keeps the map's size, stride shrinks it, and pooling keeps "was it there?" while dropping the exact position.</p>
+        <p>A colour image has three <strong>channels</strong> (red, green, blue), and a layer holds many filters, one output channel each. A 3×3 layer taking 3 channels to 16 has just 448 weights, whatever the picture. Padding adds a zero border so the map keeps its size. Stride moves the window several pixels at a time, which shrinks the map and cuts compute. Pooling takes the maximum or average over a small block, so a stamp that moves a few pixels gives the same answer. This is <strong>invariance</strong>: the output ignores small shifts.</p>
+        <p>The knobs that matter are filter size (3×3 is the default; stacking small filters beats one big one), channel count (width, which drives compute) and stride. Each filter's output goes through a nonlinearity such as ReLU, which is what lets stacks learn more than a single linear filter could.</p>
       </div>
 
       <figure class="figure" id="fig-share">
@@ -135,12 +137,13 @@
       </figure>
 
       <div class="prose">
-        <p>The saving rests on <strong>locality</strong> (a pixel is explained by its neighbours) and <strong>stationarity</strong> (a pattern can appear anywhere). These assumptions help with limited data, but fail for a table of unrelated columns, which is partly why gradient boosting still beats deep nets on tabular data.</p>
+        <p>The saving rests on <strong>locality</strong> (a pixel is explained by its neighbours) and <strong>stationarity</strong> (a pattern can appear anywhere). These assumptions help with limited data, but fail for a table of unrelated columns, which is partly why gradient boosting still beats deep nets on tabular data. Such assumptions are <em>inductive biases</em>: they limit what the network can represent, so it generalises better from limited data. Convolutions are also not rotation- or scale-invariant by themselves. Networks learn that from augmented examples, not from the architecture.</p>
       </div>
 
       <h3 class="sub" id="m-stack">Stacking layers: receptive fields and the feature hierarchy</h3>
       <div class="prose">
-        <p>The input region that can influence one unit is its <strong>receptive field</strong>. A plain stack of 3×3 layers grows it slowly, so ten layers see only 21 pixels across. Strides, pooling or dilated filters double the reach per layer.</p>
+        <p>The input region that can influence one unit is its <strong>receptive field</strong>. A plain stack of 3×3 layers grows it slowly, so ten layers see only 21 pixels across. Strides, pooling or <em>dilated</em> filters (spaced with gaps) double the reach per layer.</p>
+        <p>Depth builds a <strong>hierarchy</strong>: edges, then corners and textures, then parts, then whole objects such as a logo or a table. This is why a network trained on millions of photographs transfers well. Its early layers are generic, so you can freeze them and retrain only the last layers on a few thousand cheque images. That is <strong>transfer learning</strong>, and it is the usual first move in document vision.</p>
       </div>
 
       <figure class="figure" id="fig-rf">
@@ -166,18 +169,20 @@
 
       <h3 class="sub" id="m-conv1d">Convolutions beyond photographs</h3>
       <div class="prose">
-        <p>Anything laid out along a line or grid fits. Slid along a customer's transactions, a 1-D filter can learn "three small charges in a row"; scoring needs it <em>causal</em>, with no peeking at later steps. Statements, cheques and Emirates ID cards are pictures first, so convolutional backbones find text lines, stamps and signatures (<a href="b7-document-ai-for-trade-finance.html">B7</a>, <a href="a14-arabic-ocr-and-document-ai.html">A14</a>). The same family spots manipulated faces in eKYC (<a href="a3-deepfakes-against-ekyc-and-call.html">A3</a>).</p>
+        <p>Anything laid out along a line or grid fits. Slid along a customer's transactions, a 1-D filter can learn "three small charges in a row"; scoring needs it <em>causal</em>, with no peeking at later steps. Stack such layers with growing dilation and you get a <em>temporal convolutional network</em> (TCN), which trains in parallel across the whole sequence and often matches recurrent nets. Statements, cheques and Emirates ID cards are pictures first, so convolutional backbones find text lines, stamps and signatures (<a href="b7-document-ai-for-trade-finance.html">B7</a>, <a href="a14-arabic-ocr-and-document-ai.html">A14</a>). The same family spots manipulated faces in eKYC (<a href="a3-deepfakes-against-ekyc-and-call.html">A3</a>). Voice biometrics and call audio can be turned into time-frequency images and read the same way.</p>
       </div>
 
       <h3 class="sub" id="m-rnn">Recurrent networks: reading one event at a time</h3>
       <div class="prose">
         <p>A recurrent neural network (RNN) keeps a hidden state as memory, a running tally rewritten after every event from the old tally plus the new input.</p>
-        <p>Training is the trouble. The learning signal passes back through every step and shrinks a little each time, so it all but vanishes after about 30 steps. That is the <strong>vanishing gradient</strong>. A plain RNN learns short-range structure and struggles to link distant events.</p>
+        <p>Training is the trouble. The learning signal passes back through every step and shrinks a little each time, so it all but vanishes after about 30 steps. That is the <strong>vanishing gradient</strong>. A plain RNN learns short-range structure and struggles to link distant events, which is the very thing it was built for.</p>
+        <p>The weights are shared across time steps, just as a filter is shared across positions, so the network handles any sequence length. You can read the state after the last event to score a customer, or after every event for a running risk score. The opposite failure, a signal that grows without limit, is the <strong>exploding gradient</strong>. Gradient clipping fixes that cheaply. Vanishing is structural and needs a different design.</p>
       </div>
 
       <h3 class="sub" id="m-lstm">LSTM and GRU: gates that protect the memory</h3>
       <div class="prose">
-        <p>The LSTM adds a <strong>cell state</strong> updated by adding rather than repeated squashing, like editing lines in a notebook instead of rewriting every page. Learned gates decide what to forget, write and expose, so the signal survives while the forget gate stays open. The GRU is a lighter version with two gates.</p>
+        <p>The LSTM adds a <strong>cell state</strong> updated by adding rather than repeated squashing, like editing lines in a notebook instead of rewriting every page. Learned gates decide what to forget, write and expose, so the signal survives while the forget gate stays open. The GRU is a lighter version with two gates: fewer parameters, usually similar accuracy, and faster to train. A forget gate can hold a "new device" flag for fifty events and drop it when a trusted login arrives. Choose between them empirically; neither wins reliably.</p>
+        <p>Practical knobs are hidden size (memory capacity; 32 to 256 is typical for transaction data), number of layers (one or two is enough), dropout, and the length of the training window. Be honest about the limit: "remembers" means "can be trained to use". LSTMs still forget over hundreds of steps, and their recall is weaker than attention's direct lookup. Training also has to be sequential, so it cannot use a GPU as fully as a convolution or transformer can.</p>
       </div>
 
       <figure class="figure" id="fig-grad">
@@ -201,12 +206,52 @@
       </figure>
 
       <div class="prose">
-        <p>A recurrent model is also a streaming state machine, needing only one small stored vector per customer, which is why it survives in low-latency scoring.</p>
+        <p>A recurrent model is also a streaming state machine, needing only one small stored vector per customer, which is why it survives in low-latency scoring. Each update costs the same however long the history, so you never re-read old events.</p>
       </div>
 
       <h3 class="sub" id="m-after">Why attention displaced both, and where they still win</h3>
       <div class="prose">
         <p>Recurrent nets are sequential and squeeze the whole past into one vector. Attention (F5.5) lets every position look directly at every other, which parallelises well but costs more on long sequences. Convolutions stay strong in vision when data is limited (<a href="p3-quantization-pruning-and-distillation.html">P3</a>). For short customer histories and tight latency, a small GRU, LSTM or TCN is a sensible alternative to a transformer.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Learning from modest data.</strong> Locality and weight sharing mean far fewer parameters to fit, so thousands of labelled images can be enough, especially with a pretrained backbone.</li>
+          <li><strong>Local patterns anywhere in the input.</strong> One filter finds a stamp, a spike or a burst of small charges wherever it occurs, with no need to see each position in training.</li>
+          <li><strong>Speed and cheap compression.</strong> Convolutions are fully parallel and map well to GPUs and phones, and they quantise and prune well (<a href="p3-quantization-pruning-and-distillation.html">P3</a>).</li>
+          <li><strong>Streaming scoring (recurrent nets).</strong> One small state per customer and constant work per event suits real-time card authorisation.</li>
+          <li><strong>Variable-length sequences.</strong> A recurrent net takes 3 events or 300 with the same weights.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when</strong></p>
+        <ul>
+          <li><strong>Tabular data.</strong> Columns have no neighbours, so locality is a false assumption. Use gradient boosting.</li>
+          <li><strong>Long-range links.</strong> A convolution sees only its receptive field, and a plain RNN forgets beyond about 30 steps. LSTMs stretch that, but not to hundreds.</li>
+          <li><strong>Global context.</strong> Understanding a whole document layout or a long conversation needs attention, which looks at everything directly.</li>
+          <li><strong>Very little data and no pretrained model.</strong> A deep net trained from scratch on 500 samples will memorise them.</li>
+          <li><strong>Explanations regulators will read.</strong> Filters and hidden states are hard to explain. Occlusion maps help but are weaker evidence than a scorecard's reason codes.</li>
+        </ul>
+      </div>
+
+      <div class="prose"><p><strong>Alternatives and how to choose</strong></p></div>
+      <div class="table-wrap" style="margin-top:16px"><table class="data">
+        <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+        <tbody>
+          <tr><td>CNN (2-D)</td><td>Images, scans, spectrograms; limited data; on-device or low-cost inference</td><td>Tabular data, or you need whole-page reasoning</td></tr>
+          <tr><td>TCN (causal 1-D CNN)</td><td>Fixed-length windows of recent events; fast parallel training; stable results</td><td>The signal sits beyond its receptive field, or histories vary widely in length</td></tr>
+          <tr><td>GRU or LSTM</td><td>Streaming per-customer state; short to medium histories; small team and tight latency</td><td>Very long sequences, or you want to train fast on big GPUs</td></tr>
+          <tr><td>Transformer</td><td>Long context, lots of data, pretrained models available, global relationships</td><td>Small data, strict latency or tiny memory budgets</td></tr>
+          <tr><td>Gradient boosting on hand-built features</td><td>Tabular transaction data; the first baseline; audit needs</td><td>Raw images or audio, where features can't be hand-built</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="prose">
+        <p><strong>In practice</strong></p>
+        <p><strong>Try first:</strong> a boosted-tree baseline on aggregate features (counts and amounts over 1 hour, 1 day and 30 days). Move to a sequence model only if it clearly beats that on a customer-grouped, forward-in-time split. For images, start from a pretrained backbone and fine-tune; training from scratch is rarely worth it.</p>
+        <p><strong>Defaults and knobs:</strong> 3×3 filters, dilation doubling per layer (1, 2, 4, 8) and causal padding for TCNs; a one- or two-layer GRU with hidden size around 64 and gradient clipping for recurrent models. Receptive field and hidden size are the knobs that matter most. Check the receptive field before you tune anything else.</p>
+        <p><strong>Scale:</strong> fine-tuning a document CNN needs a few thousand labelled images and a single GPU. A sequence model on transactions wants hundreds of thousands of customers with fraud labels, and fraud is rare, so expect to weight or resample.</p>
+        <p><strong>In banking:</strong> CNN backbones sit under cheque, ID and statement processing and eKYC liveness checks. GRU or TCN models score card or payment sequences next to a boosted-tree model, usually as an extra feature or an ensemble member rather than a replacement. Forecasting and chat assistants have mostly moved to transformers.</p>
       </div>
     </section>
 
@@ -218,6 +263,7 @@
         <li><div class="t">Weak evaluation</div><p>Splitting by transaction puts the same cardholder in train and test, and a deep model without a boosted-tree baseline may not justify its serving cost.</p><div class="spot"><b>Spot it</b>Check card IDs across the split, the test period (F4.3) and the baseline.</div></li>
         <li><div class="t">Receptive field shorter than the pattern</div><p>The fraud signature spans 80 events; the network sees 15.</p><div class="spot"><b>Spot it</b>Work out the receptive field from the layer settings, as in Simulation 3.</div></li>
         <li><div class="t">Shortcut learning and format shift</div><p>A cheque classifier learns the scanner's border, not the forged signature, or meets angled phone photos after training on clean scans.</p><div class="spot"><b>Spot it</b>Test on scans from another branch, scanner or channel, and occlude regions to see what drives the output.</div></li>
+        <li><div class="t">Training on too few fraud cases</div><p>With a fraud rate under 0.1%, a sequence model can learn to say "legitimate" always and still look accurate. Or it memorises the handful of positives it saw.</p><div class="spot"><b>Spot it</b>Look at precision and recall at a fixed alert volume, not accuracy, and compare with the baseline on the same alerts.</div></li>
         <li><div class="t">Stale state and padding</div><p>Stored state comes from an old model version, or padding is treated as real events.</p><div class="spot"><b>Spot it</b>Version the state with the model and check that padding differently does not change the score.</div></li>
       </ul>
     </section>
@@ -232,6 +278,7 @@
         <details class="reveal"><summary>3. Why does a plain RNN struggle to link an event 30 steps back, and how does a gated cell help?</summary><div class="ans"><p>The learning signal shrinks at every step on the way back. A gated cell updates its memory by adding, so the signal survives while the forget gate stays near 1.</p></div></details>
         <details class="reveal"><summary>4. A 1-D conv fraud model with symmetric padding scores brilliantly offline. What is likely wrong?</summary><div class="ans"><p>It sees later events, including the fraud itself. Use causal padding and re-test.</p></div></details>
         <details class="reveal"><summary>5. When would you choose a GRU or TCN over a transformer for transaction data?</summary><div class="ans"><p>With short histories, strict latency, modest data and a small per-customer state, and only if it beats a boosted-tree baseline under a customer-grouped, forward-in-time split.</p></div></details>
+        <details class="reveal"><summary>6. You have 200,000 customers with 18 months of card history and a working boosted-tree model. Would you add a GRU, a TCN or a transformer? Why?</summary><div class="ans"><p>Try a GRU or TCN first, as an extra model whose output feeds the boosted-tree model or an ensemble. The data is large enough for it, latency is likely tight, and histories are short. A transformer adds cost and only pays off with much more data or long context. Keep the boosted-tree model as the baseline.</p></div></details>
       </div>
     </section>
 

@@ -119,13 +119,16 @@
 
       <h3 class="sub" id="m-tree">A decision tree: impurity, gain and greedy growth</h3>
       <div class="prose">
-        <p>A node's <strong>impurity</strong> measures how mixed it is: all one flavour is pure, half and half is mixed. The <strong>gain</strong> of a split is how much cleaner the two children are than the parent. The tree takes the largest gain, repeats inside each half, and predicts the leaf's average.</p>
-        <p>A tree is a step function with <strong>no extrapolation</strong>: above the training maximum you get the top bracket's answer. Interactions come free and scale doesn't matter. Default impurity importance favours many-valued features (F8 has better attributions).</p>
+        <p>A node's <strong>impurity</strong> measures how mixed it is: all one flavour is pure, half and half is mixed. The usual measure, Gini, is the chance that two transactions drawn at random from the node have different labels. The <strong>gain</strong> of a split is how much cleaner the two children are than the parent, weighted by their size. The tree tries every feature and every cut-off, takes the largest gain, repeats inside each half, and predicts the leaf's average: "7 of 40 customers like this defaulted, so 17.5%".</p>
+        <p>Growth stops when a node is pure, too small or too deep. Those stopping rules are the tree's main knobs. Maximum depth caps how many questions can be chained. Minimum rows per leaf stops the tree carving out three customers. Pruning grows a big tree and then cuts back branches that do not earn their keep. Without any of these, a tree reaches near-perfect training accuracy and poor live accuracy.</p>
+        <p>A tree is a step function with <strong>no extrapolation</strong>: above the training maximum you get the top bracket's answer. Interactions come free, because a split under a split is an interaction ("large amount, new beneficiary, at night"). Only the order of values matters, so scaling, logs and outliers change nothing, and most libraries cope with missing values. The cost is instability: a few changed rows can reshuffle the whole tree. Default impurity importance also favours many-valued features (F8 has better attributions).</p>
       </div>
 
       <h3 class="sub" id="m-forest">Random forests: bagging and decorrelation</h3>
       <div class="prose">
         <p>Think of a jury: twelve people who saw different evidence will rarely share one blind spot. Each tree trains on a bootstrap sample of rows (F2.2) and each split sees a random subset of features, then the votes are averaged. Averaging removes each tree's individual mistakes but not shared ones, which is why the randomness makes trees less alike. A forest is a strong, forgiving first baseline.</p>
+        <p>Four knobs matter. <strong>Number of trees</strong>: more never hurts, and a few hundred is usually enough. <strong>Features tried per split</strong>: the main decorrelation dial. The square root of the feature count is a common start for classification; fewer makes trees more different but individually weaker. <strong>Minimum rows per leaf</strong>: raise it for noisy or rare-event data. <strong>Depth</strong>: forests tolerate deep trees, because averaging absorbs their variance.</p>
+        <p>The rows a tree never saw give a free <strong>out-of-bag</strong> error estimate, with no separate validation split. Trees train independently, so training parallelises well. The costs are size (hundreds of deep trees are bulky and slower to score), limited accuracy on very high-signal problems where boosting wins, and the same flat extrapolation as one tree.</p>
       </div>
 
       <figure class="figure" id="fig-bag">
@@ -153,8 +156,9 @@
       <h3 class="sub" id="m-boost">Gradient boosting: fit the mistakes, a little at a time</h3>
       <div class="prose">
         <p>Boosting is a relay of small corrections. Start with the average default rate, measure what is still wrong, fit a small tree to that, add a fraction of it (the <strong>learning rate</strong>, typically 0.01 to 0.1), and repeat. Unlike a forest, more rounds <em>can</em> hurt, hence early stopping.</p>
-        <p>XGBoost, LightGBM and CatBoost are the main libraries: XGBoost is the safe default, LightGBM the fastest on large tables, CatBoost the best with many categorical fields. Boosted scores rank well but may not be calibrated (F7.4).</p>
-        <p>The knobs that matter: learning rate with early stopping, depth (3 to 8), minimum rows per leaf (the strongest guard against fitting a few customers), row and column subsampling, and monotone constraints (risk never falls as days-past-due rises).</p>
+        <p>The trees are deliberately <strong>weak</strong>, so the ensemble keeps low bias without any one tree dominating. Because each tree targets what the last ones got wrong, boosting attacks bias and variance together. It is also why it is more sensitive to noisy labels than a forest: it will keep trying to fit them. XGBoost also penalises its leaf values (λ) and charges a price (γ) for each extra split, so small noisy leaves are shrunk and a split must earn its keep.</p>
+        <p>XGBoost, LightGBM and CatBoost are the main libraries. XGBoost is the safe, widely documented default. LightGBM bins values into histograms and grows the best leaf first, which makes it fastest on large tables, but it can overfit small data unless leaf count and minimum rows per leaf are set sensibly. CatBoost handles categorical fields (merchant, branch, product code) natively and guards against a subtle target-leakage trap when encoding them. Boosted scores rank well but may not be calibrated (F7.4).</p>
+        <p>The knobs that matter, in order: learning rate with early stopping (they trade off, so fix the rate near 0.05 and let early stopping pick the rounds), depth (3 to 8 covers most bank problems; depth 1 allows no interactions), minimum rows per leaf (the strongest guard against fitting a few customers; on rare-event data let a leaf hold several positives), row and column subsampling (about 0.7 each, borrowed from forests), and monotone constraints (risk never falls as days-past-due rises).</p>
       </div>
 
       <figure class="figure" id="fig-boost">
@@ -191,7 +195,8 @@
       <h3 class="sub" id="m-reg">Regularisation: L2, L1 and early stopping</h3>
       <div class="prose">
         <p><strong>Regularisation</strong> fits the training data a little worse so the model does better on new data. <strong>L2 (ridge)</strong> shrinks every coefficient smoothly, never to zero, and shares weight between correlated features. <strong>L1 (lasso)</strong> pushes weak coefficients exactly to zero, so it selects features.</p>
-        <p>The penalty λ says how strongly you believe effects are small. Choose it by cross-validation (F4.5): the best value is the bottom of the test-error curve, not an extreme.</p>
+        <p>Why it works: with many flexible parameters and few examples, coefficients are mostly noise. Shrinking trades a little bias for a bigger cut in variance (F4.1). The penalty λ says how strongly you believe effects are small: bigger means simpler and more biased, smaller means flexible and noisy. Choose it by cross-validation (F4.5): the best value is the bottom of the test-error curve, not an extreme. Standardise features first, or the penalty punishes whichever feature happens to use big units.</p>
+        <p>Pick ridge when most features carry a little signal and many are correlated. Pick lasso when you believe only a few matter and want a shorter model. Elastic net mixes both. With a correlated pair, lasso keeps one and drops the other somewhat arbitrarily, so a dropped feature is not proof it does not matter.</p>
       </div>
 
       <figure class="figure" id="fig-reg">
@@ -228,6 +233,44 @@
       <div class="prose">
         <p>Tree models limit memorisation in three ways: structural limits and shrinkage (depth, rows per leaf, a small learning rate, λ and α on leaf values), randomisation (row and column subsampling) and early stopping on a validation set. That validation set has influenced the model, so keep a separate test touched once, later in time (F4.6).</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Mixed tabular data.</strong> Trees take numbers, categories and missing values with little preparation, and splits are insensitive to scale and outliers. That removes most of the cleaning a linear model needs.</li>
+          <li><strong>Interactions and non-linearity.</strong> Chained splits capture "large amount and new beneficiary and night" without you specifying it. A linear model needs each interaction hand-built.</li>
+          <li><strong>Accuracy per unit of effort.</strong> Boosting with sensible defaults is hard to beat on tables of a few thousand rows and up. It combines low bias (many corrections) with controlled variance (shrinkage, subsampling).</li>
+          <li><strong>Robust first baseline.</strong> A forest needs little tuning, gives an out-of-bag estimate for free and rarely fails badly.</li>
+          <li><strong>Constraints you can impose.</strong> Monotone constraints and SHAP explanations make boosted models acceptable where the business needs to defend a score.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>Extrapolation and trends.</strong> Predictions go flat outside the training range. For growing balances, inflation or long-range forecasts, use a linear or time-series model, or model a trend first and fit trees to the residual.</li>
+          <li><strong>Unstructured data.</strong> Images, audio and free text need neural networks or embeddings. Trees can use those embeddings as inputs, though.</li>
+          <li><strong>Very small data.</strong> With a few hundred rows or a handful of positives, deep trees memorise. A regularised linear model is steadier.</li>
+          <li><strong>Strict transparency.</strong> One shallow tree can be read aloud; an ensemble of hundreds cannot. If a rule must be written on a letter to a customer, you need a scorecard, a simple tree or a post-hoc explanation layer.</li>
+          <li><strong>Smooth, additive signals with heavy noise.</strong> A tree ensemble approximates a straight line with a staircase, which wastes data. Linear models are more efficient here.</li>
+        </ul>
+        <p>Why these limits hold: a tree only ever says "which bracket is this row in?", so it has no notion of direction or slope beyond the data it has seen.</p>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Gradient boosting</b></td><td>Tabular data, enough rows, ranking quality matters (fraud, PD, churn).</td><td>Tiny data, strong trends, or no room for explanation tooling.</td></tr>
+            <tr><td><b>Random forest</b></td><td>You want a robust baseline fast, with little tuning and an out-of-bag check.</td><td>You need the last bit of accuracy, or tiny, quick-to-score models.</td></tr>
+            <tr><td><b>Single shallow tree</b></td><td>The rule itself must be read, audited or taught.</td><td>You need accuracy; one tree is unstable.</td></tr>
+            <tr><td><b>Regularised logistic / scorecard</b></td><td>Regulated credit, small data, monotone and explainable by design, or a clear trend.</td><td>Strong interactions you cannot hand-build.</td></tr>
+            <tr><td><b>Neural network</b></td><td>Text, images, sequences, or very large data with learned embeddings.</td><td>Ordinary tables: it rarely beats boosting and costs more to tune.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice:</strong> start with a regularised logistic model as a reference and a forest as a baseline, then tune a boosted model. Use a learning rate near 0.05, depth 4 to 6, minimum rows per leaf in the tens or hundreds, subsampling 0.7 and early stopping on a later-in-time validation set. Use AUC or PR-AUC to compare models and check calibration before using scores as probabilities (F7.4).</p>
+        <p>Compute is modest. A boosted model on a million rows and a hundred features trains in minutes on a laptop-class machine, and scoring takes milliseconds, enough for real-time card checks. Below a few thousand rows, prefer simpler models.</p>
+        <p>In banks, boosting is the workhorse for card fraud scoring, AML alert prioritisation, probability of default and propensity models. Regulated credit decisions often keep a logistic scorecard, or a boosted model with monotone constraints and SHAP, because model-risk teams ask for explanations.</p>
+      </div>
     </section>
 
 
@@ -240,6 +283,8 @@
         <li><div class="t">Leakage a tree finds instantly</div><p>A field filled in after the outcome becomes the top split.</p><div class="spot"><b>Spot it</b>One feature with huge importance and near-perfect AUC.</div></li>
         <li><div class="t">Reading importance or lasso picks as true drivers</div><p>Impurity importance favours noisy, many-valued features, and lasso's pick among correlated features is partly arbitrary.</p><div class="spot"><b>Spot it</b>Add a random-noise column and see where it ranks. Prefer permutation importance or SHAP (F8).</div></li>
         <li><div class="t">Expecting trees to extrapolate, or over-tuning on few positives</div><p>Predictions go flat beyond the training range, and a search that wins by 0.004 AUC on 200 defaults is noise.</p><div class="spot"><b>Spot it</b>Plot predictions beyond the range; compare the gain with the metric's interval (F2.2).</div></li>
+        <li><div class="t">Treating boosted scores as probabilities</div><p>Boosting ranks well but its raw scores are often over- or under-confident, especially after reweighting rare classes.</p><div class="spot"><b>Spot it</b>Plot predicted against observed rates by decile. Recalibrate on held-out data before pricing or setting thresholds (F7.4).</div></li>
+        <li><div class="t">Drift after deployment</div><p>The model learned last year's fraud patterns, and trees give no warning when inputs shift.</p><div class="spot"><b>Spot it</b>Monitor score distributions and feature ranges monthly. A fall in live AUC or a shift in the flag rate means retrain or investigate.</div></li>
       </ul>
     </section>
 
@@ -253,6 +298,8 @@
         <details class="reveal"><summary>3. Two correlated features both predict default. What do lasso and ridge do as the penalty rises?</summary><div class="ans"><p>Ridge shrinks both together. Lasso tends to keep one and zero the other, and which survives can flip with a new sample. A dropped feature is not proof it doesn't matter.</p></div></details>
         <details class="reveal"><summary>4. You pick boosting rounds by early stopping on the test set, then report test AUC. What is wrong?</summary><div class="ans"><p>The test set influenced the model, so the AUC is optimistic. Use train, validation (stopping and tuning) and a test scored once.</p></div></details>
         <details class="reveal"><summary>5. A forest predicts spend for incomes above anything in training. What goes wrong?</summary><div class="ans"><p>Trees don't extrapolate: the prediction is flat at the top leaf's value, so spend is underestimated. Add a linear or trend component.</p></div></details>
+        <details class="reveal"><summary>6. Credit risk, 8,000 loans, 150 defaults, strict explainability. Scorecard or boosting, and why?</summary><div class="ans"><p>Start with a regularised logistic scorecard. 150 events is too few for boosting to beat it reliably, and it is explainable by design. Boosting with monotone constraints is worth testing as a challenger if the gain beats the metric's confidence interval.</p></div></details>
+        <details class="reveal"><summary>7. Card fraud, 5 million rows, 0.2% fraud, 80 mixed features, 20 ms to score. Forest or boosting?</summary><div class="ans"><p>Boosting. It handles mixed features and many rows, and shallow trees score in milliseconds. Use a forest as a baseline, and judge by PR-AUC or recall at a fixed alert rate on a later-in-time test set.</p></div></details>
       </div>
     </section>
 
