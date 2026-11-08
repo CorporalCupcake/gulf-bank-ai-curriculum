@@ -75,27 +75,26 @@
         <span>About 40 minutes</span>
       </div>
       <h1>Point-in-Time Correctness and Leakage</h1>
-      <p class="dek">Why a bank model can score 0.98 in testing and 0.60 in production, how to know what the bank actually knew on the day of a decision, and the checks that catch a result that is too good to be true.</p>
+      <p class="dek">Why a bank model can score 0.98 in testing and 0.60 in production, and how to catch a result that is too good to be true.</p>
     </header>
 
     <div class="mobile-toc">
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model may only use what the bank knew at the moment it had to decide, so every feature, every join and every split has to be rebuilt as of that moment, or the test score measures how well you can read the answer key.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model may only use what the bank knew at the moment it had to decide, or the test score measures how well you can read the answer key.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A risk team builds a model to predict which new applicants will be 90 days past due within three months. Test <strong>AUC is 0.98</strong>. After a quarter live, it is <strong>0.60</strong>.</p>
-        <p>The culprit was one input, <em>average daily balance over the last 30 days</em>. The training table was built in September, so "last 30 days" meant the 30 days before the extract, not before each application. For a customer who applied in May and defaulted in July, it included the weeks when the balance collapsed. The model learned that a collapsing balance predicts default: true, and useless at decision time.</p>
-        <p>It is like sitting an exam with the answer key in your bag. The mark is real but measures nothing. That is <strong>leakage</strong>: information in the training or test data that wasn't available when the real decision was made. It is about <em>when</em>, not <em>what</em>.</p>
+        <p>A risk team builds a model to predict 90-days-past-due. Test <strong>AUC is 0.98</strong>; a quarter live, it is <strong>0.60</strong>. The culprit was "average balance over the last 30 days", computed from the extract date, not each application date. For a customer who defaulted, it included the weeks when the balance collapsed.</p>
+        <p>It is like sitting an exam with the answer key in your bag. That is <strong>leakage</strong>: information in the data that was not available when the real decision was made. It is about <em>when</em>, not <em>what</em>. The leaked value is a correct number for the wrong dates, so staring at it will not reveal it.</p>
       </div>
 
       <figure class="figure" id="fig-cutoff">
         <div class="fig-head"><span class="fig-title">Moving the feature cut-off past the decision</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> the cut-off starts 30 days <em>after</em> the decision. Drag it to 0 and validation falls to meet live. Push it far past the decision and validation climbs while live sinks.</p>
+        <p class="try"><b>Try:</b> drag the cut-off to 0 and validation falls to meet live. Push it past the decision and validation climbs while live sinks.</p>
         <div class="chart-wrap" id="cut-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-tau">Last day of data used by the feature, relative to the decision <output for="s-tau"></output></label><input type="range" id="s-tau" min="-30" max="60" step="5" value="30"></div>
@@ -108,17 +107,10 @@
           <div class="stat"><div class="k">Clean model</div><div class="v" id="st1-clean"></div><div class="s">cut-off exactly at decision</div></div>
         </div>
         <p class="verdict" id="s1-verdict"></p>
-        <p class="sim-note">Simulated: one honest feature (AUC 0.76 alone) and one built from data past the decision date that gives away more of the outcome the longer it runs. Live, the second is noise. Exact large-sample values. Cutting off earlier costs the honest feature up to 20% of its strength at 30 days (an assumption).</p>
+        <p class="sim-note">Simulated: one honest feature and one built from post-decision data, which is noise live. Cutting off earlier costs the honest feature some strength (an assumption).</p>
       </figure>
 
-      <div class="prose">
-        <ul>
-          <li><strong>The leaky value wasn't wrong data.</strong> It was a correct balance for the wrong dates, so staring at the value won't reveal it.</li>
-          <li><strong>Test score up, live score down.</strong> The more the model leans on the leak, the better it looks and the worse it is. Live, that weight sits on a feature that is just noise, so the model can end up worse than a clean one.</li>
-          <li><strong>Stale costs little; peeking costs everything.</strong> A month-old feature loses a little signal. A feature a month ahead gives away the answer. When unsure, be conservative.</li>
-        </ul>
-      </div>
-      <div class="callout key"><span class="k">Hold onto this</span>For every number the model sees, ask: when did the bank first know this, and was that before the decision? If you can't answer, don't use it.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>For every number the model sees, ask: when did the bank first know this, and was that before the decision? If you cannot answer, do not use it.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -127,70 +119,25 @@
 
       <h3 class="sub" id="m-clocks">Three clocks: event, knowledge and decision time</h3>
       <div class="prose">
-        <p>Most leakage comes from confusing three times attached to every warehouse row. Think of a letter: written, posted, read.</p>
-        <ul>
-          <li><strong>Event time:</strong> when it happened in the world. The raise took effect 1 March.</li>
-          <li><strong>Knowledge time:</strong> when the bank's systems first held the fact. The HR letter was uploaded 22 April.</li>
-          <li><strong>Decision time:</strong> when the bank had to act, such as the application or the card authorisation.</li>
-        </ul>
-        <p>The rule: <strong>a value may feed a decision only if its knowledge time is on or before the decision time.</strong> Not its event time.</p>
-        <p>The label has its own clock: default within a <strong>performance window</strong> after the decision. Features sit left of the decision line, the label right, with no overlap.</p>
-        <p><strong>Availability lag</strong> is the quieter cousin. Train on yesterday's closing balance, deploy on a feed two days old, and train and live disagree. Define each feature by when it is <em>available</em>, not when it is true.</p>
+        <p>Every warehouse row has three times, like a letter that is written, posted and read. <strong>Event time</strong> is when it happened (a raise on 1 March). <strong>Knowledge time</strong> is when the bank's systems first held it (the HR letter uploaded 22 April). <strong>Decision time</strong> is when the bank had to act.</p>
+        <p>The rule: a value may feed a decision only if its <strong>knowledge time</strong> is on or before the decision time, not its event time. Define each feature by when it is <em>available</em>, not when it is true.</p>
       </div>
 
       <h3 class="sub" id="m-leak">What leakage looks like</h3>
       <div class="prose">
-        <p>Something from beyond the decision boundary reaches the model.</p>
-      </div>
-      <div class="table-wrap" style="margin-top:16px">
-        <table class="data">
-          <thead><tr><th>Type</th><th>Bank example</th><th>Why it inflates the score</th></tr></thead>
-          <tbody>
-            <tr><td><b>Target leakage</b><br><small>a feature that is a consequence of the label</small></td><td>"Collections stage" or "account blocked" on a default model. "SAR filed" on an AML model.</td><td>Set <em>because</em> the outcome happened.</td></tr>
-            <tr><td><b>Temporal leakage</b><br><small>a window that runs past the decision</small></td><td>"Last 30 days" computed at extract date, not decision date.</td><td>The future is inside the feature. Simulation 1.</td></tr>
-            <tr><td><b>Restated or backfilled data</b></td><td>A bureau score for 31 March corrected in June. A salary backdated by an HR letter.</td><td>The warehouse holds today's best knowledge. Simulation 2.</td></tr>
-            <tr><td><b>Train-test contamination</b></td><td>The same customer, device or fraud ring on both sides of a random split.</td><td>The model recognises the entity, not the pattern. Simulation 3.</td></tr>
-            <tr><td><b>Preprocessing leakage</b></td><td>Feature selection, target encoding or SMOTE fitted on all rows before splitting.</td><td>Test labels shape the inputs. Simulation 4.</td></tr>
-            <tr><td><b>Text written after the outcome</b></td><td>A complaint or analyst note such as <span lang="ar" dir="rtl">تم إغلاق الحساب بعد التحقيق</span> ("account closed after the investigation").</td><td>The text states the outcome in plain words.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Why is the damage so large? AUC is the chance that a random defaulter scores above a random non-defaulter; 0.5 is a coin flip. A leaky feature looks far stronger than any honest one, so the model puts most of its weight there. Live, that weight is wasted. A leaky model is not just over-optimistic: it can be worse than a clean one while its test score says the opposite. In Simulation 1, a month of future data lifts validation to about 0.98 and drops live to 0.60, below the honest model's 0.76.</p>
+        <p>Four forms cause most damage. <strong>Target leakage</strong>: a feature set because of the outcome, such as "collections stage" on a default model or "SAR filed" on an AML model. <strong>Temporal leakage</strong>: a window running past the decision (Simulation 1). <strong>Restated data</strong>: a bureau score corrected months later (Simulation 2). <strong>Contamination</strong>: the same customer or fraud ring on both sides of a split, or selection fitted before splitting (Simulations 3 and 4).</p>
+        <p>The damage is large because a leaky feature looks stronger than any honest one, so the model leans on it. Live, that weight is wasted, and the model can be worse than a clean one while its test score says the opposite.</p>
       </div>
 
       <h3 class="sub" id="m-asof">As-of joins and restated data</h3>
       <div class="prose">
-        <p>The <strong>as-of join</strong> enforces the rule. It asks "what did the bank's file say on 15 April?" and matches each decision row to the latest value the bank knew at that timestamp, not the current one.</p>
-        <p>A naive join hits today's table. If that table is overwritten in place, every historical row inherits today's segment, rating and corrected score. An as-of join needs history: a table that keeps every version with dates, or a snapshot at each decision.</p>
-      </div>
-<pre><code>-- Leaky: attaches today's score to a past application
-SELECT a.app_id, a.decision_ts, b.score
-FROM applications a
-JOIN bureau_current b USING (customer_id);
-
--- Point-in-time: the score the bank held at decision time
-SELECT a.app_id, a.decision_ts, b.score
-FROM applications a
-LEFT JOIN LATERAL (
-    SELECT h.score
-    FROM bureau_history h
-    WHERE h.customer_id = a.customer_id
-      AND h.recorded_at &lt;= a.decision_ts     -- knowledge time
-    ORDER BY h.as_of_date DESC, h.recorded_at DESC
-    LIMIT 1
-) b ON TRUE;</code></pre>
-      <div class="prose" style="margin-top:1.05em">
-        <p>Tools differ (<code>ASOF JOIN</code> in DuckDB and Snowflake, <code>merge_asof</code> in pandas, feature stores such as Feast), but all are only as correct as the timestamp you tell them to respect: when the bank recorded the value, not when it took effect.</p>
-        <ul>
-          <li><strong>Restatements.</strong> Bureau scores and ratings get corrected. Keep the original value and its recording date.</li>
-          <li><strong>Late or backdated records.</strong> Salary letters and KYC refreshes carry effective dates earlier than recording dates.</li>
-        </ul>
+        <p>An <strong>as-of join</strong> asks "what did the bank's file say on 15 April?" and attaches the latest value known at that timestamp, not today's. A naive join to a table overwritten in place gives every old row today's segment, rating and corrected score.</p>
+        <p>You need history: a table keeping every version with dates, or a snapshot at each decision. Treat any table overwritten in place as unusable for training until someone shows its history.</p>
       </div>
 
       <figure class="figure" id="fig-asof">
         <div class="fig-head"><span class="fig-title">What did the bank know on the day?</span><span class="fig-tag">Simulation 2 of 4</span></div>
-        <p class="try"><b>Try:</b> the customer defaulted on 14 July. Slide the application date from 1 April to 30 June. Until 18 June the naive join uses a restated bureau score, and until 22 April a salary not yet in the system. After 18 June the joins agree.</p>
+        <p class="try"><b>Try:</b> slide the application date from 1 April to 30 June. Until 18 June the naive join uses a restated bureau score, and until 22 April a salary not yet in the system.</p>
         <div class="controls" style="grid-template-columns:minmax(0,1fr)">
           <div class="ctl"><label for="s-date">Application (decision) date <output for="s-date"></output></label><input type="range" id="s-date" min="91" max="181" step="1" value="105"></div>
         </div>
@@ -203,21 +150,18 @@ LEFT JOIN LATERAL (
           <tbody id="t-res-body"></tbody>
         </table></div>
         <p class="verdict" id="s2-verdict"></p>
-        <p class="sim-note">Simulated: one invented customer with two fields. The "toy risk" is a made-up logistic score, not a real scorecard.</p>
+        <p class="sim-note">Simulated: one invented customer. The "toy risk" is a made-up score.</p>
       </figure>
 
-      <div class="prose">
-        <p><strong>Snapshot what the model sees at decision time and keep it.</strong> And treat any table overwritten in place as unusable for training until someone shows its history.</p>
-      </div>
 
       <h3 class="sub" id="m-split">Splits: random, temporal, grouped and embargoed</h3>
       <div class="prose">
-        <p>How you split decides what your score means. A <strong>random split</strong> is like testing yourself on shuffled questions from last year's papers. A <strong>temporal (out-of-time) split</strong> trains on an earlier period and tests on a later one, like sitting this year's paper. That is how the bank uses the model: on customers who haven't happened yet.</p>
+        <p>A <strong>random split</strong> is like testing yourself on shuffled questions from last year's papers. A <strong>temporal split</strong> trains on an earlier period and tests on a later one, which is how the bank uses the model: on customers who have not happened yet.</p>
       </div>
 
       <figure class="figure" id="fig-split">
         <div class="fig-head"><span class="fig-title">What each way of splitting tells you</span><span class="fig-tag">Simulation 3 of 4</span></div>
-        <p class="try"><b>Try:</b> at drift 0 all estimates agree. Raise the drift: the random split stays confident while live sinks. The three-month holdout is closer but still optimistic.</p>
+        <p class="try"><b>Try:</b> raise the drift. The random split stays confident while live sinks; the three-month holdout is closer but still optimistic.</p>
         <div class="chart-wrap" id="split-chart"></div>
         <div class="legend">
           <span><i style="background:var(--ink)"></i>AUC of the frozen model in each month</span>
@@ -237,26 +181,21 @@ LEFT JOIN LATERAL (
           <div class="stat" id="st3-end-b"><div class="k">Month 24 alone</div><div class="v" id="st3-end"></div><div class="s">where it ends up</div></div>
         </div>
         <p class="verdict" id="s3-verdict"></p>
-        <p class="sim-note">Simulated: the signal that separates good from bad customers slowly rotates, as fraud tactics or behaviour shift. The model is trained once on months 1–12. A random split tests within that period; the holdout is months 13–15. Exact values, no sampling noise.</p>
+        <p class="sim-note">Simulated: the signal slowly rotates, as fraud tactics or behaviour shift. The model is trained once on months 1–12.</p>
       </figure>
 
       <div class="prose">
-        <ul>
-          <li><strong>Group the splits.</strong> If a customer, device or fraud ring sits on both sides, the model memorises the entity. Split by the unit that is "new" in production.</li>
-          <li><strong>Embargo near the boundary.</strong> If labels take 90 days to mature, leave a gap at least that long between training and test, or training labels will use outcomes from the test period.</li>
-          <li><strong>Walk forward, report two numbers.</strong> Train on months 1-12, test 13-15; then train 1-15, test 16-18. The out-of-time score is the estimate; the drop from random to out-of-time shows how perishable the pattern is.</li>
-        </ul>
+        <p>Also <strong>group</strong> splits by the unit that is new in production (customer, device), so the model cannot memorise entities. <strong>Embargo</strong> a gap at least as long as the label window. Then walk forward: the out-of-time score is the estimate, and the drop from random shows how perishable the pattern is.</p>
       </div>
 
       <h3 class="sub" id="m-prep">Preprocessing, selection and tuning on the whole dataset</h3>
       <div class="prose">
-        <p>The subtlest leak involves no time at all. Any step that learns from data (scaling, imputing, feature selection, target encoding, resampling, tuning) must learn from training rows only, then apply unchanged to validation rows.</p>
-        <p>Do it on the full dataset and test labels shape the inputs. Classic case: pick the 20 features most correlated with default out of 2,000, using every row, then cross-validate on those 20. It is like picking the winning horses after the race. It scores well even if every candidate is noise.</p>
+        <p>The subtlest leak involves no time. Any step that learns from data (selection, target encoding, resampling, tuning) must learn from training rows only. Picking the best 20 of 2,000 features using every row, then cross-validating, is like picking winning horses after the race.</p>
       </div>
 
       <figure class="figure" id="fig-select">
         <div class="fig-head"><span class="fig-title">Skill from pure noise</span><span class="fig-tag">Simulation 4 of 4</span></div>
-        <p class="try"><b>Try:</b> features are noise and labels are coin flips, so the right AUC is 0.50. With 1,000 features and 20 selected, selecting on all rows scores far above chance; selecting inside training rows does not. <b>Draw new data</b> shows the spread.</p>
+        <p class="try"><b>Try:</b> labels are coin flips, so the right AUC is 0.50. Selecting on all rows scores far above chance; selecting inside training rows does not.</p>
         <div class="chart-wrap" id="sel-chart"></div>
         <div class="controls">
           <div class="ctl"><label for="s-p">Candidate features (all pure noise) <output for="s-p"></output></label><input type="range" id="s-p" min="0" max="7" step="1" value="6"></div>
@@ -268,38 +207,29 @@ LEFT JOIN LATERAL (
           <div class="stat ok"><div class="k">Selection inside training rows</div><div class="v" id="st4-ok"></div><div class="s" id="st4-ok-s"></div></div>
           <div class="stat"><div class="k">True answer</div><div class="v">0.50</div><div class="s">labels are coin flips</div></div>
         </div>
-        <p class="sim-note">Simulated live with a seeded random generator: six datasets of 200 customers with up to 2,000 noise features. Half the rows train, half test. Dots are the six datasets; the bar is their mean. Expect a few points of wobble between draws.</p>
+        <p class="sim-note">Simulated with a seeded generator: six datasets of 200 customers. Dots are datasets; the bar is the mean.</p>
       </figure>
 
       <div class="prose">
-        <p>Fitting a plain scaler on all rows usually matters little; label-based steps ruin results. Enforce it with a pipeline object that fits every step inside each fold (F11).</p>
-        <p><strong>Tuning is selection too.</strong> Try 200 settings and report the best test AUC, and you have picked the test set's luckiest noise (F2.4). Open a final test set once.</p>
+        <p>Use a pipeline that fits every step inside each fold (F11). Tuning is selection too: try 200 settings and report the best test AUC and you have picked the luckiest noise (F2.4).</p>
       </div>
 
       <h3 class="sub" id="m-detect">The "too good to be true" AUC: a detection routine</h3>
       <div class="prose">
-        <p>Treat a too-good number like a too-good deal. Application scorecards typically reach AUC 0.70 to 0.80. Attack a result far above that before anyone celebrates.</p>
-        <ol>
-          <li><strong>Feature dictionary.</strong> Record each input's source and knowledge time. If the top feature is a status, flag or "reason" field, ask who sets it and when.</li>
-          <li><strong>Score each feature alone.</strong> One feature with AUC 0.9 on a hard problem is a leak, a label proxy or a join mistake.</li>
-          <li><strong>Time-shifted test.</strong> Train early, test late, compare to the random split. A large gap means temporal leakage or fast drift.</li>
-          <li><strong>Truncate features.</strong> Rebuild with a cut-off a month before the decision. If the score collapses, check the last weeks were legal.</li>
-          <li><strong>Run it forward.</strong> A shadow run on real incoming cases is the only fully convincing test.</li>
-        </ol>
+        <p>Application scorecards typically reach AUC 0.70 to 0.80. Attack anything far above that. Score each feature alone: one at 0.9 on a hard problem is a leak or a join mistake. Compare a time-shifted test with the random split. Rebuild with a cut-off a month earlier, and if the score collapses, check the last weeks. A shadow run on real incoming cases is the only fully convincing test.</p>
       </div>
     </section>
 
     <!-- ============================== 3. FAILURES ============================== -->
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Leaks you will meet in bank and AI-generated analyses, each with its quickest check.</p></div>
+      <div class="prose"><p>The leaks you will meet most, each with its quickest check.</p></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Windows anchored to the extract date</div><p>"Last 30 days" computed once on build day, attached to applications from months earlier.</p><div class="spot"><b>Spot it</b>Search the SQL for <code>CURRENT_DATE</code>, <code>NOW()</code> or one parameter. Anchor every window on a decision-row column.</div></li>
-        <li><div class="t">Outcome fields and outcome text used as inputs</div><p>Collections stage, block reason, "SAR filed", or notes written after resolution.</p><div class="spot"><b>Spot it</b>Ask who sets a high-importance field. If a downstream team does, it is a consequence. In text, "refunded" or "تم إغلاق" is the outcome speaking.</div></li>
-        <li><div class="t">Overwritten, restated or backfilled data treated as original</div><p>Segment, KYC rating or bureau score overwritten in place, or recomputed with today's logic.</p><div class="spot"><b>Spot it</b>Ask if the table keeps history. Count training rows recorded after the decision.</div></li>
-        <li><div class="t">Random split on time-ordered or grouped data</div><p>Same customer on both sides, months shuffled, or training labels that use test-period outcomes.</p><div class="spot"><b>Spot it</b>Count test customers also in training. Re-split by time and entity, with a gap at least the label window.</div></li>
-        <li><div class="t">Immature labels in the newest cohort</div><p>Last month's loans look excellent because none have had time to default.</p><div class="spot"><b>Spot it</b>Plot default rate by origination month. A sharp recent fall is immaturity, not improvement.</div></li>
-        <li><div class="t">Preprocessing, selection or tuning on everything</div><p>Selection, target encoding, SMOTE or imputation before splitting, or picking a model by the test AUC you report. AI-generated code often does this.</p><div class="spot"><b>Spot it</b>Look for <code>fit</code> on the full frame. Ask how many models were tried and which data picked the winner.</div></li>
+        <li><div class="t">Windows anchored to the extract date</div><p>"Last 30 days" computed once on build day.</p><div class="spot"><b>Spot it</b>Search the SQL for <code>CURRENT_DATE</code> or <code>NOW()</code>.</div></li>
+        <li><div class="t">Outcome fields and text used as inputs</div><p>Collections stage, block reason, or notes written after resolution.</p><div class="spot"><b>Spot it</b>Ask who sets a high-importance field and when.</div></li>
+        <li><div class="t">Overwritten or restated data</div><p>Segment or bureau score overwritten in place.</p><div class="spot"><b>Spot it</b>Ask if the table keeps history.</div></li>
+        <li><div class="t">Random split on time-ordered or grouped data</div><p>Same customer on both sides, or months shuffled.</p><div class="spot"><b>Spot it</b>Count test customers also in training.</div></li>
+        <li><div class="t">Immature labels in the newest cohort</div><p>Last month's loans look excellent because none have had time to default.</p><div class="spot"><b>Spot it</b>Plot default rate by origination month; a sharp recent fall is immaturity.</div></li>
       </ul>
     </section>
 
@@ -307,14 +237,11 @@ LEFT JOIN LATERAL (
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A single feature available at application time gives an AUC of 0.92 for default on its own. Is that plausible?</summary><div class="ans"><p>No. Whole scorecards reach 0.70 to 0.80. Treat it as a leak until its knowledge time is verified.</p></div></details>
-        <details class="reveal"><summary>2. A model is fitted on history with one honest feature and one strong leaky one, and scores 0.94 in validation. Live, the leaky feature is noise. Why can live be worse than a model using the honest feature alone?</summary><div class="ans"><p>In training the model leans on the leaky feature because it looks far stronger. Live, that weight goes to noise. In Simulation 1 the result is 0.60 live against 0.76 for the clean model.</p></div></details>
-        <details class="reveal"><summary>3. An application is decided on 15 April. A salary certificate raising the customer's salary from AED 18,000 to AED 24,000, effective 1 March, was uploaded on 22 April. Which salary does the training row use?</summary><div class="ans"><p><strong>AED 18,000.</strong> The raise preceded the decision (event time), but the bank knew it only on 22 April (knowledge time). Filter on recording date.</p></div></details>
-        <details class="reveal"><summary>4. A fraud model is validated by randomly splitting card transactions 80/20. Why can this overstate performance even without any time leakage?</summary><div class="ans"><p>Fraud comes in bursts on one compromised card. A random split puts part of a burst on each side, so the model recognises the card, not fraud. Split by card and by time.</p></div></details>
-        <details class="reveal"><summary>5. Default is "90 days past due within 12 months of disbursal". You validate on loans disbursed last month and see a 0.2% default rate and an AUC of 0.95. What is going on?</summary><div class="ans"><p>The window isn't complete, so almost all loans are labelled good. Use complete cohorts or survival methods (F2.8).</p></div></details>
-        <details class="reveal"><summary>6. You pick the 30 best features from 1,500 using the full dataset, then run 5-fold cross-validation and get an AUC of 0.74. The real signal is weak. Is 0.74 trustworthy?</summary><div class="ans"><p>No. Selection used the labels of rows that later served as validation folds (Simulation 4). Redo it inside each fold; the honest number may be 0.5 to 0.6.</p></div></details>
-        <details class="reveal"><summary>7. The top feature in a churn model's importance chart is "days since last call to the contact centre about account closure". What do you check?</summary><div class="ans"><p>Whether the call precedes the decision, and what triggers the log. If it is logged when the customer asks to close, it is the outcome. A fees call weeks earlier may be a legitimate signal.</p></div></details>
-        <details class="reveal"><summary>8. In Simulation 3 the random split says 0.89, the three-month holdout says 0.87, and the first live year averages 0.79. Why is even the temporal holdout optimistic?</summary><div class="ans"><p>The holdout sits right after training, so it sees only the first months of drift. Use walk-forward folds over a longer period and set a live monitoring trigger (F7.7).</p></div></details>
+        <details class="reveal"><summary>1. A single feature available at application time gives an AUC of 0.92 for default. Plausible?</summary><div class="ans"><p>No. Whole scorecards reach 0.70 to 0.80. Treat it as a leak until its knowledge time is verified.</p></div></details>
+        <details class="reveal"><summary>2. Why can a model with a strong leaky feature score worse live than one using only the honest feature?</summary><div class="ans"><p>It leans on the leaky feature in training because it looks strongest. Live, that weight goes to noise.</p></div></details>
+        <details class="reveal"><summary>3. An application is decided on 15 April. A raise to AED 24,000, effective 1 March, was uploaded on 22 April. Which salary does the training row use?</summary><div class="ans"><p>The earlier one. The raise preceded the decision, but the bank knew it only on 22 April. Filter on recording date.</p></div></details>
+        <details class="reveal"><summary>4. Why can a random 80/20 split of card transactions overstate fraud performance even without time leakage?</summary><div class="ans"><p>Fraud comes in bursts on one card, so the model recognises the card. Split by card and by time.</p></div></details>
+        <details class="reveal"><summary>5. You pick the best 30 of 1,500 features on the full data, then cross-validate and get 0.74. Trustworthy?</summary><div class="ans"><p>No. Selection used the labels of later validation rows. Redo it inside each fold; the honest number may be far lower.</p></div></details>
       </div>
     </section>
 

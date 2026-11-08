@@ -79,7 +79,7 @@
         <span>About 45 minutes</span>
       </div>
       <h1>SQL Thinking: Joins, Windows and Aggregation</h1>
-      <p class="dek">Bank data lives in warehouses, and most wrong numbers in a bank are born in a query that ran without error. How to read a query by its grain, spot a join that multiplied rows, and know what a window function really does.</p>
+      <p class="dek">Most wrong numbers in a bank come from a query that ran without error. How to read a query by its grain, spot a join that multiplied rows, and know what a window function does.</p>
     </header>
 
     <div class="mobile-toc">
@@ -93,8 +93,7 @@
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>A product head asks for the combined salary of salary-transfer customers who hold an account. An analyst joins <code>customers</code> to <code>accounts</code> and sums <code>salary</code>. It runs and returns nearly double the truth.</p>
-        <p>Nothing failed. A customer with three accounts becomes three rows, salary copied onto each, so it is counted three times. A customer with <em>no</em> account vanished from the inner join. It is like splitting a restaurant bill by plates instead of by diners.</p>
+        <p>An analyst joins <code>customers</code> to <code>accounts</code> and sums <code>salary</code>. It runs, and returns nearly double the truth. A customer with three accounts becomes three rows, so their salary is counted three times, and a customer with no account vanishes.</p>
       </div>
 
       <figure class="figure" id="fig-fanout">
@@ -119,13 +118,9 @@
       </figure>
 
       <div class="prose">
-        <ul>
-          <li><strong>Every table has a grain</strong>: what one row stands for. A salary lives at the customer grain, so it is only safe to sum there.</li>
-          <li><strong>A join changes the grain</strong> to the finest table it touches. After joining accounts, a row is an account and customer columns repeat.</li>
-          <li><strong>The join type decides who survives.</strong> An inner join drops customers with no match. That is selection (F2.6) by accident.</li>
-        </ul>
+        <p>Every table has a <strong>grain</strong>: what one row stands for. A join changes the grain to the finest table it touches, and the join type decides which rows survive.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Before reading or writing a query, say in one sentence what one row of each input is, and what one row of the output is. If you can't, you can't yet trust the number.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before trusting a query, say what one row of each input is, and what one row of the output is.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -134,57 +129,25 @@
 
       <h3 class="sub" id="m-grain">Grain, keys and fan-out</h3>
       <div class="prose">
-        <p>The <strong>grain</strong> is what one row means. Check every column is true <em>at that grain</em>: salary per customer, balance per account per day, amount per transaction.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Balances are <strong>semi-additive</strong>: add them across accounts, never across days. Summing thirty daily balances is like adding speedometer readings to get your speed. Use the closing or average value.</p>
-        <p>Whether a join is safe depends on the keys:</p>
-        <ul>
-          <li><strong>One-to-one or many-to-one</strong> (accounts to customers): the grain is unchanged. Safe.</li>
-          <li><strong>One-to-many</strong> (customers to accounts): the result takes the finer grain and left columns repeat. This is fan-out.</li>
-          <li><strong>Two one-to-many joins off the same parent</strong> (accounts and cards) multiply rows rather than add them: 3 accounts and 2 cards give 6 rows. With one of each the bug hides, which is why small tests pass.</li>
-        </ul>
-        <p>Defences: test whether the key is unique before joining; compare row counts before and after each join (a left join returning more rows than the left table has fanned out); and aggregate the many-side first, then join. <code>DISTINCT</code> is a patch, not a fix: <code>SUM(DISTINCT salary)</code> drops two customers who happen to earn the same.</p>
+        <p>The <strong>grain</strong> is what one row means: salary per customer, balance per account per day. Balances are semi-additive: add across accounts, never across days.</p>
+        <p>A one-to-many join (customers to accounts) <strong>fans out</strong>: the finer grain wins and left columns repeat. Two one-to-many joins off the same parent multiply rows instead of adding. Defences: check keys are unique, compare row counts before and after each join, and aggregate the many-side first. <code>DISTINCT</code> is a patch, not a fix.</p>
       </div>
 
       <h3 class="sub" id="m-joins">Inner and left joins: who survives</h3>
       <div class="prose">
-        <p>An <strong>inner join</strong> keeps only left rows that found a partner, like a guest list at a door: no match, no entry. A <strong>left join</strong> keeps every left row and fills the right side with NULL when nothing matches.</p>
-        <p>If the question is "what happens to <em>our customers</em>", customers is the spine and everything else is left-joined onto it. An inner join to an active-customers table answers a question about a smaller population, so churn or default rates on it are skewed.</p>
-        <p>The subtlest bug is where a filter on the right-hand table sits:</p>
-      </div>
-<pre style="margin-top:1.05em"><code><span class="kw">-- A: filter in ON. Keeps every customer; October activity if any</span>
-<span class="kw">SELECT</span> c.customer_id, SUM(t.amount_aed)
-<span class="kw">FROM</span> customers c
-<span class="kw">LEFT JOIN</span> transactions t
-  <span class="kw">ON</span> t.customer_id = c.customer_id
- <span class="kw">AND</span> t.txn_month = '2026-10'
-<span class="kw">GROUP BY</span> c.customer_id;
-
-<span class="kw">-- B: filter in WHERE. Silently becomes an inner join</span>
-<span class="kw">SELECT</span> c.customer_id, SUM(t.amount_aed)
-<span class="kw">FROM</span> customers c
-<span class="kw">LEFT JOIN</span> transactions t <span class="kw">ON</span> t.customer_id = c.customer_id
-<span class="kw">WHERE</span> t.txn_month = '2026-10'
-<span class="kw">GROUP BY</span> c.customer_id;</code></pre>
-      <div class="prose" style="margin-top:1.05em">
-        <p>In B, a customer with no transactions has NULL in <code>t.txn_month</code>. <code>NULL = '2026-10'</code> is not true, so <code>WHERE</code> discards the row and the left join behaves like an inner join. The customers who did nothing in October vanish. Rule: a condition on <em>which partners count</em> goes in <code>ON</code>; a condition on <em>which final rows to keep</em> goes in <code>WHERE</code>.</p>
+        <p>An <strong>inner join</strong> keeps only rows with a partner, like a guest list at a door. A <strong>left join</strong> keeps every left row and fills the right side with NULL. For questions about our customers, customers is the spine and everything is left-joined onto it.</p>
+        <p>The classic bug: a <code>WHERE</code> filter on a right-hand column discards the NULL rows, so the left join silently becomes an inner join. Put conditions on which partners count in <code>ON</code>, and on which final rows to keep in <code>WHERE</code>.</p>
       </div>
 
       <h3 class="sub" id="m-agg">Aggregation, and the mean of means</h3>
       <div class="prose">
-        <p><code>GROUP BY</code> collapses rows to one per group key, so the output grain is the key. <code>WHERE</code> filters rows before grouping; <code>HAVING</code> filters groups after.</p>
-        <ul>
-          <li><code>COUNT(*)</code> counts rows; <code>COUNT(col)</code> counts non-NULL values.</li>
-          <li><code>SUM</code> and <code>AVG</code> skip NULLs, so <code>AVG(income)</code> covers only customers with an income on file.</li>
-        </ul>
-        <p>Averaging averages is the classic trap. Branch A has 100 customers averaging AED 10,000; branch B has 900 averaging AED 40,000. The mean of the two is 25,000, but the true average is AED 37,000, because B is nine times bigger. Carry sums and counts, divide last: a bank-wide default rate is total defaults over total loans.</p>
+        <p><code>GROUP BY</code> collapses rows to one per key, so the output grain is the key. <code>WHERE</code> filters rows before grouping; <code>HAVING</code> filters groups after. <code>COUNT(*)</code> counts rows, <code>COUNT(col)</code> counts non-NULLs, and <code>AVG</code> skips NULLs.</p>
+        <p>Never average averages: a branch of 100 customers and one of 900 can't be weighted equally. Carry sums and counts, and divide last.</p>
       </div>
 
       <h3 class="sub" id="m-null">NULL: three-valued logic</h3>
       <div class="prose">
-        <p>NULL means "unknown", not empty and not zero. Think of a sealed envelope: you can't say it equals anything, even another sealed envelope. So SQL has TRUE, FALSE and UNKNOWN, and <code>WHERE</code> keeps a row only if the condition is <em>TRUE</em>.</p>
-        <p>That means a filter and its opposite don't cover the table: rows with NULL fall into neither. KYC NULLs are rarely random, so a filter that drops them silently decides about those customers.</p>
+        <p>NULL means "unknown", like a sealed envelope: it equals nothing, not even another NULL. <code>WHERE</code> keeps a row only if the condition is TRUE, so a filter and its opposite don't cover the table. NULL rows fall into neither, and KYC NULLs are rarely random. Test with <code>IS NULL</code>, and prefer <code>NOT EXISTS</code> to <code>NOT IN</code>, because one NULL in the list makes it never true.</p>
       </div>
 
       <figure class="figure" id="fig-null">
@@ -202,21 +165,11 @@
         <p class="sim-note">Simulated: ten invented accounts. Five are active, two dormant, one closed and two have a NULL status.</p>
       </figure>
 
-      <div class="prose">
-        <ul>
-          <li><strong>Test with <code>IS NULL</code></strong>, never <code>= NULL</code>. For "not equal" with possible NULLs, use <code>IS DISTINCT FROM</code> or <code>COALESCE</code>.</li>
-          <li><strong>Prefer <code>NOT EXISTS</code> to <code>NOT IN</code>.</strong> One NULL in the subquery makes <code>NOT IN</code> never true, so one missing ID can make a screening query clear everyone.</li>
-        </ul>
-      </div>
+
 
       <h3 class="sub" id="m-window">Window functions: aggregate without collapsing</h3>
       <div class="prose">
-        <p><code>GROUP BY</code> turns many rows into one. A <strong>window function</strong> computes across a set of related rows and puts the answer on <em>every</em> row, keeping them all, like a class report that prints each pupil's mark next to the class average. Three parts define the window:</p>
-        <ul>
-          <li><strong><code>PARTITION BY</code></strong>: which rows belong together (per customer, per account).</li>
-          <li><strong><code>ORDER BY</code></strong>: the order inside each group, which makes "previous", "running" and "latest" meaningful.</li>
-          <li><strong>The frame</strong>: which rows feed each row's calculation. By default the frame includes <em>all rows tied with the current one</em>, so two same-day transactions show the same running total. Use <code>ROWS</code> plus a tiebreaker for one step per row.</li>
-        </ul>
+        <p><code>GROUP BY</code> turns many rows into one. A <strong>window function</strong> computes across related rows and puts the answer on <em>every</em> row, like a class report printing each mark beside the class average. <code>PARTITION BY</code> says which rows belong together, <code>ORDER BY</code> sets the order inside each group, and the frame says which rows feed each calculation. The default frame includes tied rows, so same-day transactions share one running total.</p>
       </div>
 
       <figure class="figure" id="fig-window">
@@ -234,26 +187,13 @@
       </figure>
 
       <div class="prose">
-        <p>Windows also give running totals, ranking and <code>LAG</code> (the previous row, behind "days since last transaction"). The pattern you will write most is <strong>latest record per entity</strong>: <code>ROW_NUMBER</code> ordered by recency, keep number 1.</p>
-      </div>
-<pre style="margin-top:1.05em"><code><span class="kw">WITH</span> ranked <span class="kw">AS</span> (
-  <span class="kw">SELECT</span> *,
-         ROW_NUMBER() <span class="kw">OVER</span> (
-           <span class="kw">PARTITION BY</span> customer_id
-           <span class="kw">ORDER BY</span> updated_at <span class="kw">DESC</span>, record_id <span class="kw">DESC</span>   <span class="kw">-- tiebreaker</span>
-         ) <span class="kw">AS</span> rn
-  <span class="kw">FROM</span> kyc_profile_history
-)
-<span class="kw">SELECT</span> * <span class="kw">FROM</span> ranked <span class="kw">WHERE</span> rn = 1;</code></pre>
-      <div class="prose" style="margin-top:1.05em">
-        <p>The tiebreaker matters. If two records share the latest timestamp, <code>ROW_NUMBER</code> picks one arbitrarily and can change between runs,, so the feature flickers day to day.</p>
+        <p>The pattern you will write most is <strong>latest record per entity</strong>: <code>ROW_NUMBER</code> ordered by recency, keep number 1. Add a unique tiebreaker, or ties are broken arbitrarily and the feature flickers between runs.</p>
       </div>
 
       <h3 class="sub" id="m-asof">Latest record, and as-of joins</h3>
       <div class="prose">
-        <p>"Latest record" suits dashboards about today. For a model it is a trap. Attach the <em>latest</em> bureau score to a March loan application and it carries an October score that already reflects later missed payments. The model learns from the future: leakage (F3.2), and a join is the commonest way in.</p>
-        <p>The fix is an <strong>as-of join</strong>: for each event, take the most recent snapshot at or before it. Some engines have a native <code>ASOF JOIN</code>; elsewhere use a window function.</p>
-        <p>There is a second clock. A snapshot dated 31 October may only have <em>reached the warehouse</em> on 12 November, like a letter postmarked Monday and read on Thursday. Use <strong>availability time</strong>, when the bank could have known.</p>
+        <p>"Latest record" suits dashboards, but for a model it leaks the future: a March application gets an October score. Use an <strong>as-of join</strong>, the most recent snapshot at or before the event.</p>
+        <p>There is a second clock. A snapshot dated 31 October may only reach the warehouse on 12 November, so use <strong>availability time</strong>, when the bank could have known.</p>
       </div>
 
       <figure class="figure" id="fig-asof">
@@ -282,29 +222,20 @@
 
       <h3 class="sub" id="m-order">Logical query order: how to read any query</h3>
       <div class="prose">
-        <p>SQL is written in one order and evaluated in another. Logically, the database works like this:</p>
+        <p>SQL is written in one order and evaluated in another. Read it in evaluation order, because that is why window functions can't appear in <code>WHERE</code>, and why <code>LIMIT</code> without <code>ORDER BY</code> returns an arbitrary set.</p>
       </div>
       <ol class="order" style="margin-top:14px">
-        <li><b>FROM / JOIN</b>build the row set; grain is fixed here</li>
-        <li><b>WHERE</b>filter rows (TRUE only)</li>
-        <li><b>GROUP BY</b>collapse to groups</li>
-        <li><b>HAVING</b>filter groups</li>
-        <li><b>Window functions</b>run over what survived</li>
-        <li><b>SELECT</b>compute outputs and aliases</li>
-        <li><b>DISTINCT</b>remove duplicate rows</li>
-        <li><b>ORDER BY, LIMIT</b>sort, then truncate</li>
+        <li><b>FROM / JOIN</b></li>
+        <li><b>WHERE</b></li>
+        <li><b>GROUP BY</b></li>
+        <li><b>HAVING</b></li>
+        <li><b>Windows</b></li>
+        <li><b>SELECT</b></li>
+        <li><b>DISTINCT</b></li>
+        <li><b>ORDER BY, LIMIT</b></li>
       </ol>
       <div class="prose" style="margin-top:1.2em">
-        <ul>
-          <li>Window functions and <code>SELECT</code> aliases don't exist yet in <code>WHERE</code>. That is why "latest record" needs a wrapper or <code>QUALIFY</code>.</li>
-          <li><code>LIMIT</code> without <code>ORDER BY</code> returns an arbitrary set. Never sample with it.</li>
-        </ul>
-        <p>Checklist for any query, yours, a colleague's or an LLM's:</p>
-        <ol>
-          <li>What is one row of each input and of the output?</li>
-          <li>For each join: which key, is it unique, and what happens to unmatched rows?</li>
-          <li>Where do filters sit, and could NULLs be lost? Is each value as-of the event?</li>
-        </ol>
+        <p>For any query, yours or an LLM's, ask: what is one row of each input and of the output; is each join key unique, and what happens to unmatched rows; and could filters drop NULLs or use values from after the event?</p>
       </div>
     </section>
 
@@ -312,12 +243,11 @@
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Summing a column repeated by a join</div><p>Salary or exposure summed after joining to a finer table, or after a second one-to-many join. Often "fixed" with <code>DISTINCT</code>.</p><div class="spot"><b>Spot it</b>Compare with the same sum on the source table alone. Larger means fan-out.</div></li>
-        <li><div class="t">The left join that lost its rows</div><p>A WHERE filter on a right-hand column removes the NULL rows, or an inner join to an activity table skews a churn rate.</p><div class="spot"><b>Spot it</b>Does the row count equal the left table's? Move right-table conditions into <code>ON</code>.</div></li>
-        <li><div class="t">NULLs dropped by a comparison</div><p><code>status &lt;&gt; 'closed'</code> loses NULL-status accounts. <code>NOT IN</code> with a NULL returns nothing.</p><div class="spot"><b>Spot it</b>Run the filter and its opposite; if counts don't sum to the total, NULLs are in the gap.</div></li>
-        <li><div class="t">Aggregating the wrong way</div><p>Branch means or monthly rates averaged, or balances summed across days.</p><div class="spot"><b>Spot it</b><code>AVG</code> on a column that is already a ratio. Recompute from sums and counts.</div></li>
-        <li><div class="t">Latest record, carelessly</div><p>Today's risk rating or bureau score joined to past events looks wonderful in testing and breaks live. Without a tiebreaker, "latest" also changes between runs.</p><div class="spot"><b>Spot it</b>For each feature ask: as of when? Check availability lag too.</div></li>
-        <li><div class="t">AI-generated SQL that looks plausible</div><p>Wrong but similarly named keys, history tables joined without a date condition, <code>DISTINCT</code> sprinkled in.</p><div class="spot"><b>Spot it</b>Apply the checklist and reconcile to a known figure.</div></li>
+        <li><div class="t">Summing a column repeated by a join</div><p>Salary or exposure summed after a one-to-many join. Often "fixed" with <code>DISTINCT</code>.</p><div class="spot"><b>Spot it</b>Compare with the same sum on the source table alone.</div></li>
+        <li><div class="t">The left join that lost its rows</div><p>A WHERE filter on a right-hand column removes the NULL rows.</p><div class="spot"><b>Spot it</b>Does the row count equal the left table's?</div></li>
+        <li><div class="t">NULLs dropped by a comparison</div><p><code>status &lt;&gt; 'closed'</code> loses NULL-status accounts, and <code>NOT IN</code> with a NULL returns nothing.</p><div class="spot"><b>Spot it</b>Run the filter and its opposite; the counts should sum to the total.</div></li>
+        <li><div class="t">Averaging ratios</div><p>Branch means or monthly rates averaged, or balances summed across days.</p><div class="spot"><b>Spot it</b>Recompute from sums and counts.</div></li>
+        <li><div class="t">Latest record, carelessly</div><p>Today's rating joined to past events looks wonderful in testing and breaks live.</p><div class="spot"><b>Spot it</b>For each feature ask: as of when?</div></li>
       </ul>
     </section>
 
@@ -326,13 +256,11 @@
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="prose"><p>Try each before opening the answer.</p></div>
       <div class="qa">
-        <details class="reveal"><summary>1. Five customers have 3, 1, 2, 0 and 2 accounts. You inner join customers to accounts and <code>SUM(salary)</code>. Is the result too high, too low or right? What about a left join?</summary><div class="ans"><p>Too high in both cases. Customers with several accounts are counted several times (AED 185,000 against a true 100,000), and the inner join also loses the customer with no account. Aggregate accounts to one row per customer first.</p></div></details>
-        <details class="reveal"><summary>2. A customer has two transactions on the same day. With <code>SUM(amount) OVER (ORDER BY date)</code> and no frame, do the two rows show the same running total? How do you get one step per row?</summary><div class="ans"><p>Yes: the default frame includes all rows tied on date. Use <code>ROWS</code> with a unique tiebreaker.</p></div></details>
-        <details class="reveal"><summary>3. Of 10 accounts, 5 are active, 2 dormant, 1 closed and 2 have NULL status. Why don't <code>status = 'active'</code> and <code>status &lt;&gt; 'active'</code> together return all 10? What does <code>status NOT IN ('closed', NULL)</code> return?</summary><div class="ans"><p>The two NULL rows are UNKNOWN under both, so 5 + 3 = 8. The <code>NOT IN</code> returns nothing: every row is either FALSE or UNKNOWN.</p></div></details>
-        <details class="reveal"><summary>4. You left-join customers to October transactions and add <code>WHERE t.txn_month = '2026-10'</code>. What have you written, and how do you fix it?</summary><div class="ans"><p>An inner join in disguise: customers with no October transaction have NULL there and are dropped. Move the condition into <code>ON</code>.</p></div></details>
-        <details class="reveal"><summary>5. Bureau scores are dated days 10, 80 and 150 and reach the warehouse 30 days later. For an application on day 100, which score does an as-of join on snapshot date pick, and which should it pick?</summary><div class="ans"><p>Snapshot date picks day 80, which only arrived on day 110: a leak. It should pick the day-10 score.</p></div></details>
-        <details class="reveal"><summary>6. Your "latest address" query uses <code>ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY updated_at DESC)</code> and next week's results differ for a few customers. Why?</summary><div class="ans"><p>Ties on <code>updated_at</code> are broken arbitrarily. Add a unique tiebreaker such as the record id.</p></div></details>
-        <details class="reveal"><summary>7. A dashboard averages two branch averages, one branch with 100 customers and one with 900. Will the bank-wide figure be reliable? What should it do instead?</summary><div class="ans"><p>No. It weights the branches equally despite a nine-to-one size difference. Carry sums and counts, and divide at the end.</p></div></details>
+        <details class="reveal"><summary>1. Customers have 3, 1, 2, 0 and 2 accounts. You join customers to accounts and <code>SUM(salary)</code>. Too high, too low or right?</summary><div class="ans"><p>Too high with either join type, because salary is copied onto each account row. An inner join also loses the customer with no account. Aggregate accounts to one row per customer first.</p></div></details>
+        <details class="reveal"><summary>2. Why don't <code>status = 'active'</code> and <code>status &lt;&gt; 'active'</code> together return every row?</summary><div class="ans"><p>Rows with NULL status are UNKNOWN under both, and <code>WHERE</code> keeps only TRUE.</p></div></details>
+        <details class="reveal"><summary>3. You left-join customers to October transactions, then add <code>WHERE t.txn_month = '2026-10'</code>. What have you written?</summary><div class="ans"><p>An inner join in disguise: customers with no October activity are dropped. Move the condition into <code>ON</code>.</p></div></details>
+        <details class="reveal"><summary>4. For a loan application on day 100, why can an as-of join on snapshot date still leak?</summary><div class="ans"><p>A snapshot dated day 80 may only have reached the warehouse on day 110. Join on when the bank could have known.</p></div></details>
+        <details class="reveal"><summary>5. A dashboard averages two branch averages, one branch with 100 customers and one with 900. Is that reliable?</summary><div class="ans"><p>No, it weights the branches equally. Carry sums and counts, and divide at the end.</p></div></details>
       </div>
       <div class="lesson-foot">
         <a href="../index.html">← Back to the curriculum</a>

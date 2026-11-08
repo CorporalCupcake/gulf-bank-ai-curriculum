@@ -69,71 +69,38 @@
       <div class="meta">
         <span>F3.4 · F3.9</span>
         <span class="pill d">Day one</span>
-        <span>About 45 minutes</span>
+        <span>About 15 minutes</span>
       </div>
       <h1>Feature Engineering: Behaviour, Encoding, Missingness and Scale</h1>
-      <p class="dek">How to turn a customer's raw history into numbers a model can use: what they did lately, how that compares with their own normal, how to encode a merchant list without cheating, what a blank field is telling you, and which models care about units.</p>
+      <p class="dek">How to turn raw customer history into numbers a model can use, and which choices quietly break it.</p>
     </header>
 
     <div class="mobile-toc">
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Show the model behaviour relative to each customer's own baseline, encode categories without leaking the label, treat "missing" as possible signal, and match scaling to the model.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Show the model behaviour relative to each customer's own baseline, encode categories without leaking the label, treat "missing" as signal, and match scaling to the model.</p>
 
-    <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>At 2:10 a.m. a debit card buys AED 380 of electronics in another emirate. Fraud? One row can't say: the amount is ordinary, the merchant real, the card valid.</p>
-        <p>Add context: five other purchases in the last 40 minutes, three at new merchants, from a card that averages 1.4 a <em>day</em>. Now it looks suspicious, and none of that was in the single row.</p>
-        <p>That is feature engineering: turning one row per event into one row per decision, with columns summarising the <strong>history around that decision</strong>. Four ideas run through the lesson:</p>
-        <ul>
-          <li><strong>Behaviour beats attributes.</strong> Recent activity, <em>relative to the customer's own normal</em>, carries the signal. AED 9,000 of spend is alarming for one customer and a quiet Tuesday for another.</li>
-          <li><strong>Encoding can cheat.</strong> A merchant seen once, in a fraud case, looks "100% fraud". Encode that naively and the model memorises training data, then fails on new data.</li>
-          <li><strong>A blank is data.</strong> Filling a blank income with the average throws away what the blank was telling you.</li>
-          <li><strong>Units matter to some models.</strong> Put balance in dirhams beside "transactions per month" and a distance-based model hears almost only the balance.</li>
-        </ul>
+        <p>A card buys AED 380 of electronics at 2:10 a.m. One row can't say if that is fraud. Add context (five purchases in 40 minutes, three at new merchants, from a card that averages 1.4 a day) and it looks suspicious.</p>
+        <p>Feature engineering means summarising the <strong>history around a decision</strong> into columns. Every feature answers one question: what would we have known about this customer, at this moment, that helps predict what happens next? "At this moment" keeps the model honest (<a href="f3-leakage-point-in-time.html">F3.1</a>).</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Every feature answers: "what would we have known about this customer, at this moment, that helps predict what happens next?" "At this moment" keeps the model honest (F3.1). "About this customer" is why ratios to their own baseline work.</div>
     </section>
 
-    <!-- ============================== 2. MECHANICS ============================== -->
     <section class="part" id="mechanics">
       <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
 
-      <h3 class="sub" id="m-rfm">Recency, frequency, monetary value and time since last event</h3>
+      <h3 class="sub" id="m-rfm">Recency, frequency and monetary value</h3>
       <div class="prose">
-        <p>Think of a gym member. Visited yesterday, three times a week: safe. Last visit five weeks ago: drifting out. <strong>RFM</strong> captures this per customer, as of a chosen date:</p>
-        <ul>
-          <li><strong>Recency:</strong> time since the last event (transaction, login, salary credit).</li>
-          <li><strong>Frequency:</strong> number of events in a window (30, 90, 365 days).</li>
-          <li><strong>Monetary value:</strong> total and average amount in the same windows.</li>
-        </ul>
-        <p>Recent, frequent and high-value is healthy. Long gap, falling frequency and shrinking value is an attrition risk. The misreading to avoid: a long gap is only worrying <em>relative to the customer's own rhythm</em>. Thirty days of silence is normal for a monthly user and alarming for a daily one.</p>
-        <p>Three rules for time since last event:</p>
-        <ul>
-          <li><strong>Fix the reference time.</strong> Compute it as of the decision (application date, transaction time), never as of "today" when you build the table (<a href="f3-leakage-point-in-time.html">F3.1</a>).</li>
-          <li><strong>A gap not yet ended is "at least this long".</strong> Use <code>log1p(days)</code> or a cap in a feature table; survival analysis handles it properly (<a href="f2-survival-analysis.html">F2.8</a>).</li>
-          <li><strong>Never-seen needs a blank, not zero.</strong> Zero days would mean "just transacted". Use a blank plus an indicator.</li>
-        </ul>
+        <p>Think of a gym member: visited yesterday, three times a week is safe; last visit five weeks ago is drifting out. <strong>RFM</strong> captures this: time since the last event, number of events in a window, and total or average amount. A long gap only matters relative to the customer's own rhythm. Thirty days of silence is normal for a monthly user and alarming for a daily one. Compute it as of the decision date, and use a blank, not zero, for "never seen".</p>
       </div>
 
       <h3 class="sub" id="m-windows">Rolling windows, velocity and ratios to the customer's own baseline</h3>
       <div class="prose">
-        <p>A <strong>rolling window feature</strong> counts or sums events in the last <em>w</em> minutes, hours or days before the decision. <strong>Velocity</strong> is the same thing named for speed: transactions per hour, AED out in 15 minutes, failed PINs in 10 minutes. Three choices decide whether it works:</p>
-        <ul>
-          <li><strong>Which window.</strong> Too short and a shopping trip looks like an attack. Too long and a burst drowns in normal days. Match the attack: card testing takes minutes, account takeover hours, mule activity days. Build several and let the model pick.</li>
-          <li><strong>What to count.</strong> Distinct counts (merchants, countries, devices) are often sharper than raw counts.</li>
-          <li><strong>Relative to what.</strong> The choice that matters most: compare the window with the customer's own longer history.</li>
-        </ul>
-        <p>Think of a smoke alarm tuned to each room: a kitchen needs a higher threshold than a bedroom. The <strong>ratio to own baseline</strong> does this per customer: events in the window divided by what you would expect from them over that time, based on their previous 60 to 90 days. A ratio of 1 is business as usual; 4 is four times normal. End the baseline <em>before</em> the window, or the burst contaminates its own yardstick.</p>
-        <p>A raw count flags the heavy card user every Friday and misses the quiet pensioner whose card suddenly buzzes. Simulation 1 shows it. Other useful forms:</p>
-        <ul>
-          <li><strong>Trends:</strong> 30-day spend over the previous 30 days. Falling salary credits and balances are early signs of stress and attrition.</li>
-          <li><strong>Ratios between features:</strong> spend over income, balance over limit (utilisation), debt service over salary. Models struggle to learn division, so supplying the ratio is often the biggest single gain.</li>
-        </ul>
-        <p>In SQL this is a window function over the customer's own rows (<a href="f3-sql-thinking.html">F3.3</a>). The risk is the window's edge: one that includes the current row is fine when scoring a transaction as it arrives, but wrong for a feature predicting something <em>after</em> it (<a href="f3-leakage-point-in-time.html">F3.1</a>).</p>
+        <p>A <strong>rolling window</strong> counts events just before the decision. <strong>Velocity</strong> is the same idea named for speed, such as transactions per hour. Match the window to the attack: minutes for card testing, hours for account takeover, days for mule activity.</p>
+        <p>The ratio to own baseline is the smoke alarm tuned to each room. Divide recent activity by what is normal for that customer over their previous 60 to 90 days. A ratio of 1 is business as usual, and 4 is four times normal. Ratios between features (spend over income, balance over limit) help too, because models struggle to learn division.</p>
       </div>
 
       <figure class="figure" id="fig-velocity">
@@ -168,38 +135,13 @@
       </figure>
 
       <div class="prose">
-        <p>Three takeaways. The best window matches the attack's time scale, not the shortest or longest. The ratio wins where raw counts struggle, because a count can't tell a busy customer from a compromised one. And no window catches the first fraud in a burst, since no burst exists yet: velocity catches the repeat. Pair it with single-transaction features such as new merchant or unusual amount.</p>
+        <p>The best window matches the attack's time scale. The ratio beats the raw count, which can't tell a busy customer from a compromised one. No window catches the first fraud in a burst, so pair velocity with single-transaction features such as new merchant.</p>
       </div>
 
-      <h3 class="sub" id="m-encode">Encoding categories: one-hot, target encoding and high cardinality</h3>
+      <h3 class="sub" id="m-encode">Encoding categories</h3>
       <div class="prose">
-        <p>Models need numbers, but banking data is full of labels: merchant, MCC (merchant category code), branch, employer, device. What to do depends on <strong>cardinality</strong>, the number of distinct values.</p>
-        <ul>
-          <li><strong>Low (up to about 20), e.g. product or channel:</strong> <strong>one-hot encoding</strong>, one 0/1 column per value.</li>
-          <li><strong>Ordered, e.g. risk grade A to E:</strong> integers 1 to 5. Never give unordered labels integer codes in a linear model: it would treat "Dubai = 3" as bigger than "Sharjah = 2".</li>
-          <li><strong>High, e.g. merchants, employers, device IDs:</strong> one-hot gives tens of thousands of mostly empty columns. Use one of these:</li>
-        </ul>
-      </div>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <thead><tr><th>Method</th><th>How it works</th><th>Strength</th><th>Risk</th></tr></thead>
-          <tbody>
-            <tr><td><b>Group the rare ones</b></td><td>Keep the top 50 merchants; map the rest to "other", or group by MCC.</td><td>Simple, safe.</td><td>Drops the long tail, where fraud often lives.</td></tr>
-            <tr><td><b>Frequency encoding</b></td><td>Replace each value with how often it appears.</td><td>Never touches the label.</td><td>Different merchants with equal counts look the same.</td></tr>
-            <tr><td><b>Target encoding</b></td><td>Replace each value with its average outcome (e.g. the merchant's fraud rate).</td><td>One predictive column, any model.</td><td>Leaks the label unless done carefully.</td></tr>
-            <tr><td><b>Learned embeddings</b></td><td>A neural net learns a short vector per value.</td><td>Captures similarity; scales to millions.</td><td>Needs data per value and a serving pipeline.</td></tr>
-            <tr><td><b>Native handling</b></td><td>CatBoost and LightGBM handle categories directly.</td><td>Best default for boosted trees; leakage handled inside.</td><td>Tied to the library.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p><strong>Target encoding</strong> is the most powerful and the most dangerous. If a merchant had a 3% fraud rate in training, every transaction there gets 0.03: a ready-made risk score. The trap is small samples. Think of a restaurant rated 5 stars by its only reviewer. A merchant with 2 transactions, one fraud, shows 50%. Worse, if you compute the encoding from the rows you train on, <strong>each row's own label is part of its own feature</strong>. A once-seen fraud merchant gets 1.0 exactly where the answer is 1. The model looks brilliant in training and fails on new data.</p>
-        <p>Two fixes, used together:</p>
-        <ul>
-          <li><strong>Smoothing.</strong> Pull small samples towards the overall rate: a merchant with 2 transactions barely moves from the average, one with 2,000 keeps its own rate. A strength setting controls how long it takes to trust a merchant.</li>
-          <li><strong>Out-of-fold encoding.</strong> Split training data into folds and encode each row from the <em>other</em> folds, so its own label never reaches its own feature. scikit-learn's <code>TargetEncoder</code> does this when fitting.</li>
-        </ul>
-        <p>Smoothing alone reduces the leak but doesn't remove it; out-of-fold does. Simulation 2 shows the gap. Also mind time: if fraud labels arrive 30 to 90 days late, encode only from rows whose labels were known at the time.</p>
+        <p>Models need numbers, so labels like merchant or branch must be encoded. With few values, use one-hot columns. With thousands (merchants, devices), group the rare ones, use frequency, or let CatBoost or LightGBM handle them natively.</p>
+        <p><strong>Target encoding</strong> replaces each value with its average outcome, such as the merchant's fraud rate. It is powerful and dangerous. Like a restaurant rated five stars by its only reviewer, a merchant with two transactions is mostly noise. Worse, if each row's own label feeds its own feature, the model looks brilliant in training and fails on new data. Fix it with <strong>smoothing</strong> (pull small samples towards the overall rate) and <strong>out-of-fold encoding</strong> (encode each row from the other folds).</p>
       </div>
 
       <figure class="figure" id="fig-te">
@@ -231,25 +173,13 @@
       </figure>
 
       <div class="prose">
-        <p>The gap appears because on training rows a singleton fraud merchant scores 1.0 and a singleton clean one 0.0, lining up with the labels by construction. If cross-validation scores far exceed held-out scores and you used target encoding, suspect this first. A merchant first seen <em>after</em> training gets the overall rate, the right fallback; add a count feature so the model can tell "average merchant" from "unknown merchant".</p>
+        <p>If cross-validation far exceeds held-out scores and you used target encoding, suspect this leak first.</p>
       </div>
 
       <h3 class="sub" id="m-missing">Missing values: why a blank is information</h3>
       <div class="prose">
-        <p>Why a value is missing decides what you can safely do. Picture a survey with unanswered questions. There are three cases:</p>
-        <ul>
-          <li><strong>Missing completely at random.</strong> Unrelated to anything, such as an outage wiping the field for one afternoon. Rare. Dropping or averaging only loses information.</li>
-          <li><strong>Missing at random.</strong> Depends on columns you <em>have</em>. Under-25s skip "years at employer" more often, and you know their age. You can model the field from other columns.</li>
-          <li><strong>Missing not at random.</strong> Depends on the missing value itself. Self-employed applicants leave income blank because it is low or irregular. Nothing observed fully corrects this, and the blank is itself a signal.</li>
-        </ul>
-        <p>Bank data is full of the third kind: a blank income, a bureau "no file". Filled-in values become a biased sample (if low earners skip income, the average of the rest overstates it, see <a href="f2-confounding-simpson-selection.html">F2.6</a>). Mean imputation scores probable low earners as average. Dropping incomplete rows trains only on people who fill in forms, then scores everyone.</p>
-        <p>What to do, in order of preference:</p>
-        <ul>
-          <li><strong>Add a missingness indicator.</strong> A 0/1 "income was blank" column beside the imputed value. Nearly free, lets the model use the blank, and the single most useful move for any column with more than a percent or two blank.</li>
-          <li><strong>Impute sensibly.</strong> Median, not mean, for skewed amounts; group medians (income by job category) beat a global one.</li>
-          <li><strong>Let the model handle it.</strong> XGBoost, LightGBM and CatBoost learn where blanks go. A strong default, but check the blank pattern matches between training and live.</li>
-        </ul>
-        <p>Ask why it is blank: a product that doesn't collect the field (a product flag), or a migration bug (fix the data)? The indicator is safe only while the <em>reason</em> is stable. If the form makes income mandatory, the indicator goes quiet and the model shifts. Track each feature's missing rate in production.</p>
+        <p>Why a value is missing decides what you can do. Sometimes it is random, such as an outage. Often it depends on the value itself: self-employed applicants leave income blank because it is low or irregular. Then the blank is a signal, and filling it with the average scores probable low earners as typical.</p>
+        <p>The best move is a <strong>missingness indicator</strong>, a 0/1 column beside the imputed value. Impute with a median or group median, and let boosted trees route blanks themselves. Monitor the blank rate in production, because the indicator breaks if the form changes.</p>
       </div>
 
       <figure class="figure" id="fig-miss">
@@ -278,35 +208,13 @@
       </figure>
 
       <div class="prose">
-        <p>The oracle line is the best any approach could do if the blank hid nothing. The indicator recovers only what the <em>fact</em> of being blank carries, not the income itself. That is the limit: you can use the blank, but you can't un-hide what it hides.</p>
+        <p>You can use the blank, but you can't un-hide what it hides.</p>
       </div>
 
       <h3 class="sub" id="m-scale">Scaling, transforms, and which models care</h3>
       <div class="prose">
-        <p>Compare a person's height in metres with their salary in dirhams: any "distance" between two people is just the salary gap. The rule: a model that uses <strong>distances, dot products, gradients or penalties</strong> is affected by units. A model that only asks <strong>"is this value above a threshold?"</strong> is not.</p>
-      </div>
-      <div class="table-wrap" style="margin-top:12px">
-        <table class="data">
-          <thead><tr><th>Model family</th><th>Does scale matter?</th><th>Why</th></tr></thead>
-          <tbody>
-            <tr><td><b>k-NN, k-means, clustering, RBF-kernel SVM</b></td><td><b>Strongly</b></td><td>Built on distances. A feature in tens of thousands (AED) drowns one in single digits (Simulation 4).</td></tr>
-            <tr><td><b>Neural networks</b></td><td><b>Strongly</b></td><td>Inputs of very different sizes make training slow and unstable.</td></tr>
-            <tr><td><b>Penalised linear/logistic (ridge, lasso)</b></td><td><b>For the penalty</b></td><td>A feature in small units needs a large coefficient and is penalised more. Standardise first or the penalty picks winners by units.</td></tr>
-            <tr><td><b>Plain linear/logistic, no penalty</b></td><td>Convenience only</td><td>Predictions are the same. Standardising just makes coefficients comparable.</td></tr>
-            <tr><td><b>PCA</b></td><td><b>Strongly</b></td><td>The first component follows the feature with the biggest units.</td></tr>
-            <tr><td><b>Trees, random forests, boosted trees</b></td><td><b>No</b></td><td>"balance &gt; 12,400" splits the same rows as "balance in thousands &gt; 12.4". Log or rank transforms leave splits unchanged.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Common transformations:</p>
-        <ul>
-          <li><strong>Standardisation (z-score):</strong> subtract the mean, divide by the standard deviation. Default for neural nets and penalised models. One AED 50 million transfer stretches the scale for everyone.</li>
-          <li><strong>Log (<code>log1p</code>):</strong> for amounts, balances and counts. Money is multiplicative: AED 100 vs 200 matters about as much as 10,000 vs 20,000. Reach for this first on money fields.</li>
-          <li><strong>Robust scaling or ranks:</strong> use the median and spread, or percentiles, so outliers don't throw it.</li>
-        </ul>
-        <p>Two disciplines. <strong>Fit the scaler on training data only</strong>, then apply the same parameters to validation, test and live data; computing them on everything leaks test information (F3.1). And <strong>version the scaler with the model</strong>, or the deployed model silently produces nonsense.</p>
-        <p>Scaled or logged inputs do no harm to a tree, while raw inputs can ruin a distance or gradient model. When in doubt, scale.</p>
+        <p>Height in metres beside salary in dirhams means any "distance" is just the salary gap. Models built on <strong>distances, dot products, gradients or penalties</strong> (k-NN, clustering, PCA, neural nets, ridge and lasso) care about units. Trees and boosted trees only ask "above a threshold?", so they don't.</p>
+        <p>Standardise for neural nets and penalised models. Use <code>log1p</code> on money fields, since AED 100 against 200 matters about as much as 10,000 against 20,000. Fit the scaler on training data only, and version it with the model.</p>
       </div>
 
       <figure class="figure" id="fig-scale">
@@ -337,35 +245,29 @@
       </figure>
 
       <div class="prose">
-        <p>With plain dirhams, "similar customer" means "similar balance", and the informative feature is nearly invisible. Nothing in the data changed, only the unit.</p>
+        <p>Nothing in the data changed, only the unit.</p>
       </div>
     </section>
 
-    <!-- ============================== 3. FAILURES ============================== -->
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Target encoding computed on the training rows</div><p>Training AUC superb, held-out mediocre. Rare categories carry their own labels.</p><div class="spot"><b>Spot it</b>Compare cross-validated and held-out scores. Check the encoding is fitted inside each fold.</div></li>
-        <li><div class="t">Windows and baselines that include the future or the event</div><p>A "last 7 days" window centred on the row, a reference date of today, or a 90-day average that includes the burst and shrinks the ratio.</p><div class="spot"><b>Spot it</b>Recompute a few cases by hand as of decision time. A feature far stronger offline than live is the classic sign.</div></li>
-        <li><div class="t">Wrong window, or zero used for "never happened"</div><p>A 30-day window for 10-minute card testing; days since last transaction = 0 for customers with none, reading as "just transacted".</p><div class="spot"><b>Spot it</b>Plot known cases across several windows (Simulation 1). Look for a spike at zero.</div></li>
-        <li><div class="t">Mean imputation hiding informative blanks, or the pattern changing</div><p>Income or bureau score blank for specific groups, replaced by the average with no indicator; or a form change makes the field mandatory.</p><div class="spot"><b>Spot it</b>Compare outcome rates for blank versus filled. Monitor each feature's missing rate in production against training.</div></li>
-        <li><div class="t">Unscaled inputs, or a scaler fitted on all the data</div><p>k-NN, clustering, PCA or a neural net fed dirhams beside counts, so the largest numbers win; or scaling parameters computed before the train/test split.</p><div class="spot"><b>Spot it</b>Compare feature standard deviations. Check scaling lives inside the training pipeline.</div></li>
-        <li><div class="t">Proxy features and unexplainable feature sets</div><p>Postcode, employer or merchant encodings can carry nationality, religion or gender. Hundreds of auto-generated features nobody can explain to a validator may include leaks.</p><div class="spot"><b>Spot it</b>Try predicting the protected attribute from the features (<a href="f2-confounding-simpson-selection.html">F2.6</a>). For each top feature, ask for its definition, as-of time and why it should predict the outcome.</div></li>
+        <li><div class="t">Target encoding computed on the training rows</div><p>Training AUC superb, held-out mediocre.</p><div class="spot"><b>Spot it</b>Compare cross-validated and held-out scores; check the encoding is fitted inside each fold.</div></li>
+        <li><div class="t">Windows and baselines that include the future or the event</div><p>A reference date of today, or a baseline that includes the burst and shrinks the ratio.</p><div class="spot"><b>Spot it</b>Recompute a few cases by hand as of decision time.</div></li>
+        <li><div class="t">Zero used for "never happened"</div><p>Days since last transaction = 0 reads as "just transacted".</p><div class="spot"><b>Spot it</b>Look for a spike at zero.</div></li>
+        <li><div class="t">Mean imputation hiding informative blanks</div><p>Blanks replaced by the average with no indicator, or a form change makes the field mandatory.</p><div class="spot"><b>Spot it</b>Compare outcome rates for blank versus filled, and watch the missing rate in production.</div></li>
+        <li><div class="t">Unscaled inputs, or a scaler fitted on all the data</div><p>The largest numbers win in distance-based models; scaling before the split leaks test information.</p><div class="spot"><b>Spot it</b>Compare feature standard deviations; keep scaling inside the training pipeline.</div></li>
       </ul>
     </section>
 
-    <!-- ============================== 4. SELF-CHECK ============================== -->
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A customer who usually spends AED 540 a week spent AED 2,700 this week. Another who usually spends AED 6,000 spent AED 7,500. Who looks more unusual, and why does the ratio to baseline help?</summary><div class="ans"><p>The first. Their spend is about five times their own norm, while the second is only 25% above theirs. The second spent more in raw terms, but a raw threshold would flag them and miss the first. The ratio makes the threshold personal. (In practice add a small constant to the denominator and check transaction and merchant counts.)</p></div></details>
-        <details class="reveal"><summary>2. A merchant has 5 training transactions, 2 of them fraud, against an overall fraud rate of 2%. Why is the raw 40% a poor encoding, and what does smoothing do to it?</summary><div class="ans"><p>Five transactions is very little evidence, so 40% is mostly noise, and the model would treat the merchant as a major risk. Smoothing pulls it back towards the overall rate (here to a figure in single digits), and the pull weakens as the merchant's volume grows.</p></div></details>
-        <details class="reveal"><summary>3. Your target-encoded model scores AUC 0.91 in cross-validation but 0.74 on next month's data. Name two causes to check.</summary><div class="ans"><p>First, <strong>leaky encoding</strong>: was it fitted on the rows it was evaluated on, rather than inside each fold? Second, <strong>time</strong>: random folds mix future and past, unlike the real forward-looking case. Also check other leaks and genuine drift.</p></div></details>
-        <details class="reveal"><summary>4. On a personal-finance application, 25% leave "monthly income" blank, and their default rate is 14% against 7% for those who fill it in. What does this tell you, and what do you do?</summary><div class="ans"><p>The blank is informative: missingness relates to risk. Add a missing indicator and impute with a group median, or let a boosted tree route the blanks. Don't drop the rows or impute the global mean alone. Ask the business why it's blank, and monitor the blank rate in production.</p></div></details>
-        <details class="reveal"><summary>5. Why does ridge regression need standardised inputs when ordinary least squares does not?</summary><div class="ans"><p>In ordinary least squares, rescaling a feature just rescales its coefficient, so predictions are unchanged. Ridge penalises coefficient size, so a feature in small units (a 0 to 1 ratio) is penalised more than one in large units (AED). The penalty then favours features by their units, not usefulness.</p></div></details>
-        <details class="reveal"><summary>6. Does a log transform change the predictions of a random forest? Of a k-NN model?</summary><div class="ans"><p><strong>Random forest: no</strong>, since a log leaves the order of values, and so every split, unchanged. <strong>k-NN: yes</strong>, because distances change. Large values are compressed, so one huge transaction no longer dominates.</p></div></details>
-        <details class="reveal"><summary>7. Your best velocity window still misses 17% of fraud transactions, however you tune it. Is this a bug?</summary><div class="ans"><p>Probably not. The first transaction of each burst has no earlier burst activity to count, so it can't be seen (the ceiling in Simulation 1). To catch the first, add features that judge a transaction alone: new merchant, unusual amount, new device.</p></div></details>
-        <details class="reveal"><summary>8. You use "days since last salary credit" in a 12-month loan default model, but compute it as of the table build date, not each loan's start date. What goes wrong?</summary><div class="ans"><p>It uses information from after the loan began. A borrower who later defaulted may have lost their job and stopped salary credits, so the feature looks very predictive offline and is unavailable at decision time. Recompute every behavioural feature as of each loan's application date.</p></div></details>
+        <details class="reveal"><summary>1. A customer who usually spends AED 540 a week spent 2,700. Another who usually spends 6,000 spent 7,500. Who looks more unusual?</summary><div class="ans"><p>The first, at five times their norm against 25% above. The ratio makes the threshold personal.</p></div></details>
+        <details class="reveal"><summary>2. A merchant has 5 transactions, 2 of them fraud. Why is the raw 40% a poor encoding?</summary><div class="ans"><p>Five transactions is little evidence, so 40% is mostly noise. Smoothing pulls it towards the overall rate, less so as volume grows.</p></div></details>
+        <details class="reveal"><summary>3. A target-encoded model scores AUC 0.91 in cross-validation but 0.74 next month. Name two causes.</summary><div class="ans"><p>Leaky encoding (not fitted inside each fold), and random folds mixing future and past.</p></div></details>
+        <details class="reveal"><summary>4. 25% leave income blank, and their default rate is 14% against 7%. What do you do?</summary><div class="ans"><p>The blank is informative. Add a missing indicator and impute with a group median. Don't drop the rows.</p></div></details>
+        <details class="reveal"><summary>5. Does a log transform change a random forest? A k-NN model?</summary><div class="ans"><p>Not the forest, since order and so every split is unchanged. It does change k-NN, because distances change.</p></div></details>
       </div>
     </section>
 
