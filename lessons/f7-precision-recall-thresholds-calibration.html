@@ -145,19 +145,22 @@
       <h3 class="sub" id="m-outcomes">The four outcomes and the numbers built from them</h3>
       <div class="prose">
         <p>Each transaction lands in one of four boxes, the confusion matrix above. Think of a smoke alarm. <strong>Recall</strong>: of all real fires, how many did it catch? <strong>Precision</strong>: of all rings, how many were real?</p>
-        <p>Don't confuse precision with the <strong>false positive rate</strong>, the share of genuine transactions flagged. A 1% rate can still mean most alerts are false. <strong>F1</strong> blends precision and recall; if someone quotes it, ask: at what threshold?</p>
+        <p>Don't confuse precision with the <strong>false positive rate</strong>, the share of genuine transactions flagged. A 1% rate can still mean most alerts are false. <strong>F1</strong> blends precision and recall, but treats a miss and a false alarm as equally bad. If someone quotes it, ask: at what threshold?</p>
+        <p>The two pull against each other. A lower threshold lifts recall and usually drags precision down; a higher one does the reverse. So never read one without the other. Accuracy is the share of all transactions classified correctly, and on rare events it is nearly useless, because predicting "genuine" every time already scores about 99.8%. Where a miss and a false alarm cost different amounts, use <strong>F-beta</strong> (F1 with a dial that weights recall more), or skip the single number and price the outcomes directly, as in the threshold section below.</p>
       </div>
 
       <h3 class="sub" id="m-baserate">Why rare events fool almost everyone</h3>
       <div class="prose">
         <p>Precision depends on how common fraud is. A model that catches 80% of fraud and flags only 1% of genuine transactions, with fraud at 0.2% of volume, has precision near <strong>14%</strong>. Most alerts are genuine customers, though the model is 99% accurate. Like screening for a disease 1 in 500 people have: most positives are healthy.</p>
+        <p>The mechanism is simple. Genuine transactions outnumber fraud 500 to 1, so even a tiny false positive rate applied to a huge pool produces more false alarms than the model catches frauds. Whenever you see a low false positive rate on a rare event, ask: out of 100 alerts, how many are real? The same logic is why fraud models must be tested on data with the live fraud rate, not a convenient balanced sample.</p>
       </div>
       <div class="callout warn"><span class="k">Watch out</span>Precision on a balanced test set (say 50% fraud after resampling) says nothing about live precision.</div>
 
       <h3 class="sub" id="m-curves">ROC curves versus precision-recall curves</h3>
       <div class="prose">
         <p>Sweeping the threshold traces a curve. The <strong>ROC curve</strong> plots recall against false positive rate; its area, <strong>AUC</strong>, is the chance a random fraud outscores a random genuine transaction (0.5 is a coin flip, 1.0 is perfect). The <strong>precision-recall curve</strong> plots precision against recall.</p>
-        <p><strong>ROC ignores the fraud rate; PR doesn't.</strong> PR shows what the desk will actually experience.</p>
+        <p><strong>ROC ignores the fraud rate; PR doesn't.</strong> PR shows what the desk will actually experience. A random model sits on the diagonal in ROC, but in PR its precision equals the fraud rate, so on rare events the PR curve has far more room to separate good models from mediocre ones. Its one-number summary is <strong>average precision</strong>.</p>
+        <p>Use ROC and AUC to compare models' ranking power in general, or when classes are roughly balanced. Use PR and precision at your operating point when fraud is rare and someone has to work the alerts. Neither tells you where to put the threshold.</p>
       </div>
 
       <figure class="figure" id="fig-curves">
@@ -186,6 +189,7 @@
       <h3 class="sub" id="m-threshold">Choosing the threshold</h3>
       <div class="prose">
         <p>Three forces set the line: the <strong>cost of a miss</strong>, the <strong>cost of an alert</strong> (analyst time plus customer friction) and <strong>capacity</strong>. Ignoring capacity, flag a transaction when its chance of fraud times the loss exceeds the cost of reviewing it. With a miss at AED 1,800 and an alert at AED 30, that is about a 1-in-60 chance. It needs <strong>true</strong> probabilities, which is calibration, below.</p>
+        <p>The cost of an alert has two parts: analyst minutes, and friction for the genuine customer who is blocked or phoned. Friction is hard to price but not zero, and leaving it out pushes the threshold too low. Fit the threshold on validation data, never the test set, and revisit it whenever the fraud rate, the loss per fraud or the team size changes.</p>
       </div>
 
       <figure class="figure" id="fig-cost">
@@ -222,6 +226,7 @@
       <div class="prose">
         <p>A model is <strong>calibrated</strong> when its probabilities mean what they say, like a weather forecast: on days it says 30% rain, it rains on about 30%. A <strong>reliability diagram</strong> checks this; calibrated means on the diagonal.</p>
         <p>Calibration and ranking are <strong>independent</strong>: halve every probability and the AUC is unchanged. It usually breaks through overconfident flexible models, resampling that inflates probabilities, or drift in the fraud rate. Cheap fixes such as temperature scaling, Platt scaling or isotonic regression keep the ranking and are fitted on recent held-out data.</p>
+        <p>Match the fix to the fault. <strong>Temperature scaling</strong> divides the model's log-odds by one number, which cures over- or under-confidence. <strong>Platt scaling</strong> adds a shift as well, which also cures a wrong base rate. <strong>Isotonic regression</strong> fits a free-form monotone curve, so it handles odd shapes but needs thousands of positives or it overfits.</p>
       </div>
 
       <figure class="figure" id="fig-calib">
@@ -257,6 +262,42 @@
       <div class="prose">
         <p>Check calibration from about 1% upwards, where decisions are made. In credit risk, poor calibration can misstate IFRS 9 provisions, so validators test it directly.</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Precision and recall at a threshold show the real workload.</strong> They count alerts and catches directly, so the desk can see what it will be asked to do. Accuracy and ROC AUC hide this.</li>
+          <li><strong>Precision-recall curves stay informative when fraud is rare.</strong> Precision uses the false alarms in its denominator, so it reacts to the fraud rate. That is why the curve moves when the base rate does.</li>
+          <li><strong>Cost-based thresholds turn a score into a business decision.</strong> Pricing a miss, an alert and customer friction gives a threshold you can defend and re-run when costs change.</li>
+          <li><strong>Calibration makes a score usable as a probability.</strong> Once calibrated, one cut-off can be reused across segments, and the probabilities feed provisioning, pricing and expected-loss figures.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when</strong></p>
+        <ul>
+          <li><strong>They depend on the fraud rate.</strong> Precision measured on a balanced or old sample does not carry over to live data. They must be rechecked after drift.</li>
+          <li><strong>Labels are the ceiling.</strong> Unreported or unreviewed fraud counts as genuine, so recall looks better than it is. Chargebacks arrive weeks late, so recent data is under-labelled.</li>
+          <li><strong>Counting cases ignores value.</strong> Recall by count can hide missed big tickets. Weight by AED when losses vary widely.</li>
+          <li><strong>A single threshold may not fit all segments.</strong> Card-present, online and high-value customers have different base rates and costs, and one global cut-off can be wrong for each.</li>
+          <li><strong>Calibration is not ranking.</strong> A perfectly calibrated model can still rank poorly, and a good ranker can be badly calibrated. Check both.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose</strong></p>
+      </div>
+      <div class="table-wrap" style="margin-top:4px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Precision, recall at a threshold</b></td><td>You have a chosen operating point and need to describe the desk's workload</td><td>You are comparing models before any threshold exists</td></tr>
+            <tr><td><b>ROC AUC</b></td><td>Comparing ranking power, with fairly balanced classes or a first model screen</td><td>Fraud is very rare, or alert volume matters</td></tr>
+            <tr><td><b>PR curve / average precision</b></td><td>Rare events where analysts work the alerts</td><td>The test set's fraud rate differs from production, unless you reweight</td></tr>
+            <tr><td><b>Expected cost</b></td><td>Costs of a miss and an alert are roughly known and you must justify a threshold</td><td>Costs are guesses nobody can defend</td></tr>
+            <tr><td><b>Brier score / calibration curve</b></td><td>The probability itself is used, as in provisioning or pricing</td><td>Only the ranking matters</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice.</strong> Report precision, recall and alerts per day at the planned threshold, plus average precision for model comparison. Choose the threshold on validation data from a cost curve, then check it against team capacity. Recalibrate on recent data every month or quarter. Evaluate out of time, and add a value-weighted view. None of this is heavy on compute; the constraint is enough recent labelled fraud.</p>
+        <p>In banking: card and payment fraud thresholds, step-up authentication bands, AML alert tuning where false positives swamp investigators, and IFRS 9 PD calibration where validators test it directly.</p>
+      </div>
     </section>
 
     <!-- ============================== 5. FAILURES ============================== -->
@@ -269,6 +310,8 @@
         <li><div class="t">Threshold tuned on the test set</div><p>Picking the best threshold on the data you report on makes results optimistic.</p><div class="spot"><b>Spot it</b>Ask which data chose the threshold. It should be validation data.</div></li>
         <li><div class="t">Counting transactions when the business counts money</div><p>A model can catch 80% of cases but 55% of value if it misses the big tickets.</p><div class="spot"><b>Spot it</b>Ask for value-weighted recall (AED).</div></li>
         <li><div class="t">Ignoring seasonal shift</div><p>Ramadan, Eid and summer travel change spending. A threshold set in a quiet month can flood the desk in a busy one.</p><div class="spot"><b>Spot it</b>Ask how alert volumes were checked across peaks.</div></li>
+        <li><div class="t">Trusting labels that only exist where you looked</div><p>Unflagged, unreported fraud has no label, so recall looks better than it is, and the next model learns the same blind spot.</p><div class="spot"><b>Spot it</b>Ask whether a random sample of unflagged transactions is reviewed.</div></li>
+        <li><div class="t">Fixing calibration on the data that trained the model</div><p>The model is most overconfident on its own training data, so a calibrator fitted there learns nothing useful.</p><div class="spot"><b>Spot it</b>Ask which held-out, recent data the calibrator was fitted on.</div></li>
       </ul>
     </section>
 
@@ -282,6 +325,8 @@
         <details class="reveal"><summary>3. True or false: recalibrating a model improves its AUC.</summary><div class="ans"><p><strong>False.</strong> Calibration methods keep the ranking, and AUC depends only on ranking.</p></div></details>
         <details class="reveal"><summary>4. The fraud rate drops from 5% to 0.5%. Which changes: the ROC curve, the PR curve, or both?</summary><div class="ans"><p><strong>Only the PR curve.</strong> ROC compares within each class, so it ignores balance. Precision mixes the classes, so it falls.</p></div></details>
         <details class="reveal"><summary>5. A model was calibrated when fraud was 0.4%. Fraud is now 0.2%. What goes wrong with a probability threshold, and how do you fix it?</summary><div class="ans"><p>Every probability is about twice too high, so too many cross the threshold. Recalibrate on recent data.</p></div></details>
+                <details class="reveal"><summary>6. Which would you choose to compare two fraud models at 0.05% fraud: ROC AUC or average precision, and why?</summary><div class="ans"><p><strong>Average precision, alongside AUC.</strong> At this rate, a small false positive rate still means many false alarms, which ROC hides and PR shows. Then compare precision and recall at the planned threshold.</p></div></details>
+        <details class="reveal"><summary>7. Model A has slightly higher AUC but overconfident probabilities. Model B has lower AUC but is calibrated. The bank prices decisions on probabilities. Which would you choose?</summary><div class="ans"><p><strong>Probably A, after recalibrating it.</strong> Temperature or Platt scaling fixes calibration without touching the ranking, so you keep A's edge. If you cannot recalibrate on recent data, B is safer.</p></div></details>
       </div>
     </section>
     <div class="lesson-foot">

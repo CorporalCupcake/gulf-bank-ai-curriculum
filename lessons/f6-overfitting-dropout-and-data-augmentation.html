@@ -79,7 +79,8 @@
       <h3 class="sub" id="m-overfit">Overfitting: capacity against data</h3>
       <div class="prose">
         <p><strong>Capacity</strong> is how many shapes the model can bend into. <strong>Information</strong> is how many clean examples pin the shape down. Too much capacity for the information and the model follows noise: training error keeps falling while validation error turns up. Too little and it <em>underfits</em>: error is high on both.</p>
-        <p>Read it by the gap. A small steady gap is normal; one that grows with capacity is memorisation. The "penalty" in the simulation is weight decay, a cost on large coefficients that stops the curve wiggling.</p>
+        <p>Capacity shows up differently in each model family: polynomial degree, tree depth, number of weights, number of boosting rounds. Plotted against capacity, validation error is a U shape, and the best model sits at the bottom. This is the bias-variance trade-off in plain terms. A stiff model is consistently wrong (bias). A flexible one is right on average but swings with whichever sample it saw (variance).</p>
+        <p>Read it by the gap. A small steady gap is normal; one that grows with capacity is memorisation. The "penalty" in the simulation is weight decay (also called ridge or L2 regularisation), a cost on large coefficients that stops the curve wiggling. The penalty strength is a knob: too small and it does nothing, too large and the model underfits.</p>
       </div>
 
       <figure class="figure" id="fig-fit">
@@ -108,13 +109,20 @@
       </figure>
 
       <div class="prose">
-        <p>Training error only ever falls as capacity rises, so it can never tell you where to stop. To cut the gap, in rough order of payoff: more real data, less capacity, weight decay, and early stopping with the best checkpoint kept.</p>
+        <p>Training error only ever falls as capacity rises, so it can never tell you where to stop. More data and a stronger penalty fix the same problem: both limit how far noise in the sample can move the fit. To cut the gap, in rough order of payoff:</p>
+        <ul>
+          <li><strong>More real data.</strong> Best, and seldom available. In fraud and default modelling, the number of positives is what counts, not the number of rows.</li>
+          <li><strong>Less capacity.</strong> Fewer features, shallower trees, narrower layers.</li>
+          <li><strong>Weight decay and early stopping.</strong> Penalise large weights, or stop when validation loss stops improving and keep the best checkpoint. Early stopping is nearly free, which is why it is the first thing to turn on.</li>
+          <li><strong>Noise during training.</strong> Dropout and augmentation, below.</li>
+        </ul>
         <p>The validation set can overfit too. Try 200 settings and the best score is optimistic, like sitting a mock exam 200 times. Keep a final untouched test set and use time-ordered splits.</p>
       </div>
 
       <h3 class="sub" id="m-dropout">Dropout and data augmentation</h3>
       <div class="prose">
         <p><strong>Dropout.</strong> At each training step, units are switched off at random, so no single unit becomes indispensable, like a team where anyone might be off sick. Survivors are scaled up so the average output is unchanged, and nothing is dropped at test time. What dropout adds is noise, and the network learns to be right despite it.</p>
+        <p>Another way to see it: dropout trains a huge crowd of thinned networks that share weights. The full network at test time acts like their average. That averaging is why dropout often cuts overfitting in wide, dense layers.</p>
       </div>
 
       <figure class="figure" id="fig-drop">
@@ -136,8 +144,8 @@
       </figure>
 
       <div class="prose">
-        <p>Typical rates are 0.1 to 0.5. Because dropout is on only in training, training loss can sit above validation loss.</p>
-        <p><strong>Data augmentation</strong> makes new examples by changing existing ones in ways that should not change the label. A cheque rotated two degrees is still the same cheque.</p>
+        <p>Typical rates are 0.1 for transformers and 0.2 to 0.5 for older dense networks. Raise it when the gap is large, lower it when training loss itself will not fall. It does little for tree ensembles, which carry their own randomness, and it sits awkwardly with batch normalisation, so many modern vision models use less of it. Because dropout is on only in training, training loss can sit above validation loss.</p>
+        <p><strong>Data augmentation</strong> makes new examples by changing existing ones in ways that should not change the label. A cheque rotated two degrees is still the same cheque. You are handing the model knowledge it cannot learn from the data alone: these differences do not matter. It is often the strongest regulariser for images and text, because it adds genuinely new variety rather than just noise.</p>
         <p>It works well for images (small rotation, blur, scan noise) and text (back-translation), and rarely for tabular data, where a changed amount can turn a legitimate row into fraud. Flipping an Arabic cheque, or cropping off the signature box, breaks the label. Augment only the training set, after splitting, and ask whether each change could happen in production.</p>
       </div>
 
@@ -147,8 +155,10 @@
         <ul>
           <li><strong>Is training loss falling?</strong> If not, it is an optimisation problem or a bug, and validation tells you nothing yet.</li>
           <li><strong>Is the gap widening?</strong> A small steady gap is normal. Validation turning up is where early stopping should have fired.</li>
-          <li><strong>Where does it start and level off?</strong> A model with no skill sits near the loss of a constant guess (0.693 for two classes).</li>
+          <li><strong>Where does it start and level off?</strong> A model with no skill sits near the loss of a constant guess (0.693 for two classes). A high plateau for both curves is underfitting.</li>
+          <li><strong>Is it smooth?</strong> Heavy zig-zag usually means the learning rate is too high. Spikes that recover are common; spikes that do not are divergence.</li>
         </ul>
+        <p>A useful first test, popularised by Andrej Karpathy: overfit one small batch. If the model cannot drive loss near zero on 10 examples, there is a bug, and no amount of tuning will help.</p>
       </div>
 
       <figure class="figure" id="fig-curves">
@@ -169,13 +179,13 @@
       </figure>
 
       <div class="prose">
-        <p>A curve shows a symptom, not a cause. Validation below training might be dropout, but also leakage.</p>
+        <p>A curve shows a symptom, not a cause. Validation below training might be dropout, but also leakage or an unusually easy validation set. Log the metric you actually care about too, such as recall at a fixed alert volume, because loss can improve while the business metric does not.</p>
       </div>
 
       <h3 class="sub" id="m-precision">Mixed precision and distributed training</h3>
       <div class="prose">
-        <p>Numbers are stored in a fixed budget of bits. Fewer bits mean less memory and faster arithmetic, but coarser spacing between representable values. FP32 is the safe default. BF16 keeps FP32's range with fewer digits and is the workhorse for large models. FP16 has a narrow range, so small gradients vanish unless the loss is scaled up first.</p>
-        <p>The danger is accumulating small changes. A ruler marked only in whole centimetres cannot record a 1 mm shift. In the same way, an update smaller than the spacing rounds back to the old weight, which never moves. <strong>Mixed precision</strong> fixes this: keep an FP32 master copy of the weights, run the heavy passes in low precision, and keep sensitive sums in higher precision.</p>
+        <p>Numbers are stored in a fixed budget of bits. Fewer bits mean less memory and faster arithmetic, but coarser spacing between representable values. FP32 is the safe default. BF16 keeps FP32's range with fewer digits and is the workhorse for large models. FP16 has more digits than BF16 but a narrow range, so small gradients vanish unless the loss is scaled up first (loss scaling). FP8 is used for the big matrix multiplies on recent GPUs, with scaling factors to keep values in range.</p>
+        <p>The danger is accumulating small changes. A ruler marked only in whole centimetres cannot record a 1 mm shift. In the same way, an update smaller than the spacing rounds back to the old weight, which never moves. <strong>Mixed precision</strong> fixes this: keep an FP32 master copy of the weights, run the heavy passes in low precision, and keep sensitive sums such as softmax, normalisation, the loss and optimiser state in higher precision. For FP16, scale the loss up before backpropagation and the gradients back down afterwards. With BF16 you can usually skip that step.</p>
       </div>
 
       <figure class="figure" id="fig-prec">
@@ -208,7 +218,53 @@
       </figure>
 
       <div class="prose">
-        <p>Mixed-precision Adam holds roughly 16 bytes per parameter. A 7-billion-parameter model needs about 112 GB before activations, more than one 80 GB card, so training is split across chips: each chip holds a full copy (data parallel), or the weights and optimiser state are divided up. This matters only if you pre-train or heavily fine-tune your own large models.</p>
+        <p>Mixed-precision Adam holds roughly 16 bytes per parameter. A 7-billion-parameter model needs about 112 GB before activations, more than one 80 GB card, so training is split across chips: each chip holds a full copy (data parallel), or the weights and optimiser state are divided up. The main splits are:</p>
+        <ul>
+          <li><strong>Data parallel.</strong> Every chip holds a full copy and sees different examples; gradients are averaged each step. The whole model must fit on one chip.</li>
+          <li><strong>Sharded data parallel (ZeRO, FSDP).</strong> Optimiser state, gradients and weights are divided across chips and gathered when needed. It removes most duplication, at the cost of more communication.</li>
+          <li><strong>Tensor and pipeline parallel.</strong> Cut each matrix multiplication, or put different layers on different chips. This needs fast links between chips.</li>
+        </ul>
+        <p>Doubling the chips rarely doubles speed. This matters only if you pre-train or heavily fine-tune your own large models.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Early stopping and weight decay are cheap and nearly universal.</strong> They add almost no compute and work for any model trained by gradient steps, because they cap how far noise can pull the fit.</li>
+          <li><strong>Dropout helps wide, dense networks.</strong> Where thousands of units can co-adapt, random removal forces redundancy and acts like averaging many thinned networks.</li>
+          <li><strong>Augmentation helps when data is scarce and invariances are known.</strong> A scanned cheque really can be skewed a little; you are adding true variety, not just noise.</li>
+          <li><strong>Loss curves are the fastest diagnostic you have.</strong> One plot separates bugs, underfitting, overfitting and bad learning rates, each of which has a different fix.</li>
+          <li><strong>Mixed precision roughly halves memory and speeds up training</strong> on modern accelerators, with little loss of accuracy when a master copy is kept.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when</strong></p>
+        <ul>
+          <li><strong>Regularisation cannot fix leakage or a shifted population.</strong> If validation data is not like the future, every curve lies. Fix the split first.</li>
+          <li><strong>Heavy dropout on small or tabular models</strong> often just slows training. Tree ensembles and linear models have better tools, such as shrinkage, depth limits and an L1 or L2 penalty.</li>
+          <li><strong>Augmentation fails when a change can alter the label.</strong> Perturbing a transaction amount can turn a legitimate row into fraud. Flipping an Arabic cheque breaks it.</li>
+          <li><strong>Strong penalties cause underfitting.</strong> If both curves are high and close, add capacity instead of regularising harder.</li>
+          <li><strong>Low precision is risky for fragile numerics</strong> such as long sums, tiny learning rates and small gradients. For a small model that trains in minutes, FP32 costs you nothing and removes a failure mode.</li>
+        </ul>
+      </div>
+
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Early stopping</b></td><td>Any iteratively trained model. Always the first thing to turn on.</td><td>Validation set is tiny or noisy, so the stopping point is random.</td></tr>
+            <tr><td><b>Weight decay / L2</b></td><td>Linear models, neural nets, many correlated features.</td><td>The model already underfits.</td></tr>
+            <tr><td><b>Dropout</b></td><td>Wide dense or transformer layers with a clear train/validation gap.</td><td>Tree ensembles, small tabular nets, or when training loss will not fall.</td></tr>
+            <tr><td><b>Augmentation</b></td><td>Images, audio and text with known label-safe changes.</td><td>Tabular rows, or any change that could alter the label.</td></tr>
+            <tr><td><b>More data / simpler model</b></td><td>You can get more labels, or a smaller model performs similarly.</td><td>Labels are expensive and the gap is small.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice</strong></p>
+        <p>Try in this order: a time-ordered validation split, early stopping with the best checkpoint, a simple baseline, then weight decay, then dropout or augmentation only if the gap is still large. Sensible defaults: dropout 0.1 to 0.3, weight decay tuned on a log scale, BF16 on supported hardware for large models and FP32 for small ones.</p>
+        <p>Data and compute: regularisation needs no extra data, but trustworthy validation needs enough held-out examples, and in fraud or default work that means enough positives. Mixed precision matters when a model no longer fits in memory; for a typical tabular model it does not.</p>
+        <p>In banking you meet this daily. Credit and fraud models are checked on out-of-time data for exactly this reason: a model that looks excellent in training and weak on next quarter has overfitted.</p>
       </div>
     </section>
 
@@ -219,6 +275,9 @@
         <li><div class="t">Choosing the epoch on the test set, or quoting training numbers</div><p>The stopping point is picked on test data, or "99% AUC" is quoted without saying on what data.</p><div class="spot"><b>Spot it</b>Ask which data picked the stopping point and request validation and out-of-time figures beside training.</div></li>
         <li><div class="t">Augmentation that leaks or changes the label</div><p>Copies of one cheque land on both sides of the split, or back-translation flips a negation.</p><div class="spot"><b>Spot it</b>Check that augmentation runs only on training data, and read fifty augmented examples.</div></li>
         <li><div class="t">Dropout left on at prediction time</div><p>The same input gets different scores on each call.</p><div class="spot"><b>Spot it</b>Score one input twice. A deployed model should return identical scores.</div></li>
+        <li><div class="t">Tuning on the validation set until it overfits</div><p>After hundreds of experiments, the best validation score is optimistic and the live result disappoints.</p><div class="spot"><b>Spot it</b>Keep an untouched, time-ordered test set and score it once at the end.</div></li>
+        <li><div class="t">Regularising a model that underfits</div><p>Both curves are high and close, and more dropout or weight decay makes things worse.</p><div class="spot"><b>Spot it</b>Look at the gap first. A tiny gap with high loss means add capacity or better features.</div></li>
+        <li><div class="t">Reading a symptom as a cause</div><p>Validation loss below training is blamed on dropout when the real cause is leakage.</p><div class="spot"><b>Spot it</b>Turn dropout and augmentation off for evaluation. If validation is still better, check the split.</div></li>
         <li><div class="t">Silent loss of small updates</div><p>FP16 training without loss scaling plateaus early or becomes NaN.</p><div class="spot"><b>Spot it</b>Compare against a short FP32 run and check NaN counts.</div></li>
       </ul>
     </section>
@@ -233,6 +292,9 @@
         <details class="reveal"><summary>2. Why does dropout scale surviving units up during training and change nothing at test time?</summary><div class="ans"><p>Switching units off shrinks the layer's output. Scaling survivors up keeps the average the same, so the full network can run as it is.</p></div></details>
         <details class="reveal"><summary>3. A loss curve starts at 0.69 for a binary task and stays there. What does it mean?</summary><div class="ans"><p>0.69 is the loss of a 50/50 guess, so nothing is being learned. Suspect a bug, and overfit one small batch to check.</p></div></details>
         <details class="reveal"><summary>4. Why does a tiny update vanish in FP16, and how does mixed precision help?</summary><div class="ans"><p>The update is smaller than the spacing between storable numbers, so it rounds back. Updating an FP32 master copy lets tiny changes add up.</p></div></details>
+        <details class="reveal"><summary>5. A fraud model has 300 positives and 200 features. Training AUC is 0.99, out-of-time AUC is 0.71. Which fix would you try first, and why?</summary><div class="ans"><p>Cut capacity and add a penalty before anything fancy: fewer features, shallower trees, early stopping. With 300 positives, there is too little information for the capacity. Dropout and augmentation are poor first choices on tabular data, and more labels would help most if you can get them.</p></div></details>
+        <details class="reveal"><summary>6. Both training and validation loss plateau high with almost no gap. Would you add dropout or a bigger model, and why?</summary><div class="ans"><p>A bigger model, or better features. A small gap means no overfitting, so regularising harder only makes underfitting worse. Dropout is for the opposite situation.</p></div></details>
+        <details class="reveal"><summary>7. You train a 100-million-parameter model on one GPU. Would you pick FP16, BF16 or FP32, and why?</summary><div class="ans"><p>BF16 if the hardware supports it. It has FP32's range, so no loss scaling is needed, and it saves memory and time. FP16 needs loss scaling to avoid vanishing gradients. FP32 is safe but slower, and fine if the model already trains quickly.</p></div></details>
       </div>
     </section>
 

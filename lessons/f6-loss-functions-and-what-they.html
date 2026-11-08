@@ -115,14 +115,16 @@
 
       <h3 class="sub" id="m-reg">Regression losses: mean, median, quantile</h3>
       <div class="prose">
-        <p>Each loss turns a miss into a penalty, and each has a hidden answer.</p>
+        <p>The <strong>residual</strong> is actual minus predicted. Each loss turns that miss into a penalty, and each has a hidden answer to "what number do you want?"</p>
         <ul>
-          <li><strong>Squared error (MSE)</strong> predicts the <strong>mean</strong>. Use it when outliers are real signal.</li>
-          <li><strong>Absolute error (MAE)</strong> predicts the <strong>median</strong>. Use it when outliers are noise.</li>
-          <li><strong>Huber</strong> is squared for ordinary misses, absolute for outliers.</li>
-          <li><strong>Quantile (pinball)</strong> charges under- and over-prediction differently. Use it when misses are asymmetric, or you need an interval.</li>
+          <li><strong>Squared error (MSE)</strong> predicts the <strong>mean</strong>. Big misses count quadratically, so one huge row can dominate. It is smooth, easy to optimise and what ordinary least squares uses. Use it when outliers are real signal.</li>
+          <li><strong>Absolute error (MAE)</strong> predicts the <strong>median</strong>. Every unit of miss costs the same, so outliers barely matter. Its slope is constant, so it gives no extra pull near the optimum and can train slowly. Use it when outliers are noise.</li>
+          <li><strong>Huber</strong> is squared for misses smaller than a switch point δ and absolute beyond it. You get smooth training and robustness. The cost is one more knob: set δ near the size of a normal miss, for instance a high percentile of typical residuals.</li>
+          <li><strong>Quantile (pinball)</strong> tilts the absolute penalty so under- and over-prediction cost differently, and predicts a chosen quantile (the level the target stays under that share of the time). Use it when misses are asymmetric, or you need an interval.</li>
         </ul>
-        <p>Whether a huge withdrawal day is a glitch or a real funding need is a business question, not a statistical one. Costs are rarely symmetric in banking. If a shortfall costs four times idle cash, the best forecast is the 80th percentile: you accept a shortfall about 1 day in 5. Squared error aims near the 50th, which is wrong for this business.</p>
+        <p>In Simulation 1, one outlier drags the mean a long way and the median almost nowhere. If a huge withdrawal day is real and treasury must fund it, the mean carries that information. If it is a glitch, the median protects you. <strong>The outlier question is a business question, not a statistical one.</strong></p>
+        <p>Quantile loss matters most in banking because costs are rarely symmetric: too few loaves loses sales, too many wastes dough. If a shortfall costs four times idle cash, the best forecast is the 80th percentile, since you accept a shortfall about 1 day in 5. Squared error aims near the 50th, which is wrong for this business by construction. The rule is simple: the target quantile is shortfall cost divided by (shortfall cost plus idle cost).</p>
+        <p>Train two quantiles, say the 10th and 90th, and you have a prediction interval with no distributional assumption. The catch is that separately trained quantiles can cross (the 90th below the 10th on some rows), and they are only as good as the tail data behind them. Boosted trees and neural nets both accept these losses directly.</p>
       </div>
 
       <figure class="figure" id="fig-pin">
@@ -149,8 +151,8 @@
 
       <h3 class="sub" id="m-ce">Classification: cross-entropy and why it is the default</h3>
       <div class="prose">
-        <p>Think of a forecaster who says "1% chance of rain" and gets soaked: confident wrongness should be punished hard. For yes/no problems (fraud, default) <strong>cross-entropy</strong> charges for how surprised the model was, with no ceiling.</p>
-        <p>Logistic regression (F2.5) and every language model's next-token loss (M1) use it. It is lowest when the model reports the true probability, which is why calibration checks (F7.4) mean something.</p>
+        <p>Think of a forecaster who says "1% chance of rain" and gets soaked: confident wrongness should be punished hard. For yes/no problems (fraud, default) the model outputs a probability, and <strong>cross-entropy</strong> (log loss) charges for how surprised it was. On a real fraud, a model that said 50% takes a small penalty, one that said 1% a big one, one that said 0.001% a huge one. There is no ceiling.</p>
+        <p>Logistic regression (F2.5), neural classifiers, boosted-tree classifiers and every language model's next-token loss (M1) use it. It also rewards honesty: it is lowest when the model reports the true probability. This is called a <strong>proper scoring rule</strong>, and it is why calibration checks (F7.4) mean something.</p>
       </div>
 
       <figure class="figure" id="fig-ce">
@@ -176,24 +178,41 @@
       </figure>
 
       <div class="prose">
-        <p>Squared error on probabilities goes quiet exactly when the model is confidently wrong, so it barely learns. That is why cross-entropy is the default.</p>
-        <p>Class weights, focal loss and label smoothing help with imbalance but shift the output, so the number is no longer a true probability. Recalibrate before using it.</p>
+        <p>The push-to-correct stats are the real lesson. With cross-entropy, a confidently wrong model gets a big corrective push. Squared error on probabilities goes quiet exactly when the model is saturated and most wrong, so it barely learns it is wrong. That, not taste, is why cross-entropy is the default.</p>
+        <p>Variants you will meet:</p>
+        <ul>
+          <li><strong>Class weights</strong> multiply the loss on rare positives. They inflate probabilities by a known factor (undone in F3.5), so the output's meaning changes.</li>
+          <li><strong>Focal loss</strong> down-weights easy cases so training focuses on hard ones. <strong>Label smoothing</strong> softens the 0/1 target. Both can help with extreme imbalance or over-confidence, but they distort calibration. Check it.</li>
+          <li><strong>Business losses</strong> weight a missed fraud by its AED exposure. Powerful, but they tie the model to today's cost estimates, so document them.</li>
+        </ul>
       </div>
 
       <h3 class="sub" id="m-lr">Learning rate, momentum and schedules</h3>
       <div class="prose">
-        <p>The learning rate is the stride length. Too small and training crawls. Too big and each step overshoots, the loss climbs and ends in NaN.</p>
+        <p>Each step moves the weights a little way downhill. The learning rate is the stride length. Too small and training crawls. Too big and each step overshoots the valley by more than the last, so the loss climbs and ends in NaN (not a number). Real losses are canyons: steep walls, gently sloping floor. The steepest direction caps the stride, so the gentle floor is crossed slowly.</p>
+        <p>Remedies layered on the same step:</p>
         <ul>
-          <li><strong>Momentum</strong> averages past gradients, like a rolling ball, so the zig-zag cancels.</li>
-          <li><strong>Adam / AdamW</strong> give each parameter its own step size. AdamW is the transformer default.</li>
-          <li><strong>Schedules</strong> change the rate over time: big steps early, small steps late. Warmup starts near zero, because a big first step can wreck a transformer. Cosine decay falls smoothly to zero.</li>
+          <li><strong>Momentum</strong> averages past gradients, like a rolling ball. Steps along the canyon floor add up and the sideways zig-zag cancels. A value of 0.9 is the usual default.</li>
+          <li><strong>Adam / AdamW</strong> give each parameter its own step size based on its recent gradients, so you rarely need hand-tuned per-layer rates. AdamW also decays weights properly and is the transformer default.</li>
+          <li><strong>Gradient clipping</strong> caps the size of a step when a freak batch produces a huge gradient. It is cheap insurance against spikes.</li>
+        </ul>
+        <p>Schedules change the rate over time: big steps early to cover ground, small steps late to settle rather than bounce.</p>
+        <ul>
+          <li><strong>Cosine decay:</strong> smooth fall from peak to near zero.</li>
+          <li><strong>Warmup:</strong> start near zero and ramp up over the first hundreds or thousands of steps. Early gradients are wild, and Adam's statistics are still unreliable, so a big first step can wreck a transformer's weights beyond recovery.</li>
+          <li><strong>Warmup–stable–decay (WSD):</strong> ramp up, hold flat, then decay quickly at the end. You can extend training later without redoing the schedule.</li>
         </ul>
         <p>When a run misbehaves, read the loss curve first, not the final metric.</p>
       </div>
 
       <h3 class="sub" id="m-batch">Batch size and gradient noise</h3>
       <div class="prose">
-        <p>Think of polling: 16 people give a rough read, 1,000 a steadier one. Small batches make the slope noisy, so the weights jitter near the bottom. Shrink the rate or grow the batch to settle. Change the batch size and you usually retune the rate.</p>
+        <p>Think of polling: 16 people give a rough read, 1,000 a steadier one. Each step uses a batch, so the slope is right on average but noisy.</p>
+        <ul>
+          <li><strong>Noise sets a floor.</strong> Near the bottom the true slope is zero but the noisy one is not, so the weights jitter. To go lower, shrink the learning rate (a schedule) or grow the batch.</li>
+          <li><strong>Bigger batches buy parallelism, not unlimited speed.</strong> Past a point, extra examples are mostly wasted, because the gradient is already accurate enough.</li>
+          </ul>
+        <p>Change the batch size and you usually retune the rate. For plain SGD, scale the rate up in proportion to the batch. For Adam-type optimisers a gentler increase is the common rule of thumb. Either way, confirm with a short sweep.</p>
       </div>
 
       <figure class="figure" id="fig-lr">
@@ -230,6 +249,40 @@
           <li><strong>The loss curve is a diagnostic.</strong> Smooth and falling: healthy. Flat and high: rate too low. Spikes: rate too high or bad data. NaN: diverged. Validation rising while train falls: overfitting (F6.3).</li>
         </ul>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Encoding the business cost.</strong> A pinball or exposure-weighted loss lets the model itself aim at the right answer, rather than fixing a mean forecast afterwards.</li>
+          <li><strong>Stable, reliable probabilities.</strong> Cross-entropy is a proper scoring rule, so a well-trained model's outputs can be used in expected-loss and pricing sums.</li>
+          <li><strong>Robustness on demand.</strong> Absolute error and Huber stop a few corrupt rows (a keying error, a duplicated trade) from steering the fit.</li>
+          <li><strong>Cheap diagnosis.</strong> The loss curve and a log-scale rate sweep find most training problems in minutes, with no extra tooling.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>Squared error on skewed money amounts.</strong> A handful of large balances dominates the fit. Model the log of the amount, or use Huber.</li>
+          <li><strong>Absolute error when you need the total.</strong> The median under-forecasts a skewed total. If treasury funds the sum, the mean (or a high quantile) is the right target.</li>
+          <li><strong>Class weights and focal loss when you need probabilities.</strong> They help ranking under heavy imbalance but break the meaning of the score.</li>
+          <li><strong>A custom business loss with shaky costs.</strong> If the AED figures are guesses, the model inherits the guess and hides it.</li>
+          <li><strong>Loss as a stand-in for the metric.</strong> Losses must be smooth to train. Metrics like precision at the top 0.5% are not, so a falling loss does not guarantee a better metric.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose:</strong></p>
+      </div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+        <tbody>
+          <tr><td><b>Squared error</b></td><td>Outliers are real signal and you want the average or the total.</td><td>Targets are heavy-tailed or contain data errors.</td></tr>
+          <tr><td><b>Absolute error</b></td><td>You want a typical value and outliers are noise.</td><td>You need totals, or training speed near the optimum matters.</td></tr>
+          <tr><td><b>Huber</b></td><td>Mostly clean data with a few bad rows, and you want smooth training.</td><td>You cannot judge what a normal miss looks like, so δ is a guess.</td></tr>
+          <tr><td><b>Quantile (pinball)</b></td><td>Costs are asymmetric, or you need intervals or a safety level.</td><td>You have too little tail data to learn the quantile.</td></tr>
+          <tr><td><b>Cross-entropy</b></td><td>Any classification where the probability itself is used.</td><td>The output must be a pure ranking under extreme imbalance (try weights or focal, then recalibrate).</td></tr>
+        </tbody>
+      </table></div>
+      <div class="prose">
+        <p><strong>In practice:</strong> start with the plain default (squared error or cross-entropy), write down the real cost of a miss in each direction, and only then move to a quantile or business loss. For rates, use AdamW with a cosine schedule and a short warmup, then sweep the peak rate over several factors of ten. Typical peaks are around 1e-3 for small networks, 1e-4 to 3e-4 for transformers trained from scratch and 1e-5 to 5e-5 for fine-tuning. Batch sizes of 32 to 512 suit tabular and small models, thousands for large language models.</p>
+        <p>Compute is rarely the issue: a rate sweep is a handful of short runs. In banking you will meet quantile losses in cash and liquidity forecasting, cost-weighted cross-entropy in fraud and credit scoring, and cross-entropy plus warmup and decay in every fine-tuned or pre-trained language model.</p>
+      </div>
     </section>
 
     <!-- ============================== 5. FAILS ============================== -->
@@ -241,6 +294,8 @@
         <li><div class="t">Training loss and reported metric disagree</div><p>The loss falls while the metric stays flat.</p><div class="spot"><b>Spot it</b>Track both on validation data.</div></li>
         <li><div class="t">Treating a weighted loss's output as a probability</div><p>Class weights or smoothing shift scores, then the number feeds a threshold.</p><div class="spot"><b>Spot it</b>Compare mean predicted probability with the actual rate on a holdout (F7.4).</div></li>
         <li><div class="t">Learning rate copied from another setup, or no schedule</div><p>Loss spikes, plateaus or goes NaN, and the data gets blamed.</p><div class="spot"><b>Spot it</b>Sweep the rate on a log scale, decay it near the end, and read the curves.</div></li>
+        <li><div class="t">Batch size changed, learning rate not</div><p>A recipe tuned at batch 256 is reused at 4,096. The run is unstable or learns worse, and the data gets blamed.</p><div class="spot"><b>Spot it</b>Compare with the original setup, then rerun a short rate sweep at the new batch size.</div></li>
+        <li><div class="t">Judging runs by the final number, or silent NaNs</div><p>Two models differ by 0.4 points and nobody looked at the curves. Or the loss goes NaN overnight because of one bad row.</p><div class="spot"><b>Spot it</b>Ask for train and validation curves. Log gradient norm, clip it, extend warmup, and check for sentinel values such as -999.</div></li>
       </ul>
     </section>
 
@@ -253,6 +308,8 @@
         <details class="reveal"><summary>3. Why does cross-entropy train a fraud classifier better than squared error?</summary><div class="ans"><p>It keeps a strong corrective push when the model is confidently wrong. Squared error's push fades to almost nothing.</p></div></details>
         <details class="reveal"><summary>4. The loss suddenly shoots up and becomes NaN. What happened, and what do you try?</summary><div class="ans"><p>The steps overshoot by more each time. Lower the peak rate, extend warmup, and clip gradients.</p></div></details>
         <details class="reveal"><summary>5. Training loss plateaus high at a constant rate. What is cheap to try?</summary><div class="ans"><p>Decay the rate, since the plateau may be the noise floor, and sweep the peak rate on a log scale.</p></div></details>
+        <details class="reveal"><summary>6. Judgement: transaction amounts have a few giant corporate transfers that are genuine. You are forecasting next month's total volume. Squared error, absolute error or Huber, and why?</summary><div class="ans"><p>Squared error, or a high quantile if shortfalls hurt. The giant transfers are real and part of the total, so the mean must see them. Absolute error would under-forecast the sum, and Huber would partly discard the large ones.</p></div></details>
+        <details class="reveal"><summary>7. Judgement: a fraud model trained with heavy class weights ranks well. A colleague wants to multiply its scores by transaction value to estimate expected loss. Do you allow it?</summary><div class="ans"><p>Not yet. Weights inflate the scores, so the product overstates the loss. Recalibrate on a holdout with untouched class rates first. If you only rank alerts, the weights are harmless.</p></div></details>
       </div>
     </section>
 
