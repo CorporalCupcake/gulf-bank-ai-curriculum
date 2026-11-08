@@ -66,29 +66,23 @@
         <span>About 40 minutes</span>
       </div>
       <h1>Synthetic Data, Cheaper Training and Model Merging</h1>
-      <p class="dek">Why a model trained on its own output forgets the rare cases first, and what keeps that from happening; how 8-bit and 4-bit arithmetic, a different optimiser and transferable hyperparameters cut the cost of training; and how two fine-tuned models can be combined by arithmetic on their weights.</p>
+      <p class="dek">Why models trained on their own output forget rare cases, how training gets cheaper, and how fine-tuned models are merged.</p>
     </header>
 
     <div class="mobile-toc">
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Synthetic data is safe and powerful when it is checked, diverse and added to real data, and ruinous when it replaces real data in a closed loop; the same trade between cheapness and fidelity runs through low-precision training and model merging, where a little noise is fine and compounding noise is not.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>Synthetic data helps when it is checked and added to real data, and harms when it replaces real data in a closed loop.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>Three ideas answer one question: how do you get a capable model for less than the obvious price (huge human text, huge high-precision clusters, a fresh run per variant)?</p>
-        <ul>
-          <li><strong>Synthetic data</strong> replaces some human text with text written by another model.</li>
-          <li><strong>Training efficiency</strong> makes each step cheaper: lower-precision numbers, a better optimiser, hyperparameters tuned small and reused big.</li>
-          <li><strong>Model merging</strong> skips the extra run by adding the weights of models already trained.</li>
-        </ul>
-        <p>Think of photocopying a photocopy. By the tenth copy the thin lines have vanished and the dark areas have bled together. No single step did much. Each copy lost a little of what was rare on the page, and the loss compounds. A model trained on its own output loses the <em>rare</em> things first: the unusual phrasing, the odd customer, the minority class.</p>
-        <p>The counterweight is a student who checks answers against the back of the book and keeps only the correct worked solutions. They improve, though the solutions are their own writing. The difference is not "synthetic versus real". It is whether new information enters the loop: real data, or a <em>verifier</em> that knows when an answer is right.</p>
+        <p>Three ideas answer one question: how do you get a capable model for less than the obvious price? <strong>Synthetic data</strong> swaps some human text for text written by a model. <strong>Training efficiency</strong> makes each step cheaper. <strong>Model merging</strong> combines trained models without another run.</p>
+        <p>Think of photocopying a photocopy. Each copy loses a little of what was faint. A model trained on its own output loses the <em>rare</em> things first: the odd customer, the minority class. The counterweight is a student who checks answers against the back of the book. What matters is whether new information enters the loop: real data, or a verifier.</p>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Training on a model's output is fine. Training on it <em>instead of</em> real data, unchecked, for many generations is not. Every trick here works until errors compound, and the engineering is stopping that.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Training on a model's output is fine. Training on it <em>instead of</em> real data, unchecked, for many generations is not.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
@@ -97,23 +91,12 @@
 
       <h3 class="sub" id="m-collapse">Synthetic data and model collapse (R2.3)</h3>
       <div class="prose">
-        <p>Models use synthetic data for three reasons. Good real text is finite and the open web is largely used up. Some data barely exists (long reasoning chains, tool-use transcripts, rare edge cases). And a strong model is a cheap, patient writer of clean explanations and rewrites.</p>
-        <p>The risk is <strong>model collapse</strong> (Shumailov et al., <em>Nature</em> 2024): train generation 1 on real data, sample from it to train generation 2, and repeat. Early collapse loses the tails (low-probability events) while the average looks fine, so headline metrics hide it. Late collapse converges on narrow, repetitive output unrelated to the original data.</p>
-        <p>The mechanism is plain sampling. Draw 20 points and you will rarely see anything beyond two standard deviations, so a model fitted to them is slightly narrower than the truth. Sample from that and the next is narrower still. Like a game of telephone, each retelling drops the odd details. For a Gaussian fitted by maximum likelihood (F1.6), with σ the spread and n the samples per generation:</p>
+        <p>Good real text is finite and a strong model is a cheap writer, so synthetic data is attractive. The risk is <strong>model collapse</strong>: train on a model's samples, then train the next model on those, and repeat. The rare cases (the tails) vanish first while averages look fine, so headline metrics hide it.</p>
+        <p>A small sample rarely contains extremes, so each generation is slightly narrower than the last, like a game of telephone.</p>
       </div>
-      <div class="formula">
-        <math display="block"><mi>E</mi><mo stretchy="false">[</mo><msubsup><mi>σ</mi><mi>g</mi><mn>2</mn></msubsup><mo stretchy="false">]</mo><mo>=</mo><msup><mrow><mo>(</mo><mfrac><mrow><mi>n</mi><mo>−</mo><mn>1</mn></mrow><mi>n</mi></mfrac><mo>)</mo></mrow><mi>g</mi></msup><mo>·</mo><msubsup><mi>σ</mi><mn>0</mn><mn>2</mn></msubsup></math>
-        <p class="where">Expected variance after <i>g</i> generations of training only on the previous one's samples. Each generation keeps a fraction (<i>n</i> − 1)/<i>n</i>. With <i>n</i> = 25 and 50 generations, 0.96<sup>50</sup> ≈ 0.13, so the spread falls to about 36%. A typical run does worse than this average, because the spread random-walks and can only drift to zero. Misreading to avoid: this is a Gaussian toy. Real models are not Gaussian, but the pressure is the same: sample, refit, and rare things go first.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Two effects stack on top. <strong>Approximation error</strong>: no fit is exact, and each generation treats the last one's mistakes as facts. <strong>Decoding sharpening</strong>: temperature below 1 or top-p cuts the tail before the data is even written.</p>
-        <p>Gerstgrasser et al. (2024) separated two regimes. <strong>Replace</strong>: each generation trains only on the previous output, and error grows without bound. <strong>Accumulate</strong>: each generation trains on the original real data plus every synthetic batch, and error stays bounded. Real web data piles up like this. Dohmatob et al. (2025, "strong model collapse") warn that a non-trivial synthetic share can still degrade scaling, so accumulation is a safeguard, not a licence.</p>
-        <p>The simulation runs the Gaussian toy with replace, accumulate and "mix" (a fixed fraction of fresh real data each generation).</p>
-      </div>
-
       <figure class="figure" id="fig-collapse">
         <div class="fig-head"><span class="fig-title">Photocopying a distribution: spread over 100 generations</span><span class="fig-tag">Simulation 1 of 3</span></div>
-        <p class="try"><b>Try:</b> leave it at 20 samples per generation. The red line (replace) sinks well below 1.0, the true spread, and the tail probability in the table collapses with it. Black (accumulate) holds near 1.0. Now raise the sample size to 200 and watch red slow down but still sink. Finally move the fresh real share from 0% to 10% and see how little real data the green line needs to stay far above the red one. At 30% it sits close to 1.0.</p>
+        <p class="try"><b>Try:</b> at 20 samples the red line (replace) sinks well below 1.0, the true spread. Black (accumulate) holds near 1.0. Raise the fresh real share from 0% to 10% and see how little real data the green line needs.</p>
         <div class="chart-wrap" id="col-chart"></div>
         <div class="legend">
           <span><i style="background:var(--bad)"></i>Replace: train only on the last model's output</span>
@@ -127,38 +110,23 @@
         </div>
         <div class="table-wrap"><div id="col-table"></div></div>
         <div class="verdict" id="s1-verdict"></div>
-        <p class="sim-note">Simulated: the real distribution is a standard normal (spread 1). Each model is a normal fitted by maximum likelihood to its training set; the next training set is sampled from it. 80 independent runs with a fixed random seed, so the picture is repeatable, not fresh noise each time. The "tail chance" is the probability the fitted model gives to a value beyond ±3 (true value 0.27%). The sample-size slider is logarithmic. A toy: it shows the sampling mechanism, not the size of the effect in a real language model.</p>
+        <p class="sim-note">Simulated: the true distribution is a standard normal. Each model is a normal fitted to its training set, and the next set is sampled from it. 80 runs with a fixed seed. A toy that shows the mechanism, not the size of the effect in a real language model.</p>
       </figure>
 
       <div class="prose">
-        <p>The practical recipes follow from the toy.</p>
-        <ul>
-          <li><strong>Keep real data in the mix.</strong> A small steady stream pins the tails. The share needed is an empirical question per task.</li>
-          <li><strong>Add a verifier.</strong> Maths can be checked, code run against tests, translation back-translated. Keep only what passes. The verifier is the new information the loop needs, and the engine of reasoning-model training (R3.2).</li>
-          <li><strong>Use a stronger or different teacher.</strong> Distilling a larger model injects its knowledge. A model's own raw samples inject nothing.</li>
-          <li><strong>Insist on diversity.</strong> Vary prompts, personas and seeds, deduplicate, measure spread. A million near-duplicates are worth far fewer rows.</li>
-          <li><strong>Rewrite rather than invent.</strong> Rephrasing real documents keeps facts tied to sources. Inventing "facts" from nothing bakes in hallucinations.</li>
-        </ul>
-        <p>Successes: Microsoft's Phi series used generated "textbook" text; NVIDIA reported over 98% of Nemotron-4 340B's alignment data was synthetic, made with a reward model and a strong instruction model; open-weight releases widely use distilled reasoning traces.</p>
+        <p>Researchers separate two regimes. <strong>Replace</strong>: train only on the previous output, and error grows. <strong>Accumulate</strong>: keep the real data plus every synthetic batch, and error stays bounded.</p>
+        <p>Recipes: keep real data in the mix, add a <strong>verifier</strong> (tests, answer keys) so only good samples survive, distil from a stronger teacher, and insist on diversity.</p>
       </div>
 
       <h3 class="sub" id="m-efficiency">Training efficiency: FP8 and FP4, Muon, μP (R2.4)</h3>
       <div class="prose">
-        <p>Training cost is roughly operations times cost per operation, plus time moving numbers between memory and chip. Three levers cut it without changing the model's design. You need to recognise each and say what it buys, not implement it.</p>
-        <p><strong>1. Lower-precision numbers.</strong> A 16-bit weight (BF16) can be stored in 8 bits (FP8) or 4 (FP4). Half the width means roughly half the memory and bandwidth, and faster matrix multiplication. The catch is range and resolution, like measuring with a ruler marked only in whole centimetres. A float has an exponent (how big) and a mantissa (how finely). FP8 E4M3 has 4 and 3 bits (max 448, finer); E5M2 has 5 and 2 (max 57,344, wider). FP4 E2M1 has only eight non-negative values: 0, 0.5, 1, 1.5, 2, 3, 4, 6.</p>
-        <p>So FP4 needs <strong>scaling</strong>: split the tensor into blocks, divide each by a scale <i>s</i> so its largest value fits the format, round with Q to the nearest representable value, and store the scale plus the tiny numbers.</p>
-      </div>
-      <div class="formula">
-        <math display="block"><msub><mi>x</mi><mi>q</mi></msub><mo>=</mo><mi>s</mi><mo>·</mo><mi>Q</mi><mo stretchy="false">(</mo><mi>x</mi><mo>/</mo><mi>s</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"></mspace><mi>s</mi><mo>=</mo><mfrac><mrow><mo>max</mo><mo stretchy="false">|</mo><mi>x</mi><mo stretchy="false">|</mo></mrow><msub><mi>q</mi><mtext>max</mtext></msub></mfrac></math>
-        <p class="where">q<sub>max</sub> is the format's largest value (6 for FP4, 448 for E4M3). Smaller blocks track local size, so one outlier ruins fewer neighbours, at the cost of storing more scales. MXFP4 uses blocks of 32 with a power-of-two scale; NVFP4 uses blocks of 16 with an FP8 scale plus a per-tensor scale. Worked example: block maximum 12, so s = 2. The value 5.2 becomes 2.6, rounds to 3, and is stored as 6. Error 0.8.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Training is harder than inference: gradients are small and noisy, and a rounding bias accumulates where random error cancels. Recipes therefore keep a high-precision <strong>master copy</strong> of the weights, accumulate sums in 32 bits, use <strong>stochastic rounding</strong> (round up or down at random in proportion to the remainder, so error averages out), and keep a few sensitive layers in 16 bits. DeepSeek-V3 (Dec 2024) showed FP8 training at very large scale. FP4 pretraining is newer and still being proven.</p>
+        <p>Three levers cut training cost without changing the model's design. Recognise each and know what it buys.</p>
+        <p><strong>Lower-precision numbers (FP8, FP4).</strong> Storing weights in 8 or 4 bits instead of 16 roughly halves memory and speeds up arithmetic, but a coarse number has less range and resolution, like a ruler marked only in whole centimetres. Formats store a <strong>scale</strong> per small block of values. One huge outlier forces a big scale and rounds ordinary values to zero. Training is touchier than inference, so recipes keep a high-precision master copy. FP8 is proven at scale; FP4 is newer.</p>
       </div>
 
       <figure class="figure" id="fig-prec">
         <div class="fig-head"><span class="fig-title">How coarse can a number be before it hurts?</span><span class="fig-tag">Simulation 2 of 3</span></div>
-        <p class="try"><b>Try:</b> set "No scaling" and look at FP4: the error is large. Choose "One scale for the whole tensor" and switch outliers on: a handful of huge values forces a big scale, and most ordinary values round to zero. Now shrink the blocks to 16. The damage is confined to blocks containing an outlier, and the error drops. FP8 E4M3 shrugs all of this off.</p>
+        <p class="try"><b>Try:</b> choose "One scale for the whole tensor" and switch outliers on: most FP4 values round to zero. Then shrink the blocks to 16 and the damage is confined. FP8 shrugs it all off.</p>
         <div class="btns" role="group" aria-label="Outliers">
           <button class="btn" type="button" id="b-out" aria-pressed="false">Add outliers (1% of values, 40 times larger)</button>
         </div>
@@ -173,39 +141,25 @@
           <div class="stat"><div class="k">FP4: bits per value including scales</div><div class="v" id="st-bits"></div><div class="s">8-bit scale per block</div></div>
         </div>
         <p class="verdict" id="s2-verdict"></p>
-        <p class="sim-note">Simulated: 4,096 normally distributed values (spread 1), fixed seed. With outliers on, about 1% of them are multiplied by 40. Each value is rounded to the nearest number the format can represent, after dividing by the block scale (largest absolute value in the block divided by the format maximum). The scale is kept exact here; real formats also round it to 8 bits. "Typical value off by" is the RMS error over the ordinary (non-outlier) values divided by their RMS size. Exact arithmetic on the sample, but one sample of one distribution: real weights, activations and gradients differ.</p>
+        <p class="sim-note">Simulated: 4,096 normal values, fixed seed. With outliers on, about 1% are multiplied by 40. Each value is rounded to the nearest number the format can represent after dividing by the block scale. One sample of one distribution: real weights and gradients differ.</p>
       </figure>
 
       <div class="prose">
-        <p><strong>2. A different optimiser: Muon.</strong> AdamW treats each weight as an independent number. Muon (Keller Jordan et al., 2024) treats a whole weight <em>matrix</em>: it replaces the momentum-averaged gradient with the nearest matrix whose singular values are all equal (an "orthogonalised" update), computed cheaply with a few Newton-Schulz iterations. Raw gradient matrices are dominated by a few directions, like a choir where three voices drown the rest. Equalising them spreads learning across the weaker directions. Moonshot AI reported about half the compute for the same loss at scale ("Muon is Scalable for LLM Training", 2025), then trained Kimi K2, a one-trillion-parameter mixture-of-experts model (R1.1), with a variant, MuonClip, that guards against exploding attention logits. Muon is used on hidden weight matrices only; embeddings, the output layer and small vectors stay on AdamW. (F1.3 and F1.8 cover gradient methods.)</p>
-        <p><strong>3. Hyperparameter transfer: μP.</strong> Under standard setups the best learning rate for a 100-million-parameter model is wrong for a 10-billion one, and tuning at full size is ruinous (F4.5). Like tasting a recipe in a small pot before cooking for a banquet, μP (Greg Yang et al., 2022) rescales initialisation and learning rates layer by layer with width, so the optimal learning rate barely moves as the model grows. Tune a small proxy, reuse the setting. They transferred from 40 million to 6.7 billion parameters, matching a published GPT-3 baseline at a fraction of the tuning cost. Scaling laws (R2.1) tell you how big and how long; μP sets the knobs. It handles width well; depth and non-standard optimisers need extensions, and not every lab uses it.</p>
-        <p>Together: low precision makes a step cheaper, Muon makes each step count for more, μP avoids wasted runs. None changes what the model can learn. All change who can afford to train one.</p>
+        <p><strong>Muon, a different optimiser.</strong> The usual optimiser, AdamW, treats each weight alone. Muon treats a whole weight matrix and evens out its update directions, like giving every voice in a choir a turn. Moonshot AI reported roughly half the compute for the same loss.</p>
+        <p><strong>μP, hyperparameter transfer.</strong> The best learning rate for a small model is usually wrong for a big one, and tuning at full size is ruinous. μP rescales settings with width, so you tune a small model and reuse the settings, like tasting in a small pot before cooking for a banquet.</p>
+        <p>Together they change who can afford to train a model, not what it can learn.</p>
       </div>
 
       <h3 class="sub" id="m-merge">Model merging (R2.5)</h3>
       <div class="prose">
-        <p>Say you fine-tune one base on Arabic banking correspondence, one on Python and SQL, one on safety, and want one model that does all three. Retraining on the union needs all data in one place; serving three is costly. <strong>Merging weights</strong> needs no gradient steps and no data, only minutes on a CPU.</p>
-        <p>Why it works: two models trained from different random starts sit in different valleys of the loss landscape (R6.2), and averaging them gives garbage. Fine-tunes of the <em>same pretrained model</em> start in one basin and move only a short way, so the straight line between them stays in a low-loss region (linear mode connectivity). Averaging several fine-tunes of one base often beats any single one: the "model soup" result (Wortsman et al., 2022).</p>
-        <p><strong>Task arithmetic</strong> (Ilharco et al., 2022): a <em>task vector</em> is what fine-tuning changed, τ = θ<sub>fine-tuned</sub> − θ<sub>base</sub>. Add vectors to add skills; subtract one to remove a behaviour.</p>
-      </div>
-      <div class="formula">
-        <math display="block"><msub><mi>θ</mi><mtext>merged</mtext></msub><mo>=</mo><msub><mi>θ</mi><mn>0</mn></msub><mo>+</mo><mi>λ</mi><mo>·</mo><munder><mo>∑</mo><mi>i</mi></munder><msub><mi>τ</mi><mi>i</mi></msub></math>
-        <p class="where">θ<sub>0</sub> is the base, τ<sub>i</sub> the task vectors, λ the strength you choose. λ = 1 adds every change in full; λ = 1/k for k models is plain averaging. If tasks use different parts of the network, the vectors barely interfere and λ = 1 keeps everything. If they push the same weights in different directions, they cancel or distort each other, like two people pulling one rope; a smaller λ is the compromise.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Follow-up methods attack interference.</p>
-        <ul>
-          <li><strong>TIES</strong> (Yadav et al., 2023): trim each vector to its largest changes, elect a sign where tasks disagree, merge only agreeing entries.</li>
-          <li><strong>DARE</strong> (Yu et al., 2023): randomly drop 90% or more of each vector and rescale, since fine-tuning changes are highly redundant.</li>
-          <li><strong>SLERP</strong>: interpolate along a curved path on the sphere, for two models.</li>
-          <li><strong>Evolutionary merging</strong> (Sakana AI, 2024): search automatically over which layers to take from which model.</li>
-        </ul>
-        <p>mergekit turned all of these into config files, which is why community leaderboards fill with merges. The caveat: gains are real but uneven, and simple task arithmetic or averaging is a baseline the fancier methods do not reliably beat. Most published work uses models of 7 billion parameters or fewer. "What Matters for Model Merging at Scale?" (2024) found merging gets easier with a stronger base and fewer models.</p>
+        <p>Suppose you fine-tune one base on Arabic banking text and another on code, and want one model that does both. <strong>Merging</strong> combines their weights with no training and no data, in minutes on a CPU.</p>
+        <p>It works only for fine-tunes of the <em>same</em> base. They move only a short way from the base, so blending them stays in a good region. Models from different starts give garbage. A <em>task vector</em> is what fine-tuning changed (fine-tuned minus base). Add vectors to add skills, scaled by a strength you choose. If tasks use different weights they barely interfere; if they push the same weights, they pull against each other like two people on one rope, and a smaller strength is the compromise.</p>
+        <p>Methods such as TIES and DARE reduce interference, but plain averaging is a baseline they do not reliably beat.</p>
       </div>
 
       <figure class="figure" id="fig-merge">
         <div class="fig-head"><span class="fig-title">Adding two skills to a base model</span><span class="fig-tag">Simulation 3 of 3</span></div>
-        <p class="try"><b>Try:</b> set overlap to 0 and strength to 1.0: the merged point (black) lands inside both ellipses, so both skills are fully kept. Raise the overlap to 0.5 and the same strength now loses half of each skill. Press <b>Best strength</b>: it backs off to about two thirds and recovers what is recoverable. Then set overlap to 1 and note that no strength keeps more than half.</p>
+        <p class="try"><b>Try:</b> with overlap 0 and strength 1.0 both skills are fully kept. Raise overlap to 0.5, then press <b>Best strength</b>: it backs off to about two thirds and recovers what it can.</p>
         <div class="btns" role="group" aria-label="Strength shortcuts">
           <button class="btn" type="button" id="b-avg">Average the two models (strength 0.5)</button>
           <button class="btn" type="button" id="b-sum">Add both changes in full (strength 1)</button>
@@ -228,11 +182,11 @@
           <div class="stat"><div class="k">Full addition (strength 1) would keep</div><div class="v" id="st3-sum"></div><div class="s">of each skill</div></div>
         </div>
         <p class="verdict" id="s3-verdict"></p>
-        <p class="sim-note">Simulated: a two-parameter toy. The base model is at (0, 0); skill A was fine-tuned by moving to (2, 0), skill B by moving to (0, 2). Each skill's loss is a bowl: for A it is ½[(x−2)² + κy²], for B ½[κx² + (y−2)²], where κ is the overlap slider. "Skill kept" is 1 − (loss at the merge ÷ loss at the base). The algebra is exact: kept = 1 − [(λ−1)² + κλ²], best λ = 1/(1+κ), best kept = 1/(1+κ). Real networks are not quadratic and interference is something you measure, not dial; the toy shows only why a strength below 1 helps and why overlap caps the result.</p>
+        <p class="sim-note">Simulated: a two-parameter toy. Each skill is a bowl-shaped loss, and the overlap slider sets how much one skill depends on what the other changed. Real networks are not this tidy; the toy shows only why a strength below 1 helps and why overlap caps the result.</p>
       </figure>
 
       <div class="prose">
-        <p>Three rules follow. Merge only models fine-tuned from the same base checkpoint. Keep task vectors small (low learning rates, short fine-tunes, or LoRA adapters, which are already low-rank task vectors). And <strong>re-evaluate the merged model</strong> on every skill, because merging is a search, not a guarantee. The Llama 3 report describes averaging models from different fine-tuning runs as a final step. For a bank, a merged model is a new model for governance (G3.2), and its safety behaviour is not the average of its parents'.</p>
+        <p>Merge only from the same base, and <strong>re-evaluate the merge</strong> on every skill, because merging is a search, not a guarantee. For a bank, a merged model is a new model for governance (G3.2), and its safety is not the average of its parents'.</p>
       </div>
     </section>
 
@@ -240,15 +194,11 @@
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Closed-loop training</div><p>Training on the previous model's output with no fresh real data or filter. Tails vanish first, so headline scores look fine for several rounds.</p><div class="spot"><b>Spot it</b>Ask what share of the mix is real and what check kept each generated sample. Measure rare-case performance, not just the average.</div></li>
-        <li><div class="t">Low diversity</div><p>A million samples that are near-duplicates of a few templates narrow the model's style and coverage.</p><div class="spot"><b>Spot it</b>Deduplicate and cluster; count distinct topics, lengths and phrasings. Compare held-out performance against a smaller, more varied sample.</div></li>
-        <li><div class="t">Inherited errors and bias</div><p>A teacher's mistakes, dialect habits and stereotypes are copied into the student and now look like ground truth.</p><div class="spot"><b>Spot it</b>Read a sample. Have a bilingual reviewer check a random slice. Compare accuracy on real human-labelled data.</div></li>
-        <li><div class="t">Evaluating on synthetic data</div><p>A generator-written test set shares the generator's blind spots; a student of the teacher's data looks good on the teacher's test.</p><div class="spot"><b>Spot it</b>Ask whether the test set is real, independent and from the target period. Use synthetic evaluation only as a supplement.</div></li>
-        <li><div class="t">"Synthetic" taken to mean "private"</div><p>A generator trained on customer records can emit near-copies.</p><div class="spot"><b>Spot it</b>Ask for a nearest-neighbour distance test and a membership-inference result (R11.2). Do not treat output as anonymous without privacy review.</div></li>
-        <li><div class="t">Low precision that quietly hurts</div><p>FP8 or FP4 training diverges, or finishes with a small real quality loss the loss curve hides.</p><div class="spot"><b>Spot it</b>Compare against a higher-precision run at small scale. Check downstream benchmarks. Watch for spikes in loss or activation maxima, which signal outliers breaking the scaling.</div></li>
-        <li><div class="t">Optimiser and hyperparameter claims that don't transfer</div><p>"Muon is 2x faster" or "μP removed tuning" quoted from a paper whose model size, data or baseline tuning differs from yours.</p><div class="spot"><b>Spot it</b>Ask whether the baseline was tuned as hard, at what scale, and with how many seeds.</div></li>
-        <li><div class="t">Merging models that shouldn't be merged</div><p>Different bases, different tokenisers, or aggressive fine-tunes far from the base. The merge scores well on one skill and quietly loses another.</p><div class="spot"><b>Spot it</b>Confirm the same base checkpoint. Evaluate against the parents on every parent's task, including safety and Arabic behaviour.</div></li>
-        <li><div class="t">Safety and backdoors travel through merges</div><p>Averaging can dilute a refusal behaviour, and a parent's backdoor can survive into the child.</p><div class="spot"><b>Spot it</b>Re-run safety and red-team evaluations on the merge. Check provenance and licence of every parent (G1.2).</div></li>
+        <li><div class="t">Closed-loop training</div><p>Training on the previous model's output with no fresh real data or filter. Tails vanish first, so scores look fine for several rounds.</p><div class="spot"><b>Spot it</b>Ask what share of the mix is real and what check kept each sample. Measure rare-case performance, not just the average.</div></li>
+        <li><div class="t">Low diversity and inherited errors</div><p>Near-duplicate samples narrow coverage, and a teacher's mistakes and biases get copied and look like ground truth.</p><div class="spot"><b>Spot it</b>Deduplicate, read a sample, and have a bilingual reviewer check a random slice.</div></li>
+        <li><div class="t">Synthetic tests and false privacy</div><p>A generator-written test set shares the generator's blind spots, and a generator trained on customer records can emit near-copies.</p><div class="spot"><b>Spot it</b>Use a real, independent test set. Ask for a membership-inference result (R11.2) before calling output anonymous.</div></li>
+        <li><div class="t">Cheap training that quietly hurts</div><p>FP8 or FP4 can diverge or lose a little quality the loss curve hides, and "Muon is 2x faster" claims may not transfer to your scale.</p><div class="spot"><b>Spot it</b>Compare with a higher-precision run at small scale. Ask whether the baseline was tuned as hard.</div></li>
+        <li><div class="t">Merging what shouldn't be merged</div><p>Different bases or aggressive fine-tunes lose a skill silently, safety behaviour can dilute, and a parent's backdoor can survive.</p><div class="spot"><b>Spot it</b>Confirm the same base. Evaluate on every parent's task, including safety, and check provenance (G1.2).</div></li>
       </ul>
     </section>
 
@@ -256,14 +206,11 @@
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A Gaussian is refitted each generation to 25 samples from the previous fit, with no real data. Expected variance after 50 generations?</summary><div class="ans"><p>(24/25)<sup>50</sup> ≈ 0.13 of the original, so spread is about 36%. A typical run is lower: the variance random-walks downward and cannot recover.</p></div></details>
-        <details class="reveal"><summary>2. Why do early signs of collapse hide in average metrics?</summary><div class="ans"><p>Sampling drops the tails first and barely moves the centre, so averages look fine while rare events lose probability. Catch it by measuring rare-case performance and output diversity.</p></div></details>
-        <details class="reveal"><summary>3. What is the difference between "replace" and "accumulate", and why does it matter?</summary><div class="ans"><p>Replace trains only on the previous model's output; accumulate keeps the real data plus all synthetic batches. Error grows unboundedly under replace and stays bounded under accumulate. Real data is closer to accumulate, but a growing synthetic share can still hurt.</p></div></details>
-        <details class="reveal"><summary>4. Why does a verifier make self-generated data useful when raw self-training is not?</summary><div class="ans"><p>The verifier (tests, answer key, reward model) injects information the model lacked by separating good samples from bad. Training on the good ones moves the model towards correct behaviour. Without it, the loop only repeats what the model already believes.</p></div></details>
-        <details class="reveal"><summary>5. An FP4 E2M1 block has maximum absolute value 12 (so s = 12 ÷ 6 = 2). What is stored for 5.2, and what is the error?</summary><div class="ans"><p>5.2 ÷ 2 = 2.6, which rounds to 3. Stored 3 × 2 = 6. Error 0.8, about 15%. Smaller blocks without an outlier give a smaller scale and finer steps.</p></div></details>
-        <details class="reveal"><summary>6. A tensor has a few values 40 times larger than the rest. Why does one scale per tensor hurt FP4, and what helps?</summary><div class="ans"><p>The scale is set by the largest value, so ordinary values land in a tiny part of the range and many round to zero. Smaller blocks (16 or 32) confine the damage to the outlier's block. Keeping sensitive layers in 8 or 16 bits also helps.</p></div></details>
-        <details class="reveal"><summary>7. In the merge toy with overlap κ = 0.5, what is the best λ and how much of each skill is kept? What does plain addition (λ = 1) keep?</summary><div class="ans"><p>Best λ = 1/(1+κ) = 0.667, keeping 1/(1+κ) = 67%. Plain addition keeps 1 − κ = 50%. Averaging (λ = 0.5) keeps 0.75 − 0.25κ = 62.5%.</p></div></details>
-        <details class="reveal"><summary>8. Why can't you merge two models trained from different random initialisations?</summary><div class="ans"><p>They sit in different basins with neurons in different orders, so weights do not line up and the midpoint lies on a high-loss ridge. Fine-tunes of one pretrained base stay in one basin. (Neuron-permutation alignment exists but is less reliable at LLM scale.)</p></div></details>
+        <details class="reveal"><summary>1. Why do early signs of collapse hide in average metrics?</summary><div class="ans"><p>Sampling drops the tails first and barely moves the centre. Catch it by measuring rare-case performance and output diversity.</p></div></details>
+        <details class="reveal"><summary>2. What is the difference between "replace" and "accumulate"?</summary><div class="ans"><p>Replace trains only on the previous model's output, and error grows. Accumulate keeps the real data plus all synthetic batches, and error stays bounded.</p></div></details>
+        <details class="reveal"><summary>3. Why does a verifier make self-generated data useful?</summary><div class="ans"><p>It injects information the model lacked by separating good samples from bad. Without it, the loop only repeats what the model already believes.</p></div></details>
+        <details class="reveal"><summary>4. Why do outliers hurt FP4, and what helps?</summary><div class="ans"><p>One huge value sets a big scale, so ordinary values round to zero. Smaller blocks confine the damage, and sensitive layers can stay in 16 bits.</p></div></details>
+        <details class="reveal"><summary>5. Why can't you merge two models trained from different random starts?</summary><div class="ans"><p>Their weights do not line up, so blending lands on a high-loss ridge. Fine-tunes of one pretrained base stay in the same region.</p></div></details>
       </div>
     </section>
 

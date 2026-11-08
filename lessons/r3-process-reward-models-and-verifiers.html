@@ -57,27 +57,26 @@
         <span>About 40 minutes</span>
       </div>
       <h1>Buying Accuracy With Thinking: Verifiers, Process Rewards and Test-Time Scaling</h1>
-      <p class="dek">Why checking an answer is easier than producing one, how scoring each reasoning step differs from scoring the final answer, how sampling many answers and voting or picking can lift accuracy, and the specific ways each trick backfires.</p>
+      <p class="dek">Why checking is easier than producing, how step scores differ from answer scores, and when sampling and voting help or backfire.</p>
     </header>
 
     <div class="mobile-toc">
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A model can often be made more accurate by spending more compute at answer time (longer thinking, many samples, search), but every such method is only as good as the thing that judges the answers, so a hard check (code, arithmetic, a rules engine) scales well, a learned judge scales until the model learns to fool it, and a vote scales only when the right answer is already the most common one.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>More compute at answer time can raise accuracy, but only as far as the judge can be trusted: a hard check scales well, a learned judge scales until it is fooled, and a vote scales only when the right answer is already the most common.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>An assistant computes a customer's debt-service ratio (DSR). Salary AED 28,000; car loan AED 2,150; personal finance AED 3,400; proposed Murabaha home finance AED 9,300. It writes a fluent page and answers 45.4%. The right answer is 53.0%: it dropped the car loan somewhere in the page.</p>
-        <p>Three fixes: ask for ten attempts and take the most common answer (seven say 53.0%); run each attempt's arithmetic through a calculator; or have a second model flag the step where a figure vanished. All three rest on one idea: <strong>producing a good answer is hard, but checking one is often easy</strong>. A maze is hard to solve and quick to check. So spend compute on checking.</p>
-        <p><strong>Test-time scaling</strong> means getting better answers by spending more compute when the question is asked, with no change to the trained weights. Reasoning models are built on it (see <a href="a5-reasoning-models-and-test-time.html">A5, Reasoning models and test-time compute</a>).</p>
+        <p>An assistant computes a customer's debt-service ratio. It writes a fluent page and answers 45.4%. The right answer is 53.0%: it dropped the car loan somewhere.</p>
+        <p>Fixes: take the most common of ten attempts, run the arithmetic through a calculator, or have a second model flag the step where a figure vanished. All rest on one idea: <strong>producing a good answer is hard, but checking one is often easy</strong>. <strong>Test-time scaling</strong> spends extra compute at question time on that checking (see <a href="a5-reasoning-models-and-test-time.html">A5</a>).</p>
       </div>
 
       <figure class="figure" id="fig-chain">
         <div class="fig-head"><span class="fig-title">One bad step ruins the answer, and the final grade does not say which</span><span class="fig-tag">Simulation 1 of 4</span></div>
-        <p class="try"><b>Try:</b> click a step to plant an error in it. The outcome grade is just "wrong" for the whole chain. A step-level grade (a process reward) points at the faulty step. Then move the sliders: longer chains with the same per-step reliability are far less often sound, and a high lucky-guess rate means plenty of right answers rest on broken reasoning.</p>
+        <p class="try"><b>Try:</b> click a step to plant an error. The outcome grade says only "wrong"; the step-level grade points at the faulty step. Then move the sliders to see long chains fail more often.</p>
         <div class="chain" id="chain" role="group" aria-label="Pick the step with the error"></div>
         <div class="credit">
           <div class="verdict" id="s1-out"></div>
@@ -98,18 +97,16 @@
           <div class="stat"><div class="k">Chains with the right final answer</div><div class="v" id="st1-right"></div><div class="s">what an outcome grader sees</div></div>
           <div class="stat" id="st1-flaw-b"><div class="k">Of those, flawed inside</div><div class="v" id="st1-flaw"></div><div class="s">rewarded by an outcome-only grader</div></div>
         </div>
-        <p class="sim-note">Simulated: steps are independent and each is right with the stated chance; a chain with any wrong step still reaches the right final answer with the stated "lucky" chance (a multiple-choice style guess, or errors that cancel). Exact expected values, no sampling. Real errors are correlated: a hard problem makes every step less reliable.</p>
+        <p class="sim-note">Simulated: steps are independent and each is right with the stated chance. Real errors are correlated.</p>
       </figure>
 
       <div class="prose">
         <ul>
-          <li><strong>Long chains are fragile.</strong> Like a chain of 8 links each 95% strong, the whole is sound only about two times in three (0.95<sup>8</sup>). Harder problems need checking, not just a bigger model.</li>
-          <li><strong>A grade can sit at two places.</strong> An <em>outcome</em> grade scores the final answer. A <em>process</em> grade scores each step: far more information per example, far higher labelling cost.</li>
-          <li><strong>A grader is a model of "good", and it can be wrong.</strong> Best-of-many, search and training all optimise against it, and the harder you push, the more blind spots you find.</li>
-          <li><strong>More thinking costs tokens and latency.</strong> It helps a lot on some problems, not at all on others, and hurts on some.</li>
+          <li><strong>Long chains are fragile.</strong> Even at 95% per step, an 8-step chain is sound only about two times in three.</li>
+          <li><strong>A grader can be wrong.</strong> The harder you optimise against it, the more blind spots you find.</li>
         </ul>
       </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Before using any test-time trick, ask: what judges the candidates, and how easily is it fooled? Is the right answer already the one the model gives most often? What does each extra sample cost, in AED and seconds?</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Before using any test-time trick, ask: what judges the candidates, and how easily is it fooled?</div>
     </section>
 
 
@@ -118,60 +115,31 @@
       <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
 
 
-      <h3 class="sub" id="m-orm-prm">Outcome rewards, process rewards and what each teaches</h3>
+      <h3 class="sub" id="m-orm-prm">Outcome rewards and process rewards</h3>
       <div class="prose">
-        <p>A <strong>reward model</strong> reads a prompt and response and outputs a quality score. Marking an exam shows the two designs: a mark for the final answer only, or a tick or cross on every line of working.</p>
-        <ul>
-          <li><strong>Outcome reward model (ORM).</strong> One score for the whole response, trained on right/wrong final answers. Cheap to label. The cost is <em>credit assignment</em>: if a twelve-step solution ends wrong, the label does not say which step failed.</li>
-          <li><strong>Process reward model (PRM).</strong> A score after each step (correct, neutral, wrong), so the first wrong step is known. A solution is scored by combining steps, for example the product of step "correct" probabilities, or the minimum.</li>
-        </ul>
-        <p>Uesato et al. (DeepMind, 2022) found process supervision gave similar final-answer error but far less <em>flawed reasoning behind right answers</em>. Lightman et al. (OpenAI, 2023) trained a PRM on about 800,000 human step labels (PRM800K) and it picked better solutions on the harder MATH benchmark than an ORM. The flawed-but-right share is Simulation 1's last statistic, and it matters where the working is the product, as in a credit memo or AML narrative.</p>
-        <p>Step scores also enable <strong>search</strong>: score a half-finished solution, drop bad branches early and spend compute on promising ones (beam or tree search). An outcome score only exists once the compute is spent.</p>
+        <p>A <strong>reward model</strong> scores a response. An <strong>outcome</strong> model (ORM) gives one mark for the final answer, which is cheap but does not say which step failed. A <strong>process</strong> model (PRM) ticks or crosses every line of working, so the first wrong step is known. Step scores also let a search drop bad branches early, and they catch right answers built on flawed working, which matters in a credit memo.</p>
       </div>
 
       <h3 class="sub" id="m-labels">Where step labels come from</h3>
-      <div class="table-wrap" style="margin-top:16px">
-        <table class="data">
-          <thead><tr><th>Route</th><th>How labels are made</th><th>Strength</th><th>Weakness</th></tr></thead>
-          <tbody>
-            <tr><td><b>Human annotation</b></td><td>People mark each step. PRM800K is the public example.</td><td>Highest quality; catches subtle errors.</td><td>Slow, costly; finance or law needs experts.</td></tr>
-            <tr><td><b>Rollout estimation</b> (Math-Shepherd, OmegaPRM)</td><td>From a step, finish the solution many times. If most completions reach the right answer, the step is good. Needs only a known final answer.</td><td>Cheap, automatic, scales.</td><td>Noisy: a wrong step followed by a lucky right answer gets a good label. 2025 reports found these labels weaker than careful judge or human labels.</td></tr>
-            <tr><td><b>Model as judge</b> (generative verifiers, "thinking" PRMs)</td><td>A language model writes a critique of each step, then a verdict. Trainable on a few thousand labels.</td><td>Few labels; readable critique; can use extra compute to check.</td><td>Makes mistakes; fluent, confident errors can talk it round.</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Rollout estimation turns an outcome check into step labels by averaging, as in reinforcement learning value estimates (<a href="f9-bandits-and-reinforcement-learning.html">F9</a>), and has the same problem: few rollouts, noisy values.</p>
+      <div class="prose">
+        <p>Humans mark each step: best quality, but slow and costly. Rollout estimation finishes the solution many times and calls a step good if most reach the right answer: cheap but noisy. A model as judge writes a critique per step: few labels needed, but fluent errors can talk it round.</p>
       </div>
 
       <h3 class="sub" id="m-verifiers">Verifiers: from hard checks to learned judges</h3>
       <div class="prose">
-        <p>A <strong>verifier</strong> is anything that decides whether a candidate answer is good. Think of a calculator versus a friendly proofreader: what matters is how trustworthy it is.</p>
-      </div>
-      <div class="table-wrap" style="margin-top:16px">
-        <table class="data">
-          <thead><tr><th>Verifier</th><th>Example in a bank</th><th>Can it be fooled?</th></tr></thead>
-          <tbody>
-            <tr><td><b>Exact check</b></td><td>Recompute the DSR in code. Check a Murabaha profit figure against cost × margin × tenor. Run generated SQL and compare the row count with a control total.</td><td>Not on what it checks. It is silent on what it does not, so the specification can still be wrong.</td></tr>
-            <tr><td><b>Rule and constraint check</b></td><td>Does the draft cite a limit that exists in the credit policy? Do memo figures match the source table? Is every KYC field present?</td><td>Only by omission. Coverage is the weakness.</td></tr>
-            <tr><td><b>Learned checker</b> (ORM, PRM, LLM judge)</td><td>A model scores whether a credit memo's reasoning holds up.</td><td>Yes. It has blind spots, and fluent, confident errors score well.</td></tr>
-            <tr><td><b>Human review</b></td><td>The analyst signs off.</td><td>Yes: tired, rushed, anchored by the model's confidence (<a href="b7-internal-copilots-for-staff.html">B7</a>).</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Where an exact check exists, you can skip learned reward models and train directly on it: <strong>reinforcement learning with verifiable rewards</strong>. Run the answer through the checker; reward 1 or 0. DeepSeek-R1 (2025) used rule-based rewards for correctness and format, avoiding neural reward models because they were open to reward hacking and costly to retrain. Maths and code have cheap exact checks, so reasoning models improved fastest there. Policy interpretation or credit judgement has no calculator for "is this a good decision".</p>
-        <p>Rank your use cases by the strength of their best check. Strongest: reconciliation, calculation, schema-based extraction, code, SQL. Weakest: advice, summaries, anything needing judgement. Test-time scaling pays most at the top.</p>
+        <p>A <strong>verifier</strong> decides whether a candidate answer is good. What matters is how trustworthy it is, like a calculator versus a friendly proofreader.</p>
+        <ul>
+          <li><strong>Exact check:</strong> recompute the DSR in code. It cannot be fooled on what it checks, and is silent on the rest.</li>
+          <li><strong>Rule check:</strong> does the draft cite a limit that exists in policy? Weak where coverage is thin.</li>
+          <li><strong>Learned checker</strong> (ORM, PRM, LLM judge): has blind spots, and confident errors score well.</li>
+          <li><strong>Human review:</strong> can be anchored by the model's confidence (<a href="b7-internal-copilots-for-staff.html">B7</a>).</li>
+        </ul>
+        <p>Where an exact check exists, you can train directly on it: <strong>reinforcement learning with verifiable rewards</strong>. This is why reasoning models improved fastest at maths and code. Rank use cases by their best check: calculation and SQL at the top, advice and summaries at the bottom.</p>
       </div>
 
       <h3 class="sub" id="m-bon">Best-of-N: sample many, let the verifier pick</h3>
       <div class="prose">
-        <p>Draw <i>N</i> independent answers, score each, return the highest. Like taking many penalty kicks and counting the best one, but only if someone can tell which went in. Two ceilings frame it.</p>
-        <ul>
-          <li><strong>Coverage (pass@N).</strong> If each sample is right with chance <i>a</i>, the chance at least one of <i>N</i> is right is 1 − (1 − <i>a</i>)<sup><i>N</i></sup>. With <i>a</i> = 30% and N = 16, that is 99.7%. A perfect verifier delivers this. Brown et al. (2024) showed coverage keeps rising over several orders of magnitude of samples on maths and on code with unit tests (the tests are the verifier).</li>
-          <li><strong>Discrimination.</strong> A learned verifier gives scores <em>higher on average</em> for correct answers, not certainty. Its pick is right only as often as the scores separate right from wrong.</li>
-        </ul>
-        <p>The simulation scores right answers <i>d</i> standard deviations above ordinary wrong ones. The key knob is the <strong>fooling share</strong>: wrong answers that are fluent and confident, and so score <em>higher</em> than correct ones. With few samples a fool is rare. With many, the top score is almost surely a fool, because you went looking for the extreme.</p>
+        <p>Draw <i>N</i> answers, score each and return the highest. A perfect verifier reaches the ceiling: the chance that at least one sample is right. A learned verifier only scores right answers higher on average. Fluent, confident wrong answers can outscore correct ones, and with many samples the top score is almost surely one of them.</p>
       </div>
 
       <figure class="figure" id="fig-bon">
@@ -203,16 +171,14 @@
 
       <div class="prose">
         <ul>
-          <li><strong>The ceiling is a model property; the gap to it is a verifier property.</strong> If the model is almost never right (<i>a</i> near zero), no verifier helps. At 5% per sample with an exact check, 64 samples cover 96% of problems.</li>
-          <li><strong>A learned verifier has an optimal N, then declines.</strong> This is reward-model over-optimisation (Gao, Schulman and Hilton, 2023): the proxy score keeps rising while true quality peaks and falls, like students cramming for one examiner's quirks. Best-of-N is the gentlest selection pressure; RL against a learned reward is stronger and breaks sooner (<a href="r3-from-rlhf-to-dpo-to.html">R3.1–R3.2</a>).</li>
-          <li><strong>Step-level verifiers raise the bar, not remove it.</strong> A PRM is harder to fool with a lucky guess, but 2025 papers documented it rewarding verbose or correct-looking steps. DeepSeek listed hard-to-define steps, hard-to-judge intermediate correctness and reward hacking as reasons not to use a PRM.</li>
+          <li><strong>The ceiling is the model's; the gap to it is the verifier's.</strong> If the model is almost never right, no verifier helps.</li>
+          <li><strong>A learned verifier has an optimal N, then declines.</strong> The proxy score keeps rising while true quality falls.</li>
         </ul>
       </div>
 
       <h3 class="sub" id="m-vote">Self-consistency: let the model vote</h3>
       <div class="prose">
-        <p>With no verifier, use agreement. Sample <i>N</i> reasoning paths, extract each final answer, return the most common one (<strong>self-consistency</strong>, Wang et al., 2022). Right answers converge while errors scatter, like ten people adding a bill: the odd one out is probably wrong. It lifted school-maths accuracy by double-digit points.</p>
-        <p>The condition is easy to miss: voting returns the <em>plurality</em>. It helps exactly when the right answer is the most common single answer. If one <em>wrong</em> answer is more common, more samples make the vote reliably wrong. Voting amplifies whatever the model's most popular answer is.</p>
+        <p>With no verifier, sample many paths and return the most common final answer. Right answers converge while errors scatter. But voting returns the <em>plurality</em>: if a wrong answer leads, more samples make the vote reliably wrong.</p>
       </div>
 
       <figure class="figure" id="fig-vote">
@@ -238,20 +204,13 @@
       </figure>
 
       <div class="prose">
-        <p><strong>Weighted voting</strong> gives each answer the sum of its verifier scores instead of one vote, combining Simulations 2 and 3. <strong>Early stopping</strong> samples until the lead is clear: stop when the first three agree, continue on contested ones. Agreement is also an uncertainty signal: a question whose samples split five ways goes to a human.</p>
+        <p>Agreement is also an uncertainty signal: a question whose samples split five ways goes to a human.</p>
       </div>
 
-      <h3 class="sub" id="m-budget">Thinking longer: budget forcing, search and spending compute well</h3>
+      <h3 class="sub" id="m-budget">Thinking longer: budget and search</h3>
       <div class="prose">
-        <p>Voting and best-of-N are <em>parallel</em> scaling: many attempts. <em>Sequential</em> scaling lets one attempt think longer, by writing a long chain of thought (<a href="a5-reasoning-models-and-test-time.html">A5</a>). The question is how long.</p>
-        <p><strong>Budget forcing</strong> (s1, Muennighoff et al., 2025) controls length at decode time. To stop early, cut the thinking off and force the answer. To think longer, suppress the end-of-thinking marker and append "Wait"; the model often rereads and corrects itself. A model fine-tuned on only 1,000 reasoning examples went from about 50% to about 57% on AIME 2024 (a maths-competition set), rising smoothly with budget until it flattened.</p>
-        <p>Three other families:</p>
-        <ul>
-          <li><strong>Search over steps.</strong> Beam, tree (including Monte Carlo) and lookahead search use a step verifier to prune. Worth it when the PRM is reliable, wasteful when not.</li>
-          <li><strong>Iterative revision.</strong> Write, critique, rewrite. Works when the model can find its own errors; Snell et al. (2024) found it helps more on easier problems.</li>
-          <li><strong>Adaptive allocation.</strong> Spend more on hard questions, little on easy ones. Snell et al. found a small model with extra compute beat one about 14 times larger on easy and intermediate questions, not the hardest. Compute substitutes for size only when the question is within reach.</li>
-        </ul>
-        <p>Longer is not monotonically better. Models "overthink" trivial questions, and Gema et al. (2025, Anthropic-led) found tasks where longer reasoning made models <em>worse</em>: distracted by irrelevant detail, or drifting from a good first answer to a worse one.</p>
+        <p>Voting and best-of-N use many attempts. Alternatively one attempt can think longer (<a href="a5-reasoning-models-and-test-time.html">A5</a>). <strong>Budget forcing</strong> cuts thinking off early, or appends "Wait" to make the model recheck.</p>
+        <p>Longer is not always better: models overthink easy questions, sometimes drifting from a right first answer to a wrong one. Match the budget to the difficulty.</p>
       </div>
 
       <figure class="figure" id="fig-budget">
@@ -279,7 +238,7 @@
 
 
       <div class="prose">
-        <p>Test-time scaling is a three-way tradeoff of accuracy, cost and latency, with the verifier setting what each extra unit of compute is worth. Order of reliability for a bank: (1) exact verifier plus parallel samples; (2) thinking length matched to difficulty; (3) voting, once checked that the right answer is the plurality; (4) learned verifiers and PRMs, only after measuring where they top out on your data.</p>
+        <p>Most reliable first: exact verifier plus samples; thinking matched to difficulty; voting once the right answer is the plurality; learned verifiers only after measuring where they top out.</p>
       </div>
     </section>
 
@@ -287,15 +246,10 @@
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Picking by a learned score at very large N</div><p>"We sample 256 and keep the best-scored." The top score increasingly fits the verifier's taste.</p><div class="spot"><b>Spot it</b>Plot true accuracy against N on labelled cases. If it flattens or falls past some N, cap N there. Read top-scored answers by hand.</div></li>
-        <li><div class="t">Voting when the common answer is wrong</div><p>A systematic misreading (wrong tax treatment, unit confusion) repeats in most samples.</p><div class="spot"><b>Spot it</b>Check single-sample accuracy and the top wrong answer's share. If a wrong answer is the plurality, voting hurts (Simulation 3).</div></li>
-        <li><div class="t">Right answers from wrong reasoning</div><p>Outcome accuracy looks fine but the working is flawed, and an auditor or customer will read it.</p><div class="spot"><b>Spot it</b>Have an expert read the working in 30 right-answer cases. Report the share with a flaw.</div></li>
-        <li><div class="t">Verifying the wrong thing</div><p>The code confirms the arithmetic, not that the right inputs were chosen or the policy cited is current.</p><div class="spot"><b>Spot it</b>List what the verifier does not check. Test it with a plausible answer wrong in exactly those ways.</div></li>
-        <li><div class="t">Over-thinking and "Wait" loops</div><p>Long budgets on easy tasks waste money and add latency, and sometimes turn a right first answer wrong.</p><div class="spot"><b>Spot it</b>Compare accuracy at short and long budgets by difficulty. Check the distribution of thinking length, not only the mean.</div></li>
-        <li><div class="t">Reporting gains on a handful of questions</div><p>Best-of-8 beats one sample by 6 points on 50 questions.</p><div class="spot"><b>Spot it</b>Ask for the number of questions and a paired interval. At 50 questions one accuracy has an interval of about ±14 points.</div></li>
-        <li><div class="t">Benchmark leakage</div><p>A public benchmark was in the training data, so sampling "finds" memorised answers.</p><div class="spot"><b>Spot it</b>Test on questions written after the model's cutoff, or on private bank cases.</div></li>
-        <li><div class="t">Ignoring cost and latency in the headline</div><p>"Accuracy up 8 points" with 40x the tokens, quoted without the AED figure.</p><div class="spot"><b>Spot it</b>Ask for cost per correct case and 95th-percentile latency. Compare with a cheaper model used once.</div></li>
-        <li><div class="t">Trusting the shown reasoning as the real reasoning</div><p>A PRM approves clean steps that do not reflect how the model reached the answer.</p><div class="spot"><b>Spot it</b>Change a fact in the input and see whether steps and answer change consistently (<a href="r4-chain-of-thought-faithfulness-and.html">R4</a>).</div></li>
+        <li><div class="t">Learned score at very large N</div><p>The top score increasingly fits the verifier's taste, not the truth.</p><div class="spot"><b>Spot it</b>Plot true accuracy against N on labelled cases and cap N where it flattens or falls.</div></li>
+        <li><div class="t">Voting when the common answer is wrong</div><p>A systematic misreading repeats in most samples, so voting locks it in.</p><div class="spot"><b>Spot it</b>Check the top wrong answer's share. If it is the plurality, voting hurts.</div></li>
+        <li><div class="t">Verifying the wrong thing</div><p>The code checks the arithmetic, not that the right inputs or current policy were used.</p><div class="spot"><b>Spot it</b>List what the verifier does not check and test it with answers wrong in exactly those ways.</div></li>
+        <li><div class="t">Over-thinking and hidden cost</div><p>Long budgets on easy tasks waste money and sometimes turn a right answer wrong. Gains are often quoted without the cost.</p><div class="spot"><b>Spot it</b>Ask for cost per correct case and accuracy by difficulty and budget.</div></li>
       </ul>
     </section>
 
@@ -303,13 +257,10 @@
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
       <div class="qa">
-        <details class="reveal"><summary>1. A twelve-step chain has 97% reliability per step. How often is the whole chain sound? If a broken chain still gets the final answer right 10% of the time, what share of right answers rest on flawed reasoning?</summary><div class="ans"><p>Sound: 0.97<sup>12</sup> ≈ 0.694. Right answers: 0.694 + 0.306 × 0.1 ≈ 0.725. Flawed among right: 0.0306 ÷ 0.725 ≈ <strong>4.2%</strong>. Small here, but it grows fast as step reliability falls or the lucky-guess rate rises.</p></div></details>
-        <details class="reveal"><summary>2. A model is right 8% of the time per sample, and you have an exact check. How many samples give at least a 90% chance that one is right?</summary><div class="ans"><p>Need 1 − 0.92<sup>N</sup> ≥ 0.9, so N ≥ ln 0.1 ÷ ln 0.92 ≈ 27.6: <strong>28 samples</strong>. A learned verifier is limited by its own quality, so this does not apply.</p></div></details>
-        <details class="reveal"><summary>3. Why does best-of-N against a learned verifier often get worse at large N?</summary><div class="ans"><p>The top of a big pool is the extreme of the verifier's scores, where it is least reliable. Fluent wrong answers that look right to it get picked over correct ones. The proxy keeps climbing while true quality peaks and falls.</p></div></details>
-        <details class="reveal"><summary>4. When does majority voting make accuracy worse as N increases?</summary><div class="ans"><p>When a wrong answer is more common than the right one: more samples make that wrong answer win more surely. Single-sample accuracy can be identical in the good and bad cases, so measure the top wrong answer's share.</p></div></details>
-        <details class="reveal"><summary>5. Why are rollout-estimated step labels noisy?</summary><div class="ans"><p>They label a step by the share of completions reaching the right answer. A wrong step can be followed by completions that recover or guess right, earning a good label; a right step followed by an unlucky model gets a bad one. The outcome-versus-process gap returns through the back door.</p></div></details>
-        <details class="reveal"><summary>6. Describe budget forcing in two sentences.</summary><div class="ans"><p>You control reasoning length at decode time: to stop early, cut the thinking off and force the answer; to think longer, block the end of thinking and append "Wait" so the model rechecks. Accuracy rises smoothly with budget until it flattens.</p></div></details>
-        <details class="reveal"><summary>7. Rank by how well test-time scaling should work, and say why: recomputing loan instalment schedules; drafting a Shariah-compliance opinion; extracting invoice totals; summarising a complaint.</summary><div class="ans"><p>Best: instalment schedules (exact formula, so generate-then-recompute). Next: invoice totals (reconcile against line items; disagreement flags weak cases). Weaker: complaint summaries (groundedness checks help, no exact answer). Weakest: the Shariah opinion, a judgement with no automatic check; more samples only give more fluent text, and a scholar must decide.</p></div></details>
+        <details class="reveal"><summary>1. What is the difference between an outcome reward and a process reward?</summary><div class="ans"><p>An outcome reward scores only the final answer. A process reward scores each step, so it shows where reasoning went wrong.</p></div></details>
+        <details class="reveal"><summary>2. Why does best-of-N against a learned verifier often get worse at large N?</summary><div class="ans"><p>The top of a big pool is the extreme of the verifier's scores, where it is least reliable. Fluent wrong answers get picked over correct ones.</p></div></details>
+        <details class="reveal"><summary>3. When does majority voting make accuracy worse as N grows?</summary><div class="ans"><p>When a wrong answer is more common than the right one. More samples make that wrong answer win more surely, so measure the top wrong answer's share, not just single-sample accuracy.</p></div></details>
+        <details class="reveal"><summary>4. Rank by how well test-time scaling should work: recomputing instalment schedules, extracting invoice totals, summarising a complaint, drafting a Shariah-compliance opinion.</summary><div class="ans"><p>Instalment schedules first, then invoice totals (both can be recomputed), then the summary. The Shariah opinion is last: no automatic check, so more samples only give more fluent text.</p></div></details>
       </div>
       <div class="lesson-foot">
         <a href="../index.html">← Back to the curriculum</a>
