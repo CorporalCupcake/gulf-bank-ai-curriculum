@@ -77,9 +77,9 @@
 
       <h3 class="sub" id="m-conformal">Conformal prediction: ranges with a guarantee</h3>
       <div class="prose">
-        <p>Think of a tailor who pads tomorrow's estimate by the typical miss of past fittings. Train any model, measure its errors on cases it has not seen, take the error that covers 90% of them, and return prediction plus or minus that error. It works with a neural net or a vendor black box.</p>
-        <p>A 90% range means about 9 in 10 future actuals land inside. It says nothing about width: a poor model gives a valid but useless range. The only assumption is exchangeability, meaning new cases look like the calibration cases.</p>
-        <p>The guarantee is on average, not for every kind of case, like a hospital with 90% survival overall that is far worse for the sickest patients. Scores that follow difficulty narrow the gap, and small calibration sets make coverage wobble. A few hundred cases suit a 90% range; 99% needs far more.</p>
+        <p>Think of a tailor who checks how far off past fittings were, then pads tomorrow's estimate by the typical miss. <strong>Split conformal prediction</strong> does this in four steps, whatever the model. Train any model: a neural net, boosted trees, a vendor black box. Hold back some cases it has not seen (the calibration set) and score each by how surprising the truth was, for a forecast simply the absolute error. Sort those scores and pick the one that sits at the 90th percentile, nudged up slightly to allow for the new case itself. Finally return the prediction plus or minus that value.</p>
+        <p>A 90% range means about 9 in 10 future actuals land inside. The only assumption is <strong>exchangeability</strong>: new cases look like the calibration cases, so nobody could tell them apart if you shuffled them together. There is no assumption about the model or the shape of the errors. The reason it works is plain counting. The new case's score is equally likely to rank anywhere among the calibration scores, so it lands in the worst 10% only about 10% of the time.</p>
+        <p>The guarantee says nothing about width. Width is the model's quality: a poor model gives a valid but useless range. It also holds on average, not for every kind of case, like a hospital with 90% survival overall that is far worse for the sickest patients. This is called <strong>marginal</strong> coverage, against <strong>conditional</strong> coverage for each kind of case, and the second cannot be guaranteed in general. Simulation 1 shows the gap.</p>
       </div>
 
 <figure class="figure" id="fig-c1">
@@ -124,9 +124,22 @@
         <p class="sim-note">Simulated: for exchangeable data, a calibration set's real coverage depends only on ranks, so it can be simulated exactly by drawing n uniform scores and taking the k-th smallest, k = ⌈(n+1)(1−α)⌉. That value is the real coverage of the resulting range. The theoretical mean is k/(n+1). 500 repeated calibration sets, seeded; the same random numbers are reused as n changes so the picture moves smoothly.</p>
       </figure>
 
+      <div class="prose">
+        <p>You get closer to per-case coverage by choosing a score that reflects difficulty.</p>
+        <ul>
+          <li><strong>Normalised scores.</strong> Divide the error by an estimate of local spread, as in Simulation 1. The guarantee still holds even if that estimate is rough; a better estimate just gives tighter ranges.</li>
+          <li><strong>Conformalised quantile regression (CQR).</strong> Train models for the 5th and 95th percentiles, then calibrate the gap so the guarantee holds. Ranges widen and narrow with the case, even if the quantile model is wrong.</li>
+          <li><strong>Classification sets.</strong> Return a set of labels, such as {"complaint: unauthorised access", "complaint: card issue"}, sized so the truth is inside 95% of the time. A clear case gets one label; a confusing one gets several, which is a natural signal to send it to a human.</li>
+        </ul>
+        <p>The coverage you get from any one calibration set is itself random, as Simulation 2 shows. As a rule, a 90% range wants at least a few hundred calibration cases. A 99% range needs far more, because the 99th percentile of 100 scores is just the largest. With too few cases the method honestly returns an infinite range. The calibration data must be separate from anything used to train or tune the model, otherwise coverage looks better than it is.</p>
+      </div>
+
       <h3 class="sub" id="m-shift">When data shift</h3>
       <div class="prose">
-        <p>Bank data break exchangeability often: Ramadan deposits, a new product's customer mix, adapting fraudsters. It is like a forecast calibrated on summer and used in winter. If only the customer mix changes, reweight calibration cases towards the new mix. If behaviour drifts over time, adaptive methods widen the range when recent misses exceed target. Neither fixes a changed relationship, which needs fresh labelled data.</p>
+        <p>Bank data break exchangeability often: Ramadan deposits, a new product's customer mix, adapting fraudsters. It is like a forecast calibrated on summer and used in winter. Two repairs exist, for two different kinds of change.</p>
+        <p><strong>Covariate shift</strong> means only the customer mix changes, while the link between inputs and outcome holds. Here you reweight: give each calibration case a weight equal to how much more likely it is in the new mix than the old one. This is weighted conformal prediction. You estimate the weights with a classifier that tells old data from new, so they carry error, and extreme weights are a warning sign. Uneven weights also shrink the effective sample, so a bank that shifts a lot needs a bigger calibration set, not a smaller one.</p>
+        <p><strong>Drift over time</strong> means behaviour keeps moving. Adaptive conformal inference watches recent misses and adjusts the miss rate online. If the last 100 days missed 15% against a 10% target, it widens the range. It guarantees the long-run miss rate, not coverage on any given day, and works even for arbitrary data.</p>
+        <p>Neither fixes a changed relationship, such as a new fraud tactic or a rate change altering repayment. That needs fresh labelled data. In every case, track realised coverage on recent cases: a persistent gap against target is the alarm.</p>
       </div>
 
 <figure class="figure" id="fig-c3">
@@ -155,10 +168,11 @@
 
       <h3 class="sub" id="m-dml">Double ML: isolating the effect of an action</h3>
       <div class="prose">
-        <p>Marketing offered a top-up to wealthier, more active customers, so comparing treated and untreated credits the offer with spend that was coming anyway. That is confounding, like judging a gym by its members' fitness. A randomised test is the clean fix. With only history, double ML predicts spend and offer from the features, takes what is left over in each, and relates the two leftovers. The slope is the offer's effect in AED.</p>
-        <p>Cross-fitting means each customer is scored by models that never saw them, so overfitting cannot absorb the signal.</p>
-        <p>The average effect hides who responds. Meta-learners and causal forests let the effect vary by customer. The best targets often sit mid-distribution: not already sold, not hopeless.</p>
-        <p>Double ML cannot fix unobserved confounders, such as a relationship manager's hunch. It also needs overlap: similar customers must appear in both groups.</p>
+        <p>Marketing offered a top-up to wealthier, more active customers, so comparing treated and untreated credits the offer with spend that was coming anyway. That is confounding, like judging a gym by its members' fitness. A randomised test is the clean fix. With only history, you adjust for observed customer features.</p>
+        <p>A plain regression adjustment breaks if the feature-to-spend link is nonlinear, and a plain ML adjustment adds its own bias because regularisation shrinks the wrong things. <strong>Double (debiased) ML</strong> works in four steps. Predict spend from the features. Predict who gets the offer from the features (the propensity). Take the leftovers in each: actual spend minus predicted, and offer minus predicted chance. Then regress leftover spend on leftover offer. The slope is the offer's effect in AED, so 45 means "an offer adds about AED 45", not "treated customers spend 45 more".</p>
+        <p>"Double" means two prediction models, and they can be any ML method. That is safe because the final step is insensitive to small errors in them (the technical word is Neyman-orthogonal). "Debiased" adds <strong>cross-fitting</strong>: each customer is scored by models that never saw them, so overfitting cannot absorb the signal.</p>
+        <p>The average effect hides who responds, so you let it depend on features. Two approaches dominate. <strong>Meta-learners</strong> build effect estimators from ordinary ML models: an S-learner fits one model with the offer as a feature, a T-learner fits separate treated and untreated models and subtracts them, and the R-learner is double ML with a flexible final stage. <strong>Causal forests</strong> are random forests whose splits separate customers with different effects, not different outcomes. The "honest" variant picks splits on one half of the data and estimates effects on the other, which gives valid confidence intervals. The best targets often sit mid-distribution: not already sold, not hopeless.</p>
+        <p>Double ML cannot fix unobserved confounders, such as a relationship manager's hunch. It also needs overlap: similar customers must appear in both groups, or the estimator extrapolates silently.</p>
       </div>
 
 <figure class="figure" id="fig-c4">
@@ -186,6 +200,42 @@
         </div>
         <p class="sim-note">Simulated: a customer size index x between −2 and 2. Baseline quarterly spend = AED 100 + 40x, noise sd 40. The offer adds 30 − 25x (so large customers respond less, a "sure thing" pattern, and the very large respond negatively, for example cannibalising other products). The chance of receiving the offer rises with x according to the confounding slider. DML: 12 bins for the two nuisance means, 2-fold cross-fitting, then the residual-on-residual regression with a straight-line effect. The "who to call" cards use the true effect of the customers chosen, which is known only because this is a simulation; in life you would validate with a hold-out experiment. Seeded.</p>
       </figure>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Conformal prediction is strong at:</strong></p>
+        <ul>
+          <li><strong>Model-agnostic guarantees.</strong> It only looks at the model's errors on held-out data, so it wraps a neural net, a boosted tree or a vendor API equally well.</li>
+          <li><strong>Few assumptions.</strong> No normal-errors assumption and no correct-model assumption. Exchangeability is the one thing you need to defend.</li>
+          <li><strong>Cheap to add.</strong> It needs one calibration pass and a sort. No retraining, which suits models you do not own.</li>
+          <li><strong>Honest uncertainty in classification.</strong> Label sets flag confusing cases for review rather than forcing a single answer.</li>
+        </ul>
+        <p><strong>Conformal prediction is weak at, or wrong when:</strong></p>
+        <ul>
+          <li><strong>The data drift.</strong> The guarantee is only as good as exchangeability. Regime changes quietly break it.</li>
+          <li><strong>You need per-segment coverage.</strong> The guarantee is on average. A small segment can be badly under-covered unless you calibrate per group or use difficulty-aware scores.</li>
+          <li><strong>The model is poor.</strong> You get a valid range that is too wide to use. Conformal cannot fix a bad model.</li>
+          <li><strong>You have very little labelled data</strong> or want an extreme level such as 99.9%.</li>
+        </ul>
+        <p><strong>Causal ML is strong at</strong> separating the effect of an action from selection, using flexible models for the adjustment, and finding who responds. <strong>It is weak when</strong> a randomised test is cheap (run the test), when key drivers of treatment are unobserved, when overlap is poor, or when the sample is small relative to the number of features.</p>
+      </div>
+
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+        <tbody>
+          <tr><td><b>Split conformal</b></td><td>You have any model and a few hundred held-out cases, and want a range with a stated coverage.</td><td>Data are shifting fast, or you need guarantees for small segments.</td></tr>
+          <tr><td><b>Quantile regression (F7.2)</b></td><td>You want ranges that adapt to the case and can train the model yourself.</td><td>You need a coverage guarantee: its ranges are only as good as the model.</td></tr>
+          <tr><td><b>Parametric or Bayesian intervals</b></td><td>You trust the model form, and want interpretable parameters.</td><td>The model is a black box, or the errors are far from the assumed shape.</td></tr>
+          <tr><td><b>Randomised test (F3.6)</b></td><td>You can assign the action at random and wait. It is the gold standard for effects.</td><td>Randomising is unethical, too slow or too costly.</td></tr>
+          <tr><td><b>Double ML or causal forest</b></td><td>You have rich history, believe the main drivers are recorded, and want effects by customer.</td><td>Hidden drivers decided who got the action, or treated and untreated groups barely overlap.</td></tr>
+          <tr><td><b>Propensity-to-buy score</b></td><td>You only need to rank who will buy, not who responds.</td><td>The decision is whether an action pays; it will pick sure things.</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice.</strong> For ranges, start with split conformal around your existing model, using 500 to 2,000 calibration cases, and report coverage and width by segment before anything fancier. Move to CQR or normalised scores if width varies a lot by case. The key knob is the miss rate α: pick it from the cost of being wrong, not habit. Compute is trivial. For effects, confirm the data can answer the question first: check how the offer was assigned and plot overlap. Use double ML with gradient-boosted nuisance models and cross-fitting, and compare against a second learner. It wants thousands of customers, and heterogeneity wants many more. Always validate the chosen group in a randomised test.</p>
+        <p>In banking, conformal ranges suit treasury cash forecasts, loss and exposure estimates from vendor models, and routing in complaint or KYC classification where a multi-label set means "ask a human". Causal ML suits campaign targeting, pricing and limit-increase decisions, and measuring whether a collections nudge really works.</p>
+      </div>
     </section>
 
     <section class="part" id="fails">
@@ -195,6 +245,8 @@
         <li><div class="t">Reading average coverage as coverage for everyone</div><p>New-to-bank customers may be badly under-covered even at 90% overall.</p><div class="spot"><b>Spot it</b>Report coverage and width by segment.</div></li>
         <li><div class="t">A valid range so wide it is useless</div><p>"Between AED 2m and AED 40m" holds and helps nobody.</p><div class="spot"><b>Spot it</b>Show width beside coverage, against a naive baseline.</div></li>
         <li><div class="t">Treating a propensity score as an effect</div><p>Calling the likeliest buyers wastes money on sure things.</p><div class="spot"><b>Spot it</b>Ask: compared with what?</div></li>
+        <li><div class="t">Tiny calibration sets, extreme confidence</div><p>A 99% range from 80 calibration cases is the largest error or infinite.</p><div class="spot"><b>Spot it</b>Check the calibration size times the miss rate is comfortably above about 10.</div></li>
+        <li><div class="t">Chasing heterogeneity in noise</div><p>With 400 customers and 30 features, a causal forest finds a "high responder" segment that is mostly luck.</p><div class="spot"><b>Spot it</b>Test on held-out data, and check intervals on effects.</div></li>
         <li><div class="t">Hidden confounding or no overlap</div><p>A sophisticated estimator is still wrong if the real driver of the offer is not in the data.</p><div class="spot"><b>Spot it</b>Ask how treatment was assigned, and confirm winners in a fresh randomised test.</div></li>
       </ul>
     </section>
@@ -207,6 +259,8 @@
         <details class="reveal"><summary>3. Why take leftovers of both outcome and treatment in double ML?</summary><div class="ans"><p>It removes what the features already explain about each. What remains of the treatment behaves as if random, so relating the leftovers isolates the effect.</p></div></details>
         <details class="reveal"><summary>4. Treated customers spend AED 150 more, but double ML says AED 45. Why, and what could still make 45 wrong?</summary><div class="ans"><p>The offer went to bigger customers who spend more anyway. It is still wrong if an unobserved driver affected both offer and spend, or overlap is poor.</p></div></details>
         <details class="reveal"><summary>5. A causal forest says the top decile responds by AED 120. Do you believe it?</summary><div class="ans"><p>Not yet. Test it on held-out data, then run a randomised test on that group. Picking the best-looking group from many guarantees some optimism.</p></div></details>
+        <details class="reveal"><summary>6. Treasury wants a 90% range around a vendor's cash forecast, with 400 labelled past days. Would you choose conformal or quantile regression, and why?</summary><div class="ans"><p>Conformal. You do not own the vendor model, so you cannot retrain it, and conformal needs only its predictions and the 400 errors. Quantile regression would need your own model and gives no guarantee. If widths vary a lot by day, calibrate a normalised score.</p></div></details>
+        <details class="reveal"><summary>7. Marketing can run a two-week randomised test, but wants you to use double ML on last year's data instead. Which would you choose and why?</summary><div class="ans"><p>The randomised test, if two weeks is acceptable. Randomisation removes confounding by design, while double ML relies on every driver of the offer being recorded. Use the history for planning and to choose whom to test, then confirm in the experiment.</p></div></details>
       </div>
     </section>
 

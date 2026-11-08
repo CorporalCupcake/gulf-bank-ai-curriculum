@@ -83,8 +83,8 @@
       <h3 class="sub" id="m-define">What "influence" means, precisely</h3>
       <div class="prose">
         <p>There are two ways to ask. <strong>Leave-one-out</strong> retrains without the row and sees how the prediction moves: exact, but one retraining per row. <strong>Influence</strong> nudges the row's weight slightly and uses calculus to estimate the shift without retraining.</p>
-        <p>Think of a ball in a bowl: a row pulls the model sideways, and a flat bowl lets it roll far. If the row pushes the model the way the test case wants, it helps that prediction; if opposed, it hurts.</p>
-        <p>The shortcut is accurate for typical rows. A row far out in feature space has high <strong>leverage</strong>, like a person on the end of a seesaw, and the shortcut understates what deleting it does. Simulation 1 shows this.</p>
+        <p>Think of a ball in a bowl: a row pulls the model sideways, and a flat bowl lets it roll far. The shortcut multiplies two things. One is how hard the row pulls (its <strong>gradient</strong>, the direction it pushes the parameters). The other is how flat the bowl is (the <strong>Hessian</strong>, the table of second derivatives that measures curvature). If the row pushes the model the way the test case wants, it helps that prediction; if opposed, it hurts. Cook did this for linear regression in the 1970s, and Koh and Liang carried it to modern machine learning in 2017.</p>
+        <p>The shortcut is accurate for typical rows. A row far out in feature space has high <strong>leverage</strong>, like a person on the end of a seesaw, and the shortcut understates what deleting it does. For ridge regression the exact answer is the estimate divided by one minus the leverage, so it blows up as leverage nears 1. Simulation 1 shows this.</p>
       </div>
 
       <figure class="figure" id="fig-inf">
@@ -112,13 +112,20 @@
       </figure>
 
       <div class="prose">
-        <p>Influence is signed and local: a row can help one prediction and hurt another. It also needs a smooth loss, which regularised regression has and neural networks do not. It assumes small changes, so removing one row in 100,000 is fine and removing a whole branch is not (Simulation 2).</p>
+        <p>Influence is signed and local: a row can help one prediction and hurt another. It also needs a smooth loss, which regularised regression has and neural networks do not. It assumes small changes, so removing one row in 100,000 is fine and removing a whole branch is not (Simulation 2). The theory also assumes a unique minimum and an invertible Hessian. Ridge and regularised logistic regression, the scorecard workhorses, qualify cleanly.</p>
       </div>
 
       <h3 class="sub" id="m-scale">Making it work on big models</h3>
       <div class="prose">
-        <p>The exact method needs a matrix with one entry per pair of parameters, impossible at a billion parameters. Practical tools approximate it layer by layer, or skip it and track how each row's gradient lined up with the test case during training. Each gives up some rigour.</p>
-        <p>For a bank, <strong>tabular models</strong> are in range of exact tools, and you can test the answer by retraining. For <strong>large language models</strong> the honest claim is "these rows are plausibly related to this output", not "removing them would change it".</p>
+        <p>The exact method needs a matrix with one entry per pair of parameters, impossible at a billion parameters (10<sup>18</sup> entries). Each workaround gives up something.</p>
+        <ul>
+          <li><strong>Hessian-vector tricks.</strong> Never build the matrix; solve for its inverse's effect with conjugate gradients or a stochastic series (LiSSA). Needs many solves per query, and a damping term to cope with non-convexity.</li>
+          <li><strong>Kronecker approximations (EK-FAC).</strong> Approximate the matrix layer by layer as a product of two small ones. Used to study language models with tens of billions of parameters. Ignores links between layers, and you still search a shortlist of candidate rows, not the whole corpus.</li>
+          <li><strong>TracIn.</strong> No Hessian at all: add up gradient alignments between the row and the test case across saved training checkpoints. Intuitive and cheap, but a heuristic with no leave-one-out guarantee.</li>
+          <li><strong>Datamodels and TRAK.</strong> Train many models on random subsets and learn which rows predict which outputs. Predicts subset effects well on average, but needs an ensemble.</li>
+          <li><strong>Shortlist then re-rank.</strong> Retrieve similar rows by embeddings, then score only those. Misses influential rows that do not look similar, which is the interesting case.</li>
+        </ul>
+        <p>For a bank, <strong>tabular models</strong> are in range of exact tools, and you can test the answer by retraining. For <strong>large language models</strong> the honest claim is "these rows are plausibly related to this output", not "removing them would change it". Studies on big models found that influence grows more abstract with scale: answers trace to documents with similar themes, not matching words. Good science, awkward audit evidence.</p>
       </div>
 
       <h3 class="sub" id="m-uses">What attribution is used for</h3>
@@ -127,6 +134,7 @@
           <li><strong>Debugging data.</strong> Sort rows by how much they hurt a failing case and inspect the top few for mislabels. A human checks, so this works well.</li>
           <li><strong>Explaining by example.</strong> "Customers like you, and how they fared." Colour for an appeal, not proof.</li>
           <li><strong>Provenance and credit.</strong> Which licensed documents shaped an output. This is a causal claim about a model nobody can retrain, so it demands the most trust.</li>
+          <li><strong>Data selection.</strong> Drop or reweight rows to improve a model. Treat with care: influence scores often track the real effect of dropping rows poorly in language-model fine-tuning.</li>
         </ul>
       </div>
 
@@ -135,9 +143,9 @@
         <p>Deleting a row from a database is a lookup. A trained model is more like a cake: the customer's data is baked in with everyone else's. <strong>Exact unlearning</strong> means the model you would get training without those rows. Anything else is approximate and needs a way to check it.</p>
         <ul>
           <li><strong>Retrain from scratch.</strong> Exact, but costs a full run.</li>
-          <li><strong>Sharding.</strong> Train separate models on slices; a deletion retrains only one slice. Exact, but each model sees less data.</li>
-          <li><strong>Influence-based update.</strong> One calculus step that cancels the rows' pull. Provable for simple convex models, not for deep nets.</li>
-          <li><strong>Fine-tuning heuristics.</strong> Push the model away from the rows, or train it to refuse. Cheap, unguaranteed, often damaging.</li>
+          <li><strong>Sharding (often called SISA).</strong> Train separate models on slices, with checkpoints inside each slice, and combine by voting or averaging. A deletion retrains only the shard that held the row, from the last checkpoint before it. Exact, because the row never touched the other shards, but each model sees less data.</li>
+          <li><strong>Influence-based update.</strong> One Newton-style step that cancels the rows' pull. With added noise it can carry a "certified removal" guarantee, but only for convex models and small forget sets.</li>
+          <li><strong>Fine-tuning heuristics.</strong> Gradient ascent (push the model away from the rows), relabelling to random targets, editing a few layers, or training a language model to refuse. Cheap, unguaranteed, and often damaging to neighbouring skills.</li>
         </ul>
       </div>
 
@@ -170,12 +178,12 @@
       </figure>
 
       <div class="prose">
-        <p>A small model lets you measure the gap to the retrained one; a huge one does not. Under-forgetting leaves the influence in place. Over-forgetting leaves a fingerprint: rows scoring unusually badly show who was removed. A good result scores forgotten rows as the retrained model would, without wrecking accuracy.</p>
+        <p>A small model lets you measure the gap to the retrained one; a huge one does not. Under-forgetting leaves the influence in place. Over-forgetting leaves a fingerprint: rows scoring unusually badly show who was removed. A good result scores forgotten rows as the retrained model would, without wrecking accuracy for similar customers or a whole language.</p>
       </div>
 
       <h3 class="sub" id="m-cost">Sharding: the arithmetic of exact unlearning</h3>
       <div class="prose">
-        <p>A month of requests hits many shards at once. With 16 shards, 5 requests touch about four; 200 touch all of them, which is a full retrain anyway. Sharding pays only when deletions are rare.</p>
+        <p>A month of requests hits many shards at once. With 16 shards, 5 requests touch about four; 200 touch all of them, which is a full retrain anyway. Sharding pays only when deletions are rare. The expected number of shards touched is S times (1 minus (1 minus 1/S) to the power d), where d is the number of requests, and it is less than d because requests sometimes collide on a shard.</p>
       </div>
       <figure class="figure" id="fig-sisa" style="margin-top:18px">
         <div class="fig-head"><span class="fig-title">What a month of deletion requests costs</span><span class="fig-tag">Simulation 3 of 3</span></div>
@@ -201,7 +209,43 @@
       <h3 class="sub" id="m-eval">How would you know it worked?</h3>
       <div class="prose">
         <p>If you can retrain, compare with the retrained model. If not, you can only test behaviour: do forgotten rows score like unseen ones, does a membership-inference attack (<a href="r11-memorisation-membership-inference-private-training.html">R11.3</a>) fail, do paraphrases or Arabic prompts still extract the data, and does a short fine-tune bring it back?</p>
-        <p>A model can pass all of these and still carry the information. Read "verified" as "passed these tests".</p>
+        <p>Also check utility: accuracy on everyone else, split by segment and language, because unlearning one pattern can quietly hurt similar customers.</p>
+        <p>A model can pass all of these and still carry the information, because many weight settings behave identically on any finite test set. Read "verified" as "passed these tests".</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Debugging training data.</strong> Ranking rows by how much they hurt a failing case puts mislabels and leaked rows near the top, because a wrong label pulls the fit hard against the right answer.</li>
+          <li><strong>Small, smooth models.</strong> For regularised regression and logistic scorecards, the influence estimate is cheap and close to true leave-one-out, so you can check it.</li>
+          <li><strong>Case-level explanations.</strong> It answers "which past applicants?" which feature attributions cannot.</li>
+          <li><strong>Exact deletion through sharding.</strong> When deletions are rare, only one slice retrains, and the guarantee is real because the row never touched the rest.</li>
+        </ul>
+        <p><strong>Weak at, or do not use when</strong></p>
+        <ul>
+          <li><strong>Deep networks and LLMs as causal evidence.</strong> The theory assumes a bowl-shaped loss and the approximations add error. Use scores as leads, not proof.</li>
+          <li><strong>Removing many rows at once, or outlying rows.</strong> The first-order estimate under-reports both.</li>
+          <li><strong>Any claim of certified forgetting for a deep model.</strong> No such guarantee exists. Fine-tuning heuristics give suppression, not removal.</li>
+          <li><strong>Frequent deletions with many shards.</strong> Nearly every shard is touched, so you pay a full retrain plus the accuracy loss of sharding.</li>
+          <li><strong>Copies outside the weights.</strong> Feature stores, embeddings and backups are untouched by any of this.</li>
+        </ul>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Retrain without the rows</b></td><td>The model retrains in hours or less (most tabular banking models). Strongest evidence, simplest to defend.</td><td>Training takes weeks or you do not hold the data or recipe.</td></tr>
+            <tr><td><b>Influence functions</b></td><td>Convex or small models; you want a ranked list of rows for debugging or an appeal.</td><td>Deep nets as proof, large forget sets, or high-leverage rows.</td></tr>
+            <tr><td><b>TracIn or TRAK</b></td><td>Large neural models where you need a shortlist and can save checkpoints or train a few models.</td><td>You need a guarantee, or cannot afford the storage and ensemble.</td></tr>
+            <tr><td><b>Sharded training</b></td><td>Deletions are rare and a slight accuracy loss is acceptable; planned from day one.</td><td>Deletions are frequent, or the model cannot be split.</td></tr>
+            <tr><td><b>Approximate unlearning (ascent, refusal)</b></td><td>No retrain is possible and a partial, tested reduction is better than nothing.</td><td>You must attest that data is gone. It is suppression.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice.</strong> Try retraining first and measure the cost. If a tabular model retrains in an hour, a monthly batched deletion job is the honest answer, and no research method beats it. For debugging, start with exact influence on a regularised model; check the top rows by retraining without them. Knobs that matter: the damping or regularisation (keeps the Hessian stable), how many rows you remove at once, the number of shards, and checkpoint frequency.</p>
+        <p>Compute: exact tools are fine up to millions of rows and thousands of parameters. Beyond that, expect gradients for every candidate row. In a bank, this appears in credit-decision appeals, model-risk reviews, mislabel hunts on fraud and AML alerts, and data-protection erasure requests. For an LLM trained by a vendor, attribution and unlearning are research tools, not production controls. Use today: retrain or filter before training, keep lineage, and control access to RAG indexes. What would change that: unlearning methods with checks that survive relearning and stronger attacks.</p>
       </div>
     </section>
     <!-- ============================== 5. FAILS ============================== -->
@@ -212,7 +256,9 @@
         <li><div class="t">Ignoring outliers and group removal</div><p>The shortcut understates the effect of an outlying row or of removing many rows at once.</p><div class="spot"><b>Spot it</b>Ask how many rows were removed and whether any sit far from the rest.</div></li>
         <li><div class="t">Counting suppression as unlearning</div><p>The model stops answering but still holds the knowledge.</p><div class="spot"><b>Spot it</b>Ask for a relearning test and a membership-inference test.</div></li>
         <li><div class="t">Forgetting the copies</div><p>The data leaves the weights but stays in feature stores, backups, embeddings, RAG indexes and downstream models.</p><div class="spot"><b>Spot it</b>Ask for lineage: every artefact the dataset fed.</div></li>
+        <li><div class="t">Collateral damage</div><p>Unlearning one customer's pattern degrades accuracy for similar customers, or a whole language.</p><div class="spot"><b>Spot it</b>Re-run validation by segment, including Arabic and English text.</div></li>
         <li><div class="t">Unverifiable attestations</div><p>Certified removal exists only for specific convex setups.</p><div class="spot"><b>Spot it</b>Ask what the guarantee is, under which assumptions, and who checked it.</div></li>
+        <li><div class="t">Attribution leaking the data it explains</div><p>Showing "the most similar past customers" to an applicant exposes other people's records.</p><div class="spot"><b>Spot it</b>Review any example-based explanation under privacy rules before it leaves the bank.</div></li>
       </ul>
     </section>
     <section class="part" id="check">
@@ -223,6 +269,8 @@
         <details class="reveal"><summary>3. Why can a far-out row defeat the shortcut?</summary><div class="ans"><p>It pulls the fit towards itself, so the shortcut sees a small error, yet removing it changes the fit a lot. The estimate understates its effect.</p></div></details>
         <details class="reveal"><summary>4. A vendor model refuses to discuss a deleted customer but answers again after a short fine-tune. What does that tell you?</summary><div class="ans"><p>The knowledge was suppressed, not removed. It was still in the weights.</p></div></details>
         <details class="reveal"><summary>5. Why is a model that scores far worse than normal on the forgotten rows not a success?</summary><div class="ans"><p>A retrained model would treat them like any unseen rows. An unusually bad score is a fingerprint showing who was removed.</p></div></details>
+        <details class="reveal"><summary>6. A tabular credit model retrains in 90 minutes. You get ten erasure requests a month. Do you use influence-based unlearning, sharding or retraining, and why?</summary><div class="ans"><p>Retrain, in a monthly batch. It is exact, cheap at that size, and easy to defend to an auditor. Sharding would cost accuracy for no gain, and an influence step offers a guarantee you do not need.</p></div></details>
+        <details class="reveal"><summary>7. A vendor offers "which training documents produced this chatbot answer" for a closed LLM. Would you rely on it in a complaint review, and what would you use instead?</summary><div class="ans"><p>Not as proof. Scores on big models are approximations that cannot be checked by retraining, so treat them as leads. Rely on logged retrieval sources (RAG citations), your own data lineage, and tests on a smaller model you can retrain.</p></div></details>
       </div>
     </section>
 

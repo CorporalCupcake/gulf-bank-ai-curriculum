@@ -85,7 +85,10 @@
       <h3 class="sub" id="m-cuped">CUPED: variance reduction from pre-experiment data</h3>
       <div class="prose">
         <p>Customers differ hugely in how much they spend, and that spread hides a modest nudge effect. CUPED compares each customer with their own pre-test spend, like timing a runner against their last race instead of against strangers. The average effect stays the same; the noise around it shrinks.</p>
-        <p>The saving depends on how strongly past spend predicts in-test spend. A correlation of 0.7 roughly halves the customers needed; 0.3 saves almost nothing. The covariate must be measured before assignment, because anything measured later can be changed by the nudge and biases the result. New customers have no history and gain less.</p>
+        <p>Mechanically, you fit a straight line predicting in-test spend from pre-test spend, then subtract the part of each customer's result that the line explains. The slope of that line is the only parameter.</p>
+        <p>The saving depends on how strongly past spend predicts in-test spend. The share of variance removed is the correlation squared, so a correlation of 0.7 removes about half and roughly halves the customers needed, while 0.3 removes under a tenth. Spend and balances correlate strongly with their own past; one-off outcomes do not, so measure the correlation first.</p>
+        <p>Because the pre-test value was fixed before assignment, it differs between arms only by chance. The average effect stays unbiased and adjusting can only help precision. The covariate must therefore end before assignment: anything measured later can be changed by the nudge, and adjusting for it eats part of the real effect.</p>
+        <p>Practical details. New customers have no history, so give them the average plus a "no history" flag; they gain less. Skewed metrics let a few huge spenders drive the slope, so cap at a high percentile or take logs first. CUPAC goes one step further: use a machine-learning prediction of the outcome, built from pre-test data, as the adjustment variable. The more of the outcome it explains, the bigger the gain.</p>
       </div>
 
       <figure class="figure" id="fig-cuped">
@@ -116,7 +119,9 @@
       <h3 class="sub" id="m-seq">Looking early without cheating: anytime-valid tests and e-values</h3>
       <div class="prose">
         <p>A p-value assumes one look at a planned sample size. Each extra look is another chance to see a fluke, so checking daily and stopping at the first p below 0.05 turns a 5% error rate into roughly 25%.</p>
-        <p>Anytime-valid methods stay honest however often you look. An e-value is a bet against "no effect": it grows only when the data surprise the null, and reaching 20 is a 5% test. It is not a probability, and 20 is not "95% sure". The price is some power if you would only have looked once; the reward is that you can stop a harmful treatment early or extend a test.</p>
+        <p>There are three honest options. Group-sequential designs fix a handful of looks in advance and spend the 5% error budget across them with stricter thresholds: reliable, but the schedule is rigid. Confidence sequences are intervals valid at every sample size at once, so you can read them daily; they are wider than a fixed-sample interval at any given moment. E-values are the third route.</p>
+        <p>An e-value is a bet against "no effect". Imagine staking one dirham against the null: your wealth grows only when the data surprise it, and under the null large wealth is rare. The chance that it ever reaches 20 is at most 5%, so "stop when E reaches 20" is a 5% test however often you check. E of 1 means no evidence; below 1 means the data favoured the null. It is not a probability, and 20 is not "95% sure".</p>
+        <p>What you gain: you can stop whenever you like, extend a test, and combine independent evidence by multiplying (E of 4 from a pilot and 5 from the rollout give 20). A bad treatment, such as a broken checkout, can be stopped early, and guardrail metrics like complaints or failed payments can be watched continuously. What you pay: if you would only have looked once, you need somewhat stronger evidence than the classic test. The prior effect size you assume changes power, never validity.</p>
       </div>
 
       <figure class="figure" id="fig-seq">
@@ -145,7 +150,9 @@
       <h3 class="sub" id="m-interf">When customers interact: interference, clusters and switchbacks</h3>
       <div class="prose">
         <p>Picture 1,000 customers queuing for 250 appointment slots. Give half priority and their booking rate rises, but only because the others lose slots. A standard test assumes your result depends only on your own assignment. With shared capacity, budgets, networks or adversaries that fails, and the test is wrong, not just noisy.</p>
-        <p>Cluster randomisation assigns whole branches or regions so spillover stays inside, at the cost of few units and wide intervals. Switchbacks turn the whole system on and off in time blocks: short blocks give many repeats but carryover, long blocks are clean but few.</p>
+        <p>Interference shows up wherever customers share something: agent time, a cashback budget, a transfer network, a price, or an adversary (block a fraud pattern for half the traffic and attackers shift to the other half). The test then measures "treated versus control in the same crowded world", but the decision is "everyone versus nobody". They can differ wildly.</p>
+        <p>Cluster randomisation assigns whole branches, regions, advisor books or graph communities, so spillover stays inside the cluster. The cost is few units and wide intervals: 20 branches is a 20-unit experiment. It also only works if clusters truly contain the interaction; customers who use several branches and the app leak across the boundary.</p>
+        <p>Switchbacks turn the whole system on, then off, in randomly ordered time blocks. This removes competition between simultaneous customers. Block length is the main dial. Short blocks give many comparisons but carryover from the previous state; long blocks are clean but give few. Handle carryover with a burn-in (discard the start of each block), by modelling it, or with blocks longer than the system's memory. A switchback is a poor fit if flipping the product confuses customers or regulators.</p>
         <p>A tight interval around the wrong quantity looks like strong evidence. If arms share a scarce resource, use clusters or switchbacks, or at least run two treated shares and see whether the estimate moves.</p>
       </div>
 
@@ -178,7 +185,15 @@
       <div class="prose">
         <p>A policy maps a customer's situation to an action, such as which offer to make. Off-policy evaluation estimates what a new policy would have earned using the old policy's logs, without deploying it. It is like grading a new exam strategy from old papers answered differently. It is hard because you only see the outcome of the action actually taken.</p>
         <p>The direct method asks a reward model: precise, but only as good as the model. Importance weighting up-weights logged rows that match the new policy: unbiased, but noisy when weights are large. Doubly robust combines both and works if either is right.</p>
-        <p>All of them need overlap: the new policy's actions must have had some chance in the logs. Without it, the answer is the model's opinion, not evidence. A small randomised exploration share keeps you evaluable. Use it to shortlist ideas for a live test, and always report an interval.</p>
+        <p>Importance weighting is easiest to picture with numbers. If the old policy offered the premium card to a customer type with probability 5%, each logged row where that happened counts 20 times. A few rows then carry huge weight, which is why variance explodes. Doubly robust starts from the model's prediction and adds a weighted correction from the residuals, so it is right if either the model or the logged probabilities are right.</p>
+        <p>Conditions, in the order they usually bite:</p>
+        <ul>
+          <li><strong>Overlap.</strong> What the new policy would do must have had a non-zero chance in the logs. If the old rule was deterministic, no estimator can recover the answer without assumptions. A small randomised exploration share keeps you evaluable.</li>
+          <li><strong>Logged propensities.</strong> You need the old policy's probability of each action, recorded at decision time. Estimated probabilities are themselves a model with errors.</li>
+          <li><strong>No unmeasured confounding.</strong> If staff acted on hunches you did not record, their judgement is mixed into the outcomes.</li>
+          <li><strong>Effective sample size.</strong> It is the number of equal-weight rows that would give the same noise. It collapses when exploration is thin, so report it.</li>
+        </ul>
+        <p>Common tweaks: clip large weights (a little bias for much less variance), self-normalise by the sum of weights, and bootstrap the rows for an interval. Use OPE to shortlist ideas for a live test, and always report an interval.</p>
       </div>
 
       <figure class="figure" id="fig-ope">
@@ -205,6 +220,43 @@
         <p class="sim-note">Simulated: 70% low-risk and 30% high-risk customers; three offers (none, standard, premium). The chance that the customer takes up the offer and repays on time is 5/20/30% for low risk and 4/10/2% for high risk. The old policy offers "standard" to low risk and "none" to high risk, trying each other offer with probability ε/2. The new policy offers "premium" to everyone, so its true value is 0.7·0.30 + 0.3·0.02 = 21.6%. The reward model is exact except for a fixed error you set on the offers the old policy rarely used. 150 seeded repeats of the log.</p>
       </figure>
 
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Cutting cost without changing the answer (CUPED).</strong> Customer-to-customer spread is mostly stable history, and the line removes exactly that part, so the same test needs fewer customers or fewer weeks.</li>
+          <li><strong>Honest monitoring (anytime-valid tests).</strong> The error guarantee holds at every sample size, so stopping a harmful treatment early or extending an unclear one costs nothing in validity.</li>
+          <li><strong>Correct answers under competition (clusters, switchbacks).</strong> Randomising the unit that interacts means control really does experience the world without the product, which a customer-level split cannot give you.</li>
+          <li><strong>Screening ideas (off-policy evaluation).</strong> Existing logs are free, so you can rank twenty candidate policies and send only the best two to a live test.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>CUPED on outcomes without history.</strong> New customers and one-off events have weak pre-period links, so the saving is small.</li>
+          <li><strong>E-values for a single planned look.</strong> If the sample size is fixed and nobody will peek, the classic test has more power.</li>
+          <li><strong>Clusters with few units.</strong> With 10 branches the interval is so wide that you learn little; a switchback or a well-modelled staggered rollout may serve better.</li>
+          <li><strong>Switchbacks on slow metrics.</strong> Churn and balances take weeks to respond, so every block is contaminated by the last.</li>
+          <li><strong>OPE with no overlap or thin exploration.</strong> The answer is the model's opinion, or a handful of rows with enormous weights. It never replaces a live test for a high-stakes launch.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose:</strong></p>
+      </div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Plain A/B test, fixed horizon</b></td><td>Customers are independent, traffic is plentiful, and the date is agreed.</td><td>The metric is noisy and traffic is scarce, or people will peek.</td></tr>
+            <tr><td><b>CUPED / CUPAC</b></td><td>Strong pre-period history exists for the outcome.</td><td>Outcome is new or one-off; covariates would postdate assignment.</td></tr>
+            <tr><td><b>Anytime-valid / sequential</b></td><td>You want daily monitoring, early stopping or guardrails.</td><td>One planned look and a tight sample budget.</td></tr>
+            <tr><td><b>Cluster or switchback</b></td><td>Capacity, budgets, networks or adversaries link customers.</td><td>Few clusters, slow metrics, or switching disrupts customers.</td></tr>
+            <tr><td><b>Off-policy evaluation</b></td><td>Randomised logs exist and a live test is slow, costly or not allowed.</td><td>Deterministic old policy or unlogged decisions.</td></tr>
+            <tr><td><b>Difference-in-differences / synthetic control</b></td><td>You cannot randomise but a region or period went live at a known time.</td><td>You can randomise cleanly.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice:</strong> start with a standard randomised test, add CUPED using a pre-period of the same length as the test, and check the correlation first. Defaults that matter: one pre-test covariate before many, a pre-registered stopping rule, a clustered or switchback design only after asking what control experiences, and 5 to 10% random exploration in any decision system you may want to evaluate later. Compute is trivial; the cost is analyst care. OPE needs far more logged rows when exploration is thin.</p>
+        <p>In banking: CUPED fits card-spend, balance and engagement tests; clusters or switchbacks fit branch, call-centre and collections-queue experiments; anytime-valid monitoring fits pricing and fraud-rule rollouts where a bad change costs real money; OPE fits offer and limit-increase policies with logged decisions.</p>
+      </div>
+
     </section>
 
     <section class="part" id="fails">
@@ -214,7 +266,10 @@
         <li><div class="t">Promising a variance cut without measuring the correlation</div><p>"CUPED halves the sample size" with a weak pre-period link.</p><div class="spot"><b>Spot it</b>Ask for the historical correlation; the saving is its square.</div></li>
         <li><div class="t">Peeking with a fixed-sample test</div><p>Daily p-values, stopping at the first win.</p><div class="spot"><b>Spot it</b>Ask when the stopping rule was fixed. Run an A/A test and count the false wins.</div></li>
         <li><div class="t">Customer-level split with a shared resource</div><p>A large, tight effect on a product drawing on limited slots, budget or a network.</p><div class="spot"><b>Spot it</b>Ask what control experiences. Rerun at a different treated share.</div></li>
+        <li><div class="t">Clusters that leak</div><p>Randomising by branch when customers also use other branches and the app.</p><div class="spot"><b>Spot it</b>Measure the share of activity outside the assigned cluster. High leakage means weak isolation.</div></li>
+        <li><div class="t">Switchback carryover ignored</div><p>Daily flipping on a slow metric such as balances or churn.</p><div class="spot"><b>Spot it</b>Plot the metric around switch points. If it takes days to settle, lengthen blocks or add a burn-in.</div></li>
         <li><div class="t">OPE without overlap</div><p>Evaluating actions the old policy never took, with a model filling the gap.</p><div class="spot"><b>Spot it</b>Count how often the logs took the new action, per segment. Zero cells mean model opinion.</div></li>
+        <li><div class="t">Reporting an OPE point estimate</div><p>"The new policy lifts acceptance by 3.1 points" from heavy weights on a few rows.</p><div class="spot"><b>Spot it</b>Ask for an interval and the effective sample size. If a handful of rows carry the weight, treat it as a hypothesis.</div></li>
       </ul>
     </section>
 
@@ -226,6 +281,8 @@
         <details class="reveal"><summary>3. A test ends with an e-value of 12. Can you reject at 5%?</summary><div class="ans"><p>No, that needs 20. You may keep collecting data and multiply in further independent evidence.</p></div></details>
         <details class="reveal"><summary>4. 250 slots exist for 1,000 customers and half get priority. Why does the treated booking rate rise but not the total?</summary><div class="ans"><p>Slots are fixed, so priority only changes who gets them. A customer-level test reports the gap, though rolling out to everyone changes nothing.</p></div></details>
         <details class="reveal"><summary>5. The old rule never offered product B to high-risk customers. Can OPE say what would happen if it did?</summary><div class="ans"><p>No. There are no logged cases to reweight, so any answer is the model's extrapolation. You need some randomised exposure first.</p></div></details>
+        <details class="reveal"><summary>6. You have a card-spend test, two years of customer history and a fixed four-week plan. Would you use CUPED, an e-value test, or both, and why?</summary><div class="ans"><p>CUPED first: spend correlates strongly with its own past and the saving is free. Add an e-value test only if the team will peek or needs early stopping on harm. With a single planned look the classic test has more power, so the e-value brings flexibility you do not need.</p></div></details>
+        <details class="reveal"><summary>7. You want to test a new collections-call script across 12 branches that share one call-centre team. Would you randomise customers, branches or time blocks, and why?</summary><div class="ans"><p>Not customers: they compete for the same agents, so the gap would overstate the effect. Twelve branches give very wide intervals. Time blocks (a switchback) of a few days, with a burn-in, fit best, provided collections outcomes respond within days. If they respond slowly, fall back on branches and accept the wide interval.</p></div></details>
       </div>
     </section>
 

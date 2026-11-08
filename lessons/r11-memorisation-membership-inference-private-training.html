@@ -116,8 +116,9 @@
 
       <h3 class="sub" id="m-memo">Memorisation: verbatim, repeated and rare</h3>
       <div class="prose">
-        <p><strong>Generalising</strong> is learning a pattern ("UAE IBANs start with AE"). <strong>Memorising</strong> is storing one specific example ("this IBAN"). Rare cases appear too seldom to learn a pattern, so some memorisation is the price of accuracy on them.</p>
-        <p>A string is <strong>extractable</strong> if some prompt makes the model emit it. Extraction rises steeply with copies and model size, and clusters in templates, signature blocks and addresses, which a bank has in bulk.</p>
+        <p><strong>Generalising</strong> is learning a pattern ("UAE IBANs start with AE"). <strong>Memorising</strong> is storing one specific example ("this IBAN"). The two blur. A rare kind of customer appears too seldom for the model to learn a pattern, so it keeps the single example it saw. Some memorisation is therefore the price of accuracy on rare cases.</p>
+        <p>For language models the working definition is operational. A string is <strong>extractable</strong> if some prompt makes the model emit it. The standard test feeds the first k tokens (the prefix) of a training sequence and checks whether greedy decoding, always taking the likeliest next token, reproduces the true continuation exactly. Three things recur: more copies mean more extraction, steeply; bigger models memorise more at the same copy count; longer prefixes make extraction easier.</p>
+        <p>It clusters in boilerplate and repeated personal details, which a bank has in bulk: statement templates, email footers, a branch address on thousands of tickets.</p>
       </div>
 
       <figure class="figure" id="fig-dup">
@@ -146,21 +147,25 @@
       </figure>
 
       <div class="prose">
-        <p>Many epochs over a small private set raise memorisation, and good validation loss says nothing about stored strings.</p>
-        <p>The practical test is a <strong>canary</strong>: plant fake but realistic secrets in the fine-tuning data and measure how much likelier the model finds them than random alternatives.</p>
+        <p>Many epochs over a small private set raise memorisation, and good validation loss says nothing about stored strings. Extraction works on deployed models too: in 2023 researchers made a production chat model emit personal training text for a few hundred dollars.</p>
+        <p>The practical test is a <strong>canary</strong>, like a dye marker in a water supply. Plant fake but realistic secrets (a made-up account number) in the fine-tuning data at known repetition counts, say 1, 4 and 16. Then measure how much likelier the model finds those exact strings than random alternatives.</p>
       </div>
 
       <h3 class="sub" id="m-mia">Membership inference: was this record in training?</h3>
       <div class="prose">
         <p>A model is more at ease with data it has seen, so its loss on it is lower. The simplest attack calls "member" below a loss cut (Simulation 1).</p>
-        <p>AUC 0.5 is guessing and 0.56 looks harmless, but an attack right for 1 in 100 members and almost never wrong is a real breach. Ask for the true positive rate at 0.1% false positives.</p>
-        <p>For language models pretrained once on web data, most membership attacks barely beat guessing, and many published wins just detected older text. Extraction of repeated strings is the better-evidenced risk. For small fine-tunes and credit scorers it is real, so watch exposed confidence scores.</p>
+        <p>AUC 0.5 is guessing and 0.56 looks harmless, but an attack right for 1 in 100 members and almost never wrong is a real breach. Judge by the true positive rate at 0.1% and 1% false positives.</p>
+        <p>Some records have low loss simply because they are easy, such as a short common sentence. Stronger attacks therefore <strong>calibrate per record</strong>, comparing each loss with what it would be had the record never been seen. LiRA does this with "shadow" models trained with and without the target; cheaper versions use reference models. They are much stronger but cost many trained models.</p>
+        <p>For language models pretrained once on web data, most membership attacks barely beat guessing. The data is seen about once, and a near-copy of a member scores almost the same. Many published wins just detected older text, because members and non-members came from different periods. Extraction of repeated strings is the better-evidenced risk there. For small fine-tunes run for several epochs, and for classical models such as credit scorers, membership inference is real.</p>
+        <p>Bank cases to watch: a scorer queried by partners (confidence values act as loss signals, so return a decision or rounded score), a fine-tuned assistant (confirming a named customer's messages were in training reveals they contacted the bank), and weights shared with a vendor, which leak far more than an API.</p>
       </div>
 
       <h3 class="sub" id="m-dp">Private training: what differential privacy promises</h3>
       <div class="prose">
-        <p>Differential privacy (DP) bounds <em>all</em> attacks at once. Picture two worlds, with and without your record in training; DP says the trained model is almost equally likely in both. The number ε is the multiplier on how much any outcome can shift: small means your record barely matters, and each +1 multiplies the allowed advantage by about 2.7. By ε = 8 the cap says almost nothing.</p>
-        <p><strong>DP-SGD</strong> gets this by clipping each example's gradient so no record pulls too hard, then adding noise that hides whether any one record was there. Larger batches dilute the noise, so DP training needs big compute, and accuracy drops, hardest on rare cases.</p>
+        <p>Differential privacy (DP) bounds <em>all</em> attacks at once, instead of testing them one by one. Picture two worlds, with and without your record in training; DP says the trained model is almost equally likely in both. The number ε is the multiplier on how much any outcome can shift: small means your record barely matters, and each +1 multiplies the allowed advantage by about 2.7. The number δ is a tiny chance the guarantee fails; keep it far below one over the number of records.</p>
+        <p>For an attacker the useful form is: true positive rate ≤ e<sup>ε</sup> × false positive rate (plus δ). At ε = 2 and 1% false alarms, no attack catches more than about 7% of members. By ε = 8 the factor is nearly 3,000, the cap is 100% and it says almost nothing.</p>
+        <p><strong>DP-SGD</strong> is how this is done in deep learning. It changes ordinary gradient descent in two ways. First, <strong>clip</strong>: cap each example's gradient length so no record can push the weights by more than a fixed amount. Second, <strong>add noise</strong>: sum the clipped gradients and add random noise sized to that cap, which hides whether any one record was there, like a crowd muffling one voice. An <strong>accountant</strong> then adds up the privacy cost over every step, turning noise level, sampling rate, step count and δ into a final ε. More steps or less noise means a bigger ε, so privacy is a budget spent over training.</p>
+        <p>Accuracy suffers for two reasons: clipping biases the gradients, and the noise must be large enough to hide one record. Larger batches dilute it, so DP training wants very large batches and heavy compute. It hits rare cases hardest, which are exactly the ones that need memory, so sub-group fairness can worsen.</p>
       </div>
 
       <figure class="figure" id="fig-dp">
@@ -187,19 +192,21 @@
       </figure>
 
       <div class="prose">
-        <p>ε is a <em>cap</em> on what is possible, not a measurement of what leaks. No ε is universally safe: 1 to 2 is strong, 8 to 10 is common. A quoted ε means little until you know the privacy unit (customer, document or sequence), δ and the data covered.</p>
-        <p>VaultGemma (Google, 2025), trained at ε ≤ 2, showed no detectable memorisation on random training prefixes, at a quality cost like older non-private models. Its guarantee is per sequence, not per person.</p>
-        <p>Cheaper partial defences: fewer epochs, deduplication, scrubbing identifiers.</p>
+        <p>ε is a <em>cap</em> on what is possible, not a measurement of what leaks. Real attacks usually fall well below it. No ε is universally safe: 1 to 2 is strong, 8 to 10 is common in deployments. A quoted ε means little until you know the privacy unit (ideally one customer, but in LLM training often one token sequence, which protects far less), δ and the data covered.</p>
+        <p>VaultGemma (Google, 2025), a 1-billion-parameter model pretrained at ε ≤ 2, showed no detectable memorisation on prefixes of random training sequences, unlike similar non-private models. The cost was quality like non-private models from several years earlier. Its guarantee is per sequence, not per person.</p>
+        <p>Cheaper partial defences, with no formal guarantee: fewer epochs, early stopping and weight decay, deduplication, scrubbing identifiers, rounding or withholding scores, and output filters for known identifiers. They reduce observed leakage and are worth doing first.</p>
       </div>
 
       <h3 class="sub" id="m-prov">Data provenance and deduplication</h3>
       <div class="prose">
-        <p><strong>Provenance</strong> is a food label for data: where each piece came from and what was done to it. It answers questions that otherwise stall a project. May we use this? Was the test set in training? Which models held this customer's data if they ask for deletion? Removing a record's influence from trained weights is hard, so the realistic answer is excluding it from the next version.</p>
-        <p>Record source, legal basis, transformations and model versions per record when data is first pulled. A test: pick a random customer and ask which models saw their data. If nobody can answer in minutes, the trail is decorative.</p>
+        <p><strong>Provenance</strong> is a food label for data: where each piece came from and what was done to it. It answers questions that otherwise stall a project. May we use this? Was the test set in training? Which models held this customer's data if they ask for deletion? Removing a record's influence from trained weights is hard ("machine unlearning"), so the realistic answer is excluding it from the next version or retraining, which needs the record-level trail.</p>
+        <p>It also settles licences (audits of public text datasets found licences often missing or misattributed) and contamination (nobody can prove the test set was absent from training without it).</p>
+        <p>Per record, store a stable content hash, the source system, collection date and purpose, legal basis, jurisdiction, licence for third-party text, the ordered list of transformations, a near-duplicate cluster id, the fixed split, and the model versions that trained on it. Assign these at first pull and carry them through every step. A test: pick a random customer and ask which models saw their data. If nobody can answer in minutes, the trail is decorative.</p>
       </div>
 
       <div class="prose">
-        <p><strong>Deduplication</strong> has three levels. Exact (hash, keep one) catches pasted rows and repeated footers. Near-duplicate (MinHash with locality-sensitive hashing) catches documents differing by a date or name. Semantic (embeddings) catches paraphrases but can remove variety. Simulation 4 shows the tuning trade-off.</p>
+        <p><strong>Deduplication</strong> has three levels, each catching what the last misses. <strong>Exact</strong>: hash the normalised text and keep one; this catches pasted rows, forwarded emails and repeated footers. <strong>Near-duplicate</strong>: catches documents differing by a date, name or signature. Break each into overlapping word groups (shingles), compress them into a MinHash signature of a few hundred numbers that estimates how much two documents overlap, then use locality-sensitive hashing (LSH) to find candidate pairs without comparing all pairs. Published work found this cut memorised output roughly tenfold. <strong>Semantic</strong>: catches paraphrases using embeddings, but can remove useful variety.</p>
+        <p>The signature is split into b bands of r numbers each. Two documents become a candidate pair if they match on every number in any one band. More rows per band is stricter, like needing every question in a quiz section right; more bands is more forgiving, like more chances to pass. Candidates are verified exactly, so false ones cost compute, not correctness. Simulation 4 shows the trade-off.</p>
       </div>
 
       <figure class="figure" id="fig-lsh">
@@ -229,6 +236,41 @@
       <div class="prose">
         <p>Deduplicate <em>across</em> splits, not just within, or test scores reflect memory. Keep cluster size as a column, so collapsing identical requests does not hide how common they are.</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Deduplication and fewer epochs</strong> cut extraction cheaply. Risk rises steeply with copies, so removing repeats attacks the cause directly and often improves quality too.</li>
+          <li><strong>Canaries and low-FPR membership tests</strong> test your actual pipeline and give a number for the model-risk file.</li>
+          <li><strong>Differential privacy</strong> is the only approach whose guarantee holds against every attacker, including ones not yet invented, because it limits what any single record can change.</li>
+          <li><strong>Provenance</strong> turns deletion, licence, contamination and incident questions into queries. Model engineering cannot answer them afterwards.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>DP-SGD</strong> is the wrong tool for small data, small models you need accurate on rare cases, or tight compute. Noise swamps signal and the rare segments suffer most.</li>
+          <li><strong>Random-sample memorisation checks</strong> measure the average, not the worst case. They miss the one rare string a targeted attacker goes after.</li>
+          <li><strong>Scrubbing and dedup</strong> give no guarantee. Quasi-identifiers (address, rare job title, amount plus date) combine to identify.</li>
+        </ul>
+      </div>
+
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Dedup, fewer epochs, scrubbing</b></td><td>Always, as the first layer. Cheap and improves quality.</td><td>Relied on as a guarantee, or run so hard that rare cases vanish.</td></tr>
+            <tr><td><b>DP-SGD</b></td><td>Data is highly sensitive, you can afford big batches and compute, and you need a defensible guarantee.</td><td>Data is small, accuracy on rare cases is critical, or the privacy unit cannot be set to a person.</td></tr>
+            <tr><td><b>Restrict outputs and access</b></td><td>The model is queried by outsiders: withhold or round scores, rate-limit, keep weights internal.</td><td>Weights go to a vendor, or users need full probabilities.</td></tr>
+            <tr><td><b>Keep private data out of training</b></td><td>Retrieval with per-user access control can do the job.</td><td>Behaviour must change in the weights, such as a house style.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice.</strong> Start with provenance, exact and near-duplicate dedup (across splits), and the fewest epochs that reach your accuracy target. Then plant canaries, run extraction prompts built from real prefixes, and report attacks as TPR at 0.1% FPR. Add DP-SGD only where the stakes justify the accuracy and compute bill; expect big batches and a noticeable quality drop at ε around 2, much less around 8.</p>
+        <p>In banking: a customer-service assistant fine-tuned on chats needs dedup, scrubbing and canaries; scorers exposed to partners need limits on what scores leave the building; data-protection requests and model-risk audits need provenance.</p>
+        <p>Private training is production-ready for narrow models and for research-scale pretraining, as VaultGemma shows. For routine LLM fine-tuning it is usually too costly, so the first layer plus access control is the norm. Cheaper DP training that holds accuracy on rare cases would change that.</p>
+      </div>
     </section>
 
     <!-- ============================== 5. FAILS ============================== -->
@@ -239,8 +281,11 @@
         <li><div class="t">"We removed the names, so it can't leak them"</div><p>Identifiers hide in free text, and models memorise repeats.</p><div class="spot"><b>Spot it</b>Run extraction prompts with real prefixes and plant canaries.</div></li>
         <li><div class="t">Judging membership inference by AUC</div><p>A low AUC can hide a few members caught with near certainty.</p><div class="spot"><b>Spot it</b>Ask for TPR at 0.1% and 1% FPR.</div></li>
         <li><div class="t">An ε quoted with no context</div><p>Of what unit, with what δ, covering which data?</p><div class="spot"><b>Spot it</b>Ask for the privacy unit and δ.</div></li>
+        <li><div class="t">"Zero memorisation" from random sampling</div><p>Random sequences miss the rare record an attacker targets.</p><div class="spot"><b>Spot it</b>Ask whether targeted prefixes for known sensitive strings were used.</div></li>
+        <li><div class="t">Members and non-members from different times</div><p>The attack detects the date, not membership, and inflates results.</p><div class="spot"><b>Spot it</b>Check non-members were held out at random from the same period and source.</div></li>
         <li><div class="t">Fine-tuning a DP-pretrained model non-privately</div><p>The base guarantee covers only its own data, not yours.</p><div class="spot"><b>Spot it</b>Ask which stages used DP.</div></li>
         <li><div class="t">Deduplicating within training only, or too hard</div><p>Test near-copies in training make memory look like skill; aggressive dedup removes rare cases the model needs.</p><div class="spot"><b>Spot it</b>Run near-duplicate checks between splits and compare rare-segment accuracy.</div></li>
+        <li><div class="t">Provenance as a one-off spreadsheet</div><p>Columns exist, but nothing links them to training files or model versions.</p><div class="spot"><b>Spot it</b>Pick a random customer and ask which model versions trained on their data.</div></li>
       </ul>
     </section>
 
@@ -253,6 +298,8 @@
         <details class="reveal"><summary>3. Random sampling finds no leakage, yet a security team extracts an IBAN with a targeted prompt. Contradiction?</summary><div class="ans"><p>No. Random samples mostly test common content, while one rare string can still be recoverable.</p></div></details>
         <details class="reveal"><summary>4. VaultGemma reports no detectable memorisation at ε ≤ 2. What do you check before saying it cannot leak customer data?</summary><div class="ans"><p>The privacy unit (sequences, not people), the data covered (not your fine-tuning) and whether targeted prompts were tested.</p></div></details>
         <details class="reveal"><summary>5. Why is a deletion request hard to answer even before "unlearning" comes up?</summary><div class="ans"><p>Without record-level provenance you cannot say which datasets and model versions included the person's data.</p></div></details>
+        <details class="reveal"><summary>6. A fine-tuned support assistant leaks signature blocks. Dedup, DP-SGD at ε = 2, or output filtering: which first, and why?</summary><div class="ans"><p>Dedup first. Signature blocks repeat, and repetition drives extraction, so removing copies is cheap and attacks the cause. DP-SGD costs accuracy and compute, so keep it for data where a guarantee is needed.</p></div></details>
+        <details class="reveal"><summary>7. A partner wants your credit scorer's full probabilities, and offers a cheaper integration if you send the weights. Which do you choose and why?</summary><div class="ans"><p>Neither by default. Offer a decision or rounded score through an API with rate limits. Confidence values and especially weights make membership inference much easier, so they carry more risk than a bare decision.</p></div></details>
       </div>
     </section>
 

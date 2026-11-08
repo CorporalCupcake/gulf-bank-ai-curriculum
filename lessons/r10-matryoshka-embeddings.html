@@ -104,13 +104,21 @@
 
       <h3 class="sub" id="m-mrl">R10.1 · Matryoshka: nested prefixes</h3>
       <div class="prose">
-        <p>Matryoshka training scores the first 64, 128, 256 and so on numbers separately, so each prefix must work alone. Coarse facts (topic, language, document type) land first and fine detail later. Like Russian dolls, you stop at the size you can afford.</p>
-        <p>Re-normalise after cutting, or scores at different lengths do not compare. It stacks with storing numbers in fewer bits. Only models trained for it truncate well; chopping any other gives the red line in Simulation 1.</p>
+        <p>Ordinary training puts only the full vector in the loss, so information smears across all the numbers and any prefix is an arbitrary slice, like cutting a photo file in half. Matryoshka Representation Learning (Kusupati et al., 2022) changes only the loss. You pick nested sizes (say 64, 128, 256, 512 and 1,024), compute the same contrastive loss on <em>each</em> prefix, and add the results, optionally with a weight per size. The architecture is unchanged and full-length quality drops very little.</p>
+        <p>Because the 64-number prefix must work alone, coarse facts (topic, language, document type) land first and fine detail fills in later. Like Russian dolls, you stop at the size you can afford. Reading it in practice: if recall at 256 numbers is close to recall at 1,024, the cut was nearly free. A big gap means the model was not trained for it.</p>
+        <p>The knobs are few. <strong>The list of nested sizes</strong> should be the sizes you might deploy; in-between sizes usually work but are not guaranteed, so test them. <strong>The weights</strong> decide how much the small prefixes are favoured over the full vector. What it costs is a model trained this way, which means picking one that advertises it. It assumes your documents differ mainly in coarse features that fit the early numbers. Near-identical documents (forty versions of one loan template) differ only in fine detail, and lose more on cutting.</p>
+        <ul>
+          <li><strong>Re-normalise after cutting.</strong> A prefix of a unit-length vector is shorter than 1. Divide by its norm, or scores from different lengths do not compare.</li>
+          <li><strong>It stacks with quantisation</strong> (storing each number in fewer bits). 1,024 floats to 256 8-bit integers is 16 times smaller; binary goes further, usually with a higher-precision re-check (<a href="p3-quantization-pruning-and-distillation.html">P3 covers the same idea for model weights</a>).</li>
+          <li><strong>Only models trained for it truncate well.</strong> Check the model card. Chopping any other model gives the red line in Simulation 1.</li>
+        </ul>
+        <p>Many models already use only a low-dimensional corner of their space (dimensional collapse; Jing et al., 2022). That is part of why truncation can work at all, and a reason to check how many dimensions yours really use.</p>
       </div>
 
       <h3 class="sub" id="m-funnel">Adaptive retrieval: short pass, then careful pass</h3>
       <div class="prose">
-        <p>Search everything with a short prefix, then re-score only the shortlist with the full vector. It is <a href="m3-hybrid-search-and-reciprocal-rank.html">retrieve-then-rerank</a> using one model at two resolutions. The saving is large, but measure it on your own documents.</p>
+        <p>Nested sizes allow a cheap trick, like skimming headlines before reading the articles. Search everything with a short prefix, take a shortlist, then re-score only the shortlist with the full vector. The cost is roughly the short pass plus (shortlist ÷ corpus) of the full pass, and the final ranking still comes from the full embedding. It is <a href="m3-hybrid-search-and-reciprocal-rank.html">retrieve-then-rerank</a> using one model at two resolutions.</p>
+        <p>Two knobs matter: the first-pass length and the shortlist size. A document that misses the shortlist can never be rescued, so be generous (tens to hundreds, not five). The saving is large, but measure it on your own documents.</p>
       </div>
 
       <figure class="figure" id="fig-funnel">
@@ -137,13 +145,18 @@
 
       <h3 class="sub" id="m-multimodal">R10.2 · Multimodal embeddings</h3>
       <div class="prose">
-        <p>Text and page images share one space, so a query can find a scan without OCR. CLIP trained this on photos and captions. Two cautions: image and text vectors sit in different regions (the modality gap), so scores need different thresholds; and OCR-first pipelines lose layout such as table cells and stamps.</p>
+        <p>Text and page images share one space, so the words "customs declaration, 40 pallets of dates" land near a scan of that declaration and a query can find a scan without OCR (optical character recognition, turning pixels into text). CLIP (Radford et al., 2021) trained this on photos and captions: one image encoder, one text encoder, hundreds of millions of pairs. The matching caption is the positive; every other caption in the batch is a negative.</p>
+        <ul>
+          <li><strong>The modalities do not truly overlap.</strong> Image and text vectors sit in different regions, the "modality gap" (Liang et al., 2022). Text-to-text and text-to-image scores therefore have different ranges, so one cut-off on a mixed list is wrong. Rank within each type, or calibrate each pair type separately.</li>
+          <li><strong>OCR-first throws away layout.</strong> A number in a table cell, a stamp or a signature box carries meaning that flat text loses. Newer document models embed the page image or its patches instead.</li>
+        </ul>
       </div>
 
       <h3 class="sub" id="m-multivec">Multi-vector retrieval: MaxSim</h3>
       <div class="prose">
-        <p>One vector per page averages everything and washes out the detail a query asks about. Late interaction (ColBERT) keeps a vector per token or patch. Each query token finds its best match, and the best scores are added. It is like checking a shopping list against a shop: each item finds its own shelf.</p>
-        <p>A high score means the query is covered somewhere in the document, not that the document is about it. ColPali applies this to page images with about a thousand patches per page and no OCR. The price is storage, around 64 times a single vector, so production usually shortlists with a cheap pass first.</p>
+        <p>One vector per page averages everything and washes out the detail a query asks about. <strong>Late interaction</strong> (ColBERT; Khattab and Zaharia, 2020) keeps a vector per token. Each query token finds its best-matching document token, and those best scores are added. This is MaxSim. It is like checking a shopping list against a shop: each item finds its own shelf, so "amount" matches one corner and "stamp" another, neither diluted by the rest of the page.</p>
+        <p>"Late" means the query and document are encoded separately, so document vectors can be precomputed, and only the cheap matching happens at query time. That is why it is far faster than a cross-encoder (which reads query and document together) while keeping much of its precision. A high score means the query is covered somewhere in the document, not that the document is about it.</p>
+        <p>ColPali (Faysse et al., 2024) applies this to page images: about a thousand patches per page, each embedded by a vision-language model, matched to query tokens. It needs no OCR, layout detection or chunking, and beat pipelines built on those steps on a benchmark of visually rich documents. The price is storage, around 64 times a single vector (roughly a thousand 128-number vectors per page). The usual production pattern is a cheap single-vector or keyword pass that shortlists a few hundred pages, then MaxSim on those only.</p>
       </div>
 
       <figure class="figure" id="fig-maxsim">
@@ -170,8 +183,13 @@
 
       <h3 class="sub" id="m-contrast">R10.3 · What contrastive training asks for</h3>
       <div class="prose">
-        <p>The loss (InfoNCE, <a href="f5-self-supervised-and-contrastive-learning.html">F5.7</a>) asks: among the batch, which item is my true partner? The model learns only what separates the positive from those particular negatives.</p>
-        <p>So if positives share an easy cue (template, language, length), the model uses it and ignores meaning. The negatives define the lesson: random negatives allow shortcuts, same-template negatives force content. A near-duplicate labelled as a negative teaches the wrong thing.</p>
+        <p>All of this is trained with some form of the InfoNCE loss (<a href="f5-self-supervised-and-contrastive-learning.html">F5.7</a>). It is a multiple-choice question: for one anchor, the true partner (positive) hides among the other batch items (negatives), and the loss punishes the model for giving the right one low probability. A model that cannot tell them apart across <i>B</i> items has loss ln <i>B</i>; a perfect one is near 0. The <strong>temperature</strong> sets how sharply the model must separate them.</p>
+        <p>Wang and Isola (2020) gave it a geometric reading. <strong>Alignment</strong>: matched pairs end up close. <strong>Uniformity</strong>: embeddings spread over the sphere instead of clumping, so different things stay distinguishable. Both can be measured on your own embeddings.</p>
+        <p>The catch is that the model learns only <em>whatever separates the positive from those particular negatives</em>.</p>
+        <ul>
+          <li><strong>Shortcut features.</strong> If positives share an easy cue that negatives lack (language, template, length, boilerplate), the model uses the cue and ignores meaning. Chen et al. (2021) called this <em>feature suppression</em>.</li>
+          <li><strong>The negatives define the lesson.</strong> Random negatives allow shortcuts; same-template negatives force content. Larger batches and mined hard negatives (wrong items that look right) raise the difficulty. A false negative, such as a near-duplicate labelled as a negative, teaches the wrong thing.</li>
+        </ul>
       </div>
 
       <figure class="figure" id="fig-short">
@@ -201,7 +219,44 @@
       </figure>
 
       <div class="prose">
-        <p><strong>A low training loss does not mean the model learned what you want.</strong> Check on your own queries and near-miss documents.</p>
+        <p><strong>A low training loss does not mean the model learned what you want.</strong> It means the model won the game it was set. Check on your own queries and near-miss documents.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at:</strong></p>
+        <ul>
+          <li><strong>Cutting memory and latency.</strong> Search cost and index size scale with vector length, and a Matryoshka model keeps the useful signal in the early numbers, so a 4x cut often costs little accuracy.</li>
+          <li><strong>Paraphrase and cross-language matching.</strong> Dense vectors compare meaning, so "cancel my card" finds "terminate a plastic" where keyword search sees no shared word.</li>
+          <li><strong>Detail-specific questions (multi-vector).</strong> Each query token matches its own part of a page, so a stamp, an amount or a clause is not averaged away.</li>
+          <li><strong>No OCR for scans (multimodal and ColPali).</strong> The page image is embedded directly, so layout survives: table cells, stamps, signature boxes.</li>
+          <li><strong>One model, two resolutions.</strong> A short prefix for the broad pass and the full vector for the careful one gives retrieve-then-rerank without a second model.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when:</strong></p>
+        <ul>
+          <li><strong>Exact strings.</strong> Account numbers, IBANs, clause references and rare acronyms are poorly captured by dense vectors. Pair them with <a href="m3-keyword-search-and-bm25.html">keyword search</a>.</li>
+          <li><strong>Truncating an ordinary model.</strong> Without Matryoshka training the prefix is a random slice, and accuracy collapses.</li>
+          <li><strong>Small corpora.</strong> On a small corpus, full-length search is cheap and the engineering is not worth it.</li>
+          <li><strong>Multi-vector at huge scale without a shortlist.</strong> Storage is tens of times larger and matching costs more per document.</li>
+          <li><strong>Regulated decisions.</strong> Similarity is a ranking signal, not a verdict. Sanctions screening and credit decisions need rules, thresholds set on labelled data and a human step.</li>
+        </ul>
+        <p><strong>Alternatives and how to choose:</strong></p>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Matryoshka truncation</b></td><td>Index memory or latency is the bottleneck and the model was trained for it.</td><td>The model was not Matryoshka-trained, or the corpus is full of near-duplicates.</td></tr>
+            <tr><td><b>Quantisation only (8-bit or binary)</b></td><td>You cannot change the model and want 4x to 32x less memory.</td><td>Recall is already marginal and you have no re-check stage.</td></tr>
+            <tr><td><b>A smaller dedicated model</b></td><td>You can afford to re-embed once and want faster encoding as well as smaller vectors.</td><td>You need the quality of a large model on hard, domain-specific text.</td></tr>
+            <tr><td><b>Multi-vector (ColBERT, ColPali)</b></td><td>Queries target small details, or pages are visual and scanned.</td><td>Storage is tight and documents are short and uniform.</td></tr>
+            <tr><td><b>Single vector plus a cross-encoder reranker</b></td><td>The first pass is good enough to include the answer in the top 50 and you want accuracy on top.</td><td>Latency is very tight, or the answer is often not in the shortlist.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice:</strong> start with one Matryoshka-trained model at full length, build a labelled set of real staff questions, and measure recall at 256, 512 and full length. Pick the smallest length within about a point of full recall, store it in 8 bits, and add a full-vector re-score of the top 100 or so. Only reach for multi-vector when your labelled failures are detail or layout questions that a single vector cannot answer. Compute is modest: embedding is a one-off batch job, and the saving shows up at tens of millions of chunks, not thousands.</p>
+        <p>In banking this shows up in policy and procedure assistants over millions of chunks, trade-finance and KYC document search over scans, and adverse-media screening, where embeddings propose candidates and rules and analysts decide.</p>
       </div>
     </section>
 
@@ -213,6 +268,8 @@
         <li><div class="t">Averages hide a language gap</div><p>A 2-point mean loss may be 9 points for Arabic and 1 for English.</p><div class="spot"><b>Spot it</b>Report every evaluation split by language, script and document type.</div></li>
         <li><div class="t">Benchmark rank is not task fit</div><p>The leaderboard winner misses internal acronyms and Arabic legal phrasing.</p><div class="spot"><b>Spot it</b>Build a small labelled set from real staff questions, with near-misses.</div></li>
         <li><div class="t">Multi-vector storage surprise</div><p>A 5,000-page pilot becomes a half-terabyte index at 2 million pages.</p><div class="spot"><b>Spot it</b>Multiply vectors per page, dimensions, bytes and pages before the pilot.</div></li>
+        <li><div class="t">One threshold across modalities</div><p>Image-to-text and text-to-text scores sit on different scales, so a single cut-off passes the wrong items.</p><div class="spot"><b>Spot it</b>Plot score histograms per modality pair and calibrate or rank within each.</div></li>
+        <li><div class="t">Shortcut cues and false negatives</div><p>A fine-tuned encoder separates documents by template, and old and new versions of one policy are pushed apart, so retrieval returns the wrong version with confidence.</p><div class="spot"><b>Spot it</b>Test on same-template near-misses and on superseded versus current documents; add version filters.</div></li>
         <li><div class="t">Using an embedding as a decision</div><p>A close vector to a sanctioned name is treated as a match, or a distant one as clearance.</p><div class="spot"><b>Spot it</b>Embeddings generate candidates; regulated decisions need rules and a human step.</div></li>
       </ul>
     </section>
@@ -226,6 +283,8 @@
         <details class="reveal"><summary>3. When does MaxSim beat one averaged vector, and what does it cost?</summary><div class="ans"><p>When the question asks about a few small parts of a long page, which the average dilutes. It costs many vectors per page, so far more storage.</p></div></details>
         <details class="reveal"><summary>4. How would you push a model to learn content rather than template?</summary><div class="ans"><p>Build batches from same-template documents or add same-template hard negatives, so template no longer separates positive from negatives. Remove near-duplicate false negatives.</p></div></details>
         <details class="reveal"><summary>5. Why can image and text scores not share one threshold?</summary><div class="ans"><p>The modality gap puts them on different scales. Rank within modality or calibrate each pair type.</p></div></details>
+        <details class="reveal"><summary>6. Your RAG index holds 50 million chunks from a 1,024-number model that was not Matryoshka-trained, and memory is tight. Which option would you choose and why?</summary><div class="ans"><p>Do not truncate. Quantise to 8-bit (4x smaller) or binary with a full-precision re-score of the shortlist, which works on any model. Or move to a Matryoshka-trained model and re-embed once. Decide by measuring recall on a labelled set.</p></div></details>
+        <details class="reveal"><summary>7. Staff search scanned trade-finance PDFs with stamps and tables. Would you pick OCR plus a single vector, or ColPali-style multi-vector? Why?</summary><div class="ans"><p>If questions are about stamps, table cells or layout, multi-vector page embeddings, because OCR flattens those and one vector averages them. Control storage by shortlisting with a cheap pass first. If questions are about plain prose, OCR plus a single vector is cheaper and good enough.</p></div></details>
       </div>
     </section>
 

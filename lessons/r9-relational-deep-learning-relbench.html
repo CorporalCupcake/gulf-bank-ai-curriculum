@@ -85,8 +85,8 @@
 
       <h3 class="sub" id="m-graph">From database to graph (R9.1)</h3>
       <div class="prose">
-        <p>A relational database already <em>is</em> a graph. Each row is a node, each primary-key to foreign-key link is an edge, and columns become node features. A task is a query at a time: "for customer C at time T, will they churn in 90 days?" The model sees only rows no later than T; reaching later rows means learning from the future (F3.1).</p>
-        <p>Neighbourhoods explode within a few hops, so the sampler keeps at most K recent neighbours per node. Try it.</p>
+        <p>A relational database already <em>is</em> a graph (Fey et al., 2023). Each row is a node, each primary-key to foreign-key link is an edge, and columns become node features, encoded by type: numbers, categories, timestamps, text. The graph is <em>heterogeneous</em> (several node and edge types, each with its own encoder) and <em>temporal</em> (a transaction exists only from its timestamp). A task is a query at a time: "for customer C at time T, will they churn in 90 days?" The model sees only rows no later than T; reaching later rows means learning from the future (F3.1).</p>
+        <p>Neighbourhoods explode within a few hops, so the sampler keeps at most K recent neighbours per node. Typical K is 10 to 50 per hop, and 2 to 3 hops is usual. Cutting K saves memory but throws away real history, so it is a knob to tune, not a detail. Try it.</p>
       </div>
       <figure class="figure" id="fig-reach">
         <div class="fig-head"><span class="fig-title">How far does a customer's neighbourhood reach?</span><span class="fig-tag">Simulation 1 of 3</span></div>
@@ -107,6 +107,7 @@
 
       <div class="prose">
         <p>A <strong>graph neural network</strong> passes messages, like rumours spreading through an office. Each node starts with a vector from its own columns; each round it combines its neighbours' vectors with its own. After L rounds a node summarises its L-hop neighbourhood. The loss teaches the aggregation, where a data scientist would hand-write "sum of amounts in 30 days".</p>
+        <p>The moving parts are few. A <strong>per-type encoder</strong> turns each table's columns into a vector. A <strong>temporal encoding</strong> tells the model how old each neighbour is. An <strong>aggregator</strong> (sum, mean, max or attention) merges neighbour messages. The target node's final vector feeds an ordinary classifier or regressor, trained end to end. RelBench baselines use a heterogeneous GraphSAGE-style network; newer work uses graph transformers that attend across the whole sampled neighbourhood. Training needs a GPU and a pipeline that samples subgraphs per prediction.</p>
         <p>One hop is like a <code>GROUP BY</code> on a foreign key (<a href="f3-sql-thinking.html">F3.3</a>) where the network chooses and stacks the aggregations, such as "average risk of my counterparties' counterparties".</p>
       </div>
 
@@ -136,18 +137,19 @@
       </figure>
 
       <div class="prose">
-        <p>Averaging noisy neighbours cleans the signal. But the gain exists only when the label depends on the network; otherwise a relational model only adds cost. Expect gains in fraud rings and AML networks. AUC gaps under about 0.02 are noise.</p>
+        <p>Averaging noisy neighbours cleans the signal. But the gain exists only when the label depends on the network; otherwise a relational model only adds cost. Expect gains in fraud rings and AML networks, and little for churn driven by one customer's own behaviour. AUC gaps under about 0.02 are noise.</p>
+        <p>A cheap pre-check follows from this: before building anything, add a few graph features to the flat model. If they lift a time-ordered test, the links matter and a relational model is worth trying. If they do nothing, stop.</p>
       </div>
 
       <h3 class="sub" id="m-relbench">RelBench: how this is measured</h3>
       <div class="prose">
-        <p><strong>RelBench</strong> is the standard benchmark: real relational databases with defined tasks, forward-in-time splits and standard metrics. A GNN-based relational model matched or beat gradient boosting on expert-built features on most classification tasks, with far less engineering time. Two caveats: baselines are only as good as their tuning, and the databases are not banks (different regulation, label delay and scale). That is why you test on your own data.</p>
+        <p><strong>RelBench</strong> is the standard benchmark: real relational databases with defined tasks, forward-in-time splits and standard metrics. It covers a handful of databases (e-commerce, forums, sports, clinical trials) with dozens of tasks and over 100 million rows. Tasks are queries at a point in time and splits run forward, the two habits this lesson keeps returning to. A GNN-based relational model matched or beat gradient boosting on expert-built features on most classification tasks, with far less engineering time (the authors report hours of hand work per task against minutes of configuration; check the paper before quoting figures). Two caveats: baselines are only as good as their tuning, and the databases are not banks (different regulation, label delay and scale). That is why you test on your own data.</p>
       </div>
 
       <h3 class="sub" id="m-icl">Tabular foundation models: learning in a forward pass (R9.2)</h3>
       <div class="prose">
         <p>A <strong>tabular foundation model</strong> such as TabPFN skips fitting. You pass it your labelled rows and the test rows together, and one forward pass returns predictions, with nothing trained on your data. This is <strong>in-context learning</strong>, like few-shot prompting of a language model.</p>
-        <p>Like an experienced doctor making a decent call from five patients, it was pretrained once on millions of synthetic tables. Everything depends on whether that prior resembles your real tables. With scarce data, a good prior is worth many rows; with plenty, a tuned boosted model catches up or wins.</p>
+        <p>Like an experienced doctor making a decent call from five patients, it was pretrained once on millions of synthetic tables. The model is a transformer pretrained on tables drawn from random data-generating processes: random causal graphs, smooth functions, tree-like thresholds, noise, missing values. It saw some labelled rows and had to predict held-out ones, so its weights now hold a general procedure for "given a few labelled rows from an unknown process, predict new ones". This is called a prior-data fitted network: approximate Bayesian inference, learned by training on the prior. Everything depends on whether that prior resembles your real tables. With scarce data, a good prior is worth many rows; with plenty, a tuned boosted model catches up or wins.</p>
       </div>
 
       <figure class="figure" id="fig-prior">
@@ -179,8 +181,48 @@
       </figure>
 
       <div class="prose">
-        <p>Real models try to be the green line in both worlds by using a very broad pretraining prior. TabPFN v2 (Nature, 2025) handles about 10,000 rows and 500 features, and is reported to beat heavily tuned boosted trees on small to medium data, in seconds. Successors report more, but on their own chosen benchmarks.</p>
-        <p><strong>CARTE</strong> reads column names and text with a language model, so it suits string-heavy columns and mismatched schemas.</p>
+        <p>Real models try to be the green line in both worlds by using a very broad pretraining prior. TabPFN v2 (Nature, 2025) handles about 10,000 rows and 500 features, and is reported to beat heavily tuned boosted trees on small to medium data, in seconds. Successors (TabPFN-2.5, open models such as TabICL) report more rows and further wins, but on their own chosen benchmarks.</p>
+        <p>Two practical consequences. There is no training loop to tune, but inference is heavy: the whole training set sits in the model's context, so memory and latency grow with rows, and a GPU is the norm. And you get no fitted model to inspect, only predictions, so explanation needs extra tooling.</p>
+        <p>Why do boosted trees stay so hard to beat on tables? Grinsztajn and colleagues (2022) found that tables are irregular, many columns are useless, and the target is rarely a smooth function of the inputs. That clashes with the smooth bias of standard neural networks, while trees shrug it off. Tabular foundation models bake that irregularity into the pretraining prior instead of fighting it on your small dataset.</p>
+        <p><strong>CARTE</strong> (2024) reads column names and text with a language model, then uses graph attention over each row. It suits string-heavy columns, mismatched schemas and joining a small internal table to outside knowledge.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <h4>Strong at</h4>
+        <ul>
+          <li><strong>Signal that lives in other rows.</strong> Mule rings, shared devices and counterparty risk sit one or two joins away. The network learns stacked aggregations that nobody would hand-write, and averaging several noisy neighbours cleans the signal (Simulation 2).</li>
+          <li><strong>Cutting feature-engineering time.</strong> One pipeline over the raw tables replaces weeks of SQL per task, and a new task reuses the same graph with a new label query.</li>
+          <li><strong>Small tables, via a prior (R9.2).</strong> With a few hundred confirmed AML cases, a pretrained prior is worth many rows, as the green line in Simulation 3 shows.</li>
+          <li><strong>Messy text and schemas (CARTE).</strong> A language model gives column names and cell strings meaning, so tables from different systems can share one model.</li>
+        </ul>
+        <h4>Weak at, or do not use when</h4>
+        <ul>
+          <li><strong>The label depends on the customer's own row.</strong> Simulation 2 ties. You pay for GPUs, sampling and monitoring and gain nothing.</li>
+          <li><strong>Large flat tables.</strong> Above roughly tens of thousands of rows, a tuned boosted model matches or beats a tabular foundation model, and it is cheaper and easier to explain.</li>
+          <li><strong>Prior mismatch.</strong> Unusual structure, very high-cardinality categoricals or tables beyond the row and column limits give confident, wrong output.</li>
+          <li><strong>Strict explainability.</strong> "The subgraph looked risky" does not satisfy an adverse-action rule or a model validator.</li>
+          <li><strong>Hosted or restricted-licence models.</strong> Linked customer data leaving the perimeter is a residency problem, and some pretrained tabular models restrict commercial use.</li>
+        </ul>
+        <h4>Alternatives and how to choose</h4>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td>Tuned gradient boosting on flat features</td><td>You have thousands of rows or more, a hard deadline, or need explanations. This is the default baseline.</td><td>The signal is in links that nobody has the time to turn into features.</td></tr>
+            <tr><td>Boosting plus hand-built graph features</td><td>You suspect network signal and want a cheap test of it.</td><td>The network is huge, deep or changes fast, so features go stale.</td></tr>
+            <tr><td>Relational deep learning (GNN)</td><td>Many linked tables, the label depends on neighbours, and you have GPUs and engineers.</td><td>Own-row signal dominates, or reasons for each decision are mandatory.</td></tr>
+            <tr><td>Tabular foundation model (TabPFN)</td><td>Fewer than about 10,000 rows, fast iteration, little tuning time.</td><td>Large tables, heavy categoricals or text, or data cannot leave the perimeter.</td></tr>
+            <tr><td>Regularised logistic regression</td><td>Tiny data, a regulator wants a scorecard, or you need a transparent baseline.</td><td>Interactions drive the outcome (Simulation 3, interaction world).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose">
+        <h4>In practice</h4>
+        <p>Start with tuned boosting on flat features, then add a few graph features. Only if those help on a forward-in-time test, build a relational model. For small tables, try a tabular foundation model as a challenger next to a properly tuned boosted model and plot accuracy against training size. The knobs that matter most: neighbours per hop (K), number of hops (2 to 3), temporal filtering at every hop, and, for TabPFN, the row and column limits.</p>
+        <p>In banking, the natural homes are mule-account and AML network detection and card fraud involving shared merchants and devices. Small valuable datasets, such as a few hundred confirmed cases, suit the foundation model.</p>
+        <p>Honest status: both are early. RelBench results are promising and tabular foundation models are credible on small data, but there is little regulated-bank track record. Use them as challengers now. What would change that: independent replication on bank-shaped data with forward-in-time splits, explanation tooling that validators accept, and on-premises or open-weight options.</p>
       </div>
     </section>
 
@@ -189,9 +231,10 @@
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
       <ul class="fails" style="margin-top:18px">
         <li><div class="t">Time leakage through the join</div><p>The sampler reaches a row dated after the prediction time. AUC looks superb; live results do not.</p><div class="spot"><b>Spot it</b>Ask how neighbours are time-filtered at every hop, and for results on a strictly forward test period.</div></li>
-        <li><div class="t">Weak baselines and vendor benchmarks</div><p>"Beats XGBoost" against untuned boosting, on random splits, from the company selling the model.</p><div class="spot"><b>Spot it</b>Ask who tuned the baseline, how the split was made, and whether anyone independent replicated it.</div></li>
+        <li><div class="t">Weak baselines and vendor benchmarks</div><p>"Beats XGBoost" against untuned boosting, on random splits, from the company selling the model. Real use is forward in time, where gaps shrink or reverse.</p><div class="spot"><b>Spot it</b>Ask who tuned the baseline, how the split was made, and whether anyone independent replicated it.</div></li>
         <li><div class="t">A prior that does not cover your world</div><p>A mismatched prior, or a table beyond the model's row and column limits, gives confident, wrong predictions.</p><div class="spot"><b>Spot it</b>Plot a learning curve. If the foundation model's edge vanishes by a few thousand rows, you are in boosted-tree territory.</div></li>
         <li><div class="t">Complexity the data does not need</div><p>A relational pipeline built when the label depends only on the customer's own row. In Simulation 2 the scorers tie.</p><div class="spot"><b>Spot it</b>Add a few cheap graph features to the flat model first. If they add nothing, the relational model will not either.</div></li>
+        <li><div class="t">Sampling that hides the signal</div><p>A tight neighbour cap or too few hops drops the very counterparties that mattered. Too many hops blurs every node into the same vector.</p><div class="spot"><b>Spot it</b>Vary K and the number of hops on a validation period. If results swing, the sampler is part of the model and needs tuning and monitoring.</div></li>
         <li><div class="t">Opaque decisions and data leaving the perimeter</div><p>"The subgraph looked risky" is not an adverse-action reason, and hosted models may move linked customer data abroad. Ask compliance about residency rules.</p><div class="spot"><b>Spot it</b>Ask what the explanation looks like for one decision, where data and model run, and what the licence allows.</div></li>
       </ul>
     </section>
@@ -206,6 +249,8 @@
         <details class="reveal"><summary>3. In Simulation 2 all three scorers tie. What must be true?</summary><div class="ans"><p>The fraud signal sits entirely in the customer's own row, so no join adds information. A relational model would be wasted effort.</p></div></details>
         <details class="reveal"><summary>4. What does "learning in context" mean for TabPFN?</summary><div class="ans"><p>You pass labelled and unlabelled rows in one input and get predictions from one forward pass, with no training on your data. It was pretrained on millions of synthetic tables.</p></div></details>
         <details class="reveal"><summary>5. A vendor shows their model beating XGBoost. What do you ask?</summary><div class="ans"><p>How were the splits made, who tuned the baseline, and does it hold on tables like ours in size and label delay?</p></div></details>
+        <details class="reveal"><summary>6. A table has 800 confirmed AML cases and 40 features. Would you start with a GNN, a tabular foundation model or tuned boosting, and why?</summary><div class="ans"><p>Start with tuned boosting as the baseline and try the tabular foundation model as a challenger: small, imbalanced data with 40 columns is its home ground. A GNN only earns its place if cheap graph features show that links add signal. Test on the most recent period, and expect wide intervals with so few positives.</p></div></details>
+        <details class="reveal"><summary>7. You have 2 million rows of card transactions and a churn label driven by each customer's own behaviour. Which approach would you choose and why?</summary><div class="ans"><p>Tuned gradient boosting on flat features. The table is too large for a tabular foundation model, and own-row signal means joins add nothing (Simulation 2 ties). Boosting is cheaper, faster to iterate and easier to explain.</p></div></details>
       </div>
     </section>
 

@@ -124,16 +124,24 @@
       <h3 class="sub" id="m-implicit">Implicit regularisation: the bias nobody wrote down</h3>
       <div class="prose">
         <p>When many settings fit the data perfectly, gradient descent picks one predictably. From a small start it lands on the perfect fit closest to where it began, usually the one with the smallest weights. Nobody asked for that; the algorithm delivered it.</p>
-        <p>Early stopping uses the same effect on purpose. The catch is that this is proved for simple models and only observed for large ones, so start, optimiser and step size are part of the model. It is why <a href="r6-double-descent-and-grokking.html">double descent and grokking</a> happen.</p>
+        <p>Why it happens, in a linear model: each gradient step adds a multiple of an example's input and nothing else. In every direction the data never touches, the weights stay exactly where they started. Start from zero and reach zero loss, and you hold the <strong>minimum-norm interpolating solution</strong>: of all perfect fits, the one with the smallest weights. That is the green point in Simulation 1.</p>
+        <p>Research finds analogues in real networks:</p>
+        <ul>
+          <li><strong>Separable classification.</strong> If a line can split the classes, gradient descent on logistic loss never stops, because the loss keeps shrinking as weights grow. But the <em>direction</em> of the weights settles on the maximum-margin separator, the one a support vector machine picks.</li>
+          <li><strong>Depth changes the preference.</strong> In deep linear networks and matrix factorisation, a small start leads to low-rank solutions, learning strong patterns first and weak ones later. One layer prefers small weights; a deep one prefers simple structure.</li>
+          <li><strong>The optimiser is part of the model.</strong> Adam versus SGD, step size, initial scale, batch size and stopping time each select a different point on the valley floor. Early stopping is implicit regularisation on purpose: it returns something between the start and the minimum-norm answer, much like a ridge penalty (Simulation 4).</li>
+        </ul>
+        <p>The catch is that this is proved for simple models and only observed for large ones. It does explain why parameter count is the wrong complexity measure, and it sits behind <a href="r6-double-descent-and-grokking.html">double descent and grokking</a>.</p>
       </div>
 
       <h3 class="sub" id="m-landscape">Loss landscapes: valleys, sharpness and step size</h3>
       <div class="prose">
-        <p>A real network has millions of weights, so its loss surface has millions of dimensions.</p>
+        <p>A real network has millions of weights, so its loss surface has millions of dimensions. Four facts to carry.</p>
         <ul>
-          <li><strong>Bad local minima are rarely the problem.</strong> Most flat spots are saddles, like a mountain pass, not traps.</li>
-          <li><strong>Good regions are connected.</strong> Solutions from different starts can often be joined by a low-loss path.</li>
-          <li><strong>Sharpness is the second axis.</strong> Equal loss can hide a narrow ravine or a wide bowl. Flat minima tend to generalise better, and large steps bounce out of sharp valleys, so they drift to flat ones.</li>
+          <li><strong>Bad local minima are rarely the problem.</strong> A true pit needs upward curvature in every one of millions of directions, so most zero-slope points are saddles, like a mountain pass, not traps.</li>
+          <li><strong>Good regions are connected.</strong> Solutions from different starts can often be joined by a low-loss path. That is why averaging weights (model "soups", merging) can work.</li>
+          <li><strong>Sharpness is the second axis.</strong> At a minimum the surface curves upward by different amounts in different directions, and the largest curvature, <em>h</em>, is the sharpness. A ravine's loss jumps when you nudge the weights; a bowl's barely moves. Flat minima tend to generalise better, and large-batch training tends to reach sharper ones.</li>
+          <li><strong>Step size acts on sharpness.</strong> Gradient descent in a valley of curvature h is stable only if the step is below 2/h. Above that, each step overshoots by more than the last and the iterate is thrown out. So a step size η cannot sit in a valley sharper than 2/η, and larger steps are pushed towards flatter regions.</li>
         </ul>
       </div>
 
@@ -160,13 +168,15 @@
       </figure>
 
       <div class="prose">
-        <p>One caveat: "flat" depends on how the weights are scaled, so flat-minima claims are empirical, not a theorem.</p>
+        <p>Two caveats. First, "flat" depends on how the weights are scaled: rescaling layers can change the sharpness of a minimum without changing the function. So flat-minima claims are empirical. Second, in full-batch training, sharpness tends to rise until about 2/η and then hover there while the loss keeps falling, unevenly. This <strong>edge of stability</strong> means the step size, not the loss alone, shapes the geometry you end up with.</p>
+        <p><strong>Sharpness-aware minimisation</strong> (SAM) makes the preference explicit. At each step it nudges the weights in the worst nearby direction and takes the gradient there, so the optimiser favours neighbourhoods of low loss. It often helps a little, at roughly twice the compute.</p>
       </div>
 
       <h3 class="sub" id="m-lottery">The lottery ticket hypothesis: a small network inside the big one</h3>
       <div class="prose">
         <p><strong>Pruning</strong> deletes a trained network's smallest weights, and most can go with little loss. Yet training that small network from scratch usually does worse. The <strong>lottery ticket hypothesis</strong> says a big random network contains a small sub-network that, trained from its original starting values, matches the full network.</p>
-        <p>The recipe: train, prune, <strong>rewind</strong> the survivors to their original values and retrain. The claim is that mask and starting values come as a pair. Simulation 3 runs it on a tiny network.</p>
+        <p>The recipe has three steps. Save the starting weights and train the dense network. Prune the smallest-magnitude weights (say 50%), leaving a <strong>mask</strong> of survivors. <strong>Rewind</strong> the survivors to their saved starting values and train again; repeat to prune further.</p>
+        <p>The claim is that mask and starting values come as a pair, so the controls matter: the same mask with fresh random values, and a random mask of the same size. If a ticket is real, it beats both. Simulation 3 runs this on a tiny network.</p>
       </div>
 
       <figure class="figure" id="fig-lt">
@@ -196,13 +206,20 @@
       </figure>
 
       <div class="prose">
-        <p>Later work is more sober. On big networks, tickets only appear if you rewind a little way into training. A pruned architecture trained from scratch often matches the ticket. In production, you train, prune, fine-tune and quantise; structured pruning and distillation (<a href="p3-quantization-pruning-and-distillation.html">P3.1</a>) usually beat scattered holes.</p>
+        <p>Later work is more sober.</p>
+        <ul>
+          <li><strong>Rewinding to step 0 fails on big networks.</strong> For large ResNets and transformers, tickets appear only if you rewind a few percent into training. </li>
+          <li><strong>Doubts.</strong> A pruned architecture trained from scratch often matches the ticket, so structure may matter more than inherited weights. Finding a ticket needs the dense run first, so it saves inference cost, not training cost.</li>
+          <li><strong>Production pruning is more modest.</strong> You train, prune, fine-tune and quantise, with no rewinding. Scattered holes rarely speed up hardware, so structured pruning, quantisation and distillation (<a href="p3-quantization-pruning-and-distillation.html">P3.1</a>) usually win.</li>
+        </ul>
+        <p>Sparse sub-networks, flat valleys and minimum-norm solutions are three views of one fact: a big network's trained result is far simpler than its parameter count.</p>
       </div>
 
       <h3 class="sub" id="m-icl">In-context learning as implicit gradient descent</h3>
       <div class="prose">
         <p>Give a language model three labelled messages and a fourth to label, and it does so with no weight change. That is <strong>in-context learning</strong>.</p>
-        <p>One theory says attention can implement a step of gradient descent, so the forward pass is a tiny training run on the examples. It is proved for one linear-attention layer on linear regression, but the link to real LLMs is weaker. Treat it as a useful picture, not a fact.</p>
+        <p>One theory says attention can implement a step of gradient descent, so the forward pass is a tiny training run on the examples. The exact version: each example is an input x with a number y, and the task is linear regression. Start from zero weights and take one gradient step on the examples. The prediction for a new query is then an average of the examples' y values, each weighted by how similar its x is to the query.</p>
+        <p>That is precisely what one <strong>linear attention</strong> head computes: compare the query with each example's key by dot product, then mix the examples' values using those scores as weights. Stacked layers can take more steps.</p>
       </div>
 
       <figure class="figure" id="fig-icl">
@@ -236,7 +253,50 @@
       </figure>
 
       <div class="prose">
-        <p>If true, examples steer the model much as training would, so few-shot against fine-tuning is a real trade-off. The rival view is that the examples only tell the model which task it already knows. Both probably operate.</p>
+        <p>Evidence, strongest first:</p>
+        <ul>
+          <li><strong>A construction.</strong> Attention weights can be chosen to do this. That shows it is possible, not that it happens.</li>
+          <li><strong>Small trained transformers learn something like it.</strong> Trained from scratch on many random linear-regression tasks, they solve new ones in context, and a single trained layer matches the gradient-descent construction.</li>
+          <li><strong>The link to real LLMs is weak.</strong> Real tasks are not linear regression, real attention uses softmax, and real models do many things at once. Results on GPT-style models are inconsistent across models and datasets. It remains a hypothesis.</li>
+        </ul>
+        <p>If true, examples steer the model much as training would, so few-shot against fine-tuning is a real trade-off. Example selection and order matter because they change what the "gradient steps" see. The rival view is that pretraining already taught many tasks and the examples only say <em>which</em> one this is. Models often do well with randomised example labels, which supports that view. Both probably operate.</p>
+      </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <p><strong>Strong at</strong></p>
+        <ul>
+          <li><strong>Explaining why huge models generalise.</strong> Gradient descent drifts towards small, simple, flat solutions, so a network with more weights than examples is not doomed to memorise.</li>
+          <li><strong>Turning the optimiser into a regulariser you control.</strong> Step size, batch size, initial scale, schedules and early stopping all shift which solution you land on. They cost nothing extra.</li>
+          <li><strong>Justifying compression.</strong> A trained network is far simpler than its parameter count, so pruning, distillation and low-rank adapters work.</li>
+          <li><strong>Giving a working picture of few-shot prompts.</strong> Treating examples as training steps predicts that more, better-chosen examples help, with diminishing returns.</li>
+        </ul>
+        <p><strong>Weak at, or don't use when</strong></p>
+        <ul>
+          <li><strong>Predicting any real model's test error.</strong> Always validate on held-out data.</li>
+          <li><strong>Flatness as a model-selection metric.</strong> It depends on parameterisation, so do not rank candidate models by it.</li>
+          <li><strong>Lottery tickets as a training shortcut.</strong> Finding one needs the dense run first.</li>
+          <li><strong>Unstructured sparsity for speed.</strong> Scattered zeros rarely run faster on GPUs.</li>
+          <li><strong>Betting a design on "the prompt runs gradient descent".</strong> It is shown only for small models on linear tasks. Test prompts empirically.</li>
+        </ul>
+      </div>
+      <div class="table-wrap" style="margin-top:4px">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Explicit regularisation</b> (weight decay, dropout, early stopping on validation)</td><td>Any network. It is measurable, tunable and the first thing to try</td><td>You expect it to fix a data problem such as leakage or drift</td></tr>
+            <tr><td><b>Tuning the optimiser as a regulariser</b> (step size, batch size, schedule)</td><td>The baseline works and you want a cheap generalisation gain</td><td>You want a guarantee; the effect is empirical and varies by seed</td></tr>
+            <tr><td><b>Lottery-ticket search</b> (train, prune, rewind)</td><td>Research on why sparse networks train</td><td>Production: you need the dense run first and the speed-up is uncertain</td></tr>
+            <tr><td><b>Prune, fine-tune, quantise, distil</b></td><td>You must shrink a model to meet latency or memory limits</td><td>You have not measured latency on the target hardware</td></tr>
+            <tr><td><b>Few-shot prompting</b></td><td>Tens of examples, a task that changes, quick iteration</td><td>You need consistent formatting at scale or the examples do not fit the context</td></tr>
+            <tr><td><b>Fine-tuning (LoRA)</b></td><td>Thousands of labelled cases and a stable task</td><td>Labels are scarce or the task shifts weekly</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose" style="margin-top:1.2em">
+        <p><strong>In practice.</strong> Treat this lesson as a way to reason, not a tool to install. Start with early stopping on a validation set, weight decay and a sensible learning rate with warm-up. If you still need more, sweep step size and batch size across a few seeds. SAM roughly doubles compute. For compression, prune structurally, fine-tune, quantise and measure latency before claiming savings.</p>
+        <p>In banking: early-stopping and tuning neural nets for fraud and credit scoring, compressing models for on-premises inference, and choosing between a few-shot prompt and a LoRA fine-tune for complaint triage.</p>
+        <p>As a research topic it is not production-ready. Use today's regularisation, compression and fine-tuning practice instead. What would change that: a theory that predicts generalisation for real models, or a way to find tickets cheaply at initialisation.</p>
       </div>
     </section>
 
@@ -249,6 +309,8 @@
         <li><div class="t">Calling a pruned model a lottery ticket</div><p>Prune-and-fine-tune is ordinary compression. A ticket needs the rewind and a random-start control.</p><div class="spot"><b>Spot it</b>Ask whether the sparse network was retrained from original weights and compared with a fresh start.</div></li>
         <li><div class="t">Sparsity that saves nothing</div><p>"80% removed" sounds five times cheaper, but unstructured holes need index storage and rarely run faster.</p><div class="spot"><b>Spot it</b>Ask for measured latency and memory on the target hardware.</div></li>
         <li><div class="t">"The prompt fine-tunes the model"</div><p>Nothing is stored. The effect vanishes with the context.</p><div class="spot"><b>Spot it</b>Rerun with examples removed, shuffled or mislabelled. If accuracy barely moves, the model was recognising a task.</div></li>
+        <li><div class="t">Reading a training-loss curve as quality</div><p>Two models at zero loss can sit in sharp or flat valleys. Training loss cannot tell them apart.</p><div class="spot"><b>Spot it</b>Judge on held-out data, ideally across several seeds and step sizes.</div></li>
+        <li><div class="t">Treating the optimiser as a detail</div><p>Switching Adam to SGD, or changing batch size, changes which solution you get, not just the speed.</p><div class="spot"><b>Spot it</b>If a result vanishes when you change optimiser settings, it was a property of the settings.</div></li>
         <li><div class="t">Importing a toy result into an LLM claim</div><p>"Transformers do gradient descent" was shown for small models on synthetic linear tasks.</p><div class="spot"><b>Spot it</b>Check model size and task type. For LLMs it is a hypothesis, not a fact.</div></li>
       </ul>
     </section>
@@ -262,6 +324,8 @@
         <details class="reveal"><summary>3. What control separates a real lottery ticket from a good pruning mask?</summary><div class="ans"><p>Keep the mask but give the survivors fresh random values. If the original start trains better, the pairing matters; if both do equally well, pruning just found a good architecture.</p></div></details>
         <details class="reveal"><summary>4. A model is "80% pruned". Is it five times cheaper and faster?</summary><div class="ans"><p>Not necessarily. Scattered holes need index storage and rarely speed up GPUs, so ask for measured memory and latency on the target hardware.</p></div></details>
         <details class="reveal"><summary>5. A model does as well with wrong labels in its few-shot examples as with correct ones. What does that suggest?</summary><div class="ans"><p>It is mostly using the examples to recognise the task and format, not to learn the mapping. The "gradient descent on the examples" picture does not fully describe it.</p></div></details>
+        <details class="reveal"><summary>6. You must serve a large model on cheaper on-premises hardware. One colleague proposes a lottery-ticket search; another proposes prune, quantise and distil. Which would you choose, and why?</summary><div class="ans"><p>Prune, quantise and distil. Ticket search needs a full dense training run first, rewinding is unreliable on big networks, and scattered sparsity rarely speeds up hardware. The standard pipeline is measurable on your target machine.</p></div></details>
+        <details class="reveal"><summary>7. You have 40 labelled complaint examples and five categories. Would you use a few-shot prompt or fine-tune, and why?</summary><div class="ans"><p>Start with a few-shot prompt. Forty examples is thin for fine-tuning and a prompt is quick to iterate. Check it by removing or shuffling the examples. Move to a LoRA fine-tune once you have thousands of labelled cases and a stable task.</p></div></details>
       </div>
     </section>
 

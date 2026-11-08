@@ -111,6 +111,8 @@
       <div class="prose">
         <p>Chronos (Amazon) scales a series so it is centred around 1, then rounds each value into one of a few thousand bins and reads the bin IDs like words. A language-model network predicts the next ID as a probability distribution. To forecast, it samples many paths, so quantiles of the paths give intervals for free, and it can express "normal Thursday or salary-day spike" instead of averaging the two.</p>
         <p>The cost is precision. Scaling uses the average size of the context, so one outlier inflates the scale and makes every bin coarser for all the normal days.</p>
+        <p>In more detail, there are two steps. <strong>Scale:</strong> divide the context by its mean absolute value, so a series in AED millions and one in single units both sit around 1. <strong>Quantise:</strong> cut a fixed range of scaled values (about −15 to +15) into a few thousand equal bins, and clip anything outside to the end bin. The network is a standard T5 language model trained with next-token classification, not squared error. That is why it can be bimodal and why sampling gives intervals.</p>
+        <p>Chronos was trained on a large public collection plus synthetic series drawn from random Gaussian-process kernels (KernelSynth), which teach trend, seasonality and level shifts that real datasets under-represent. Later variants changed the machinery: Chronos-Bolt uses patches and a direct quantile output for much faster inference, and Chronos-2 adds related series and known-future covariates. The field has moved from tokenised values towards patches and quantile heads.</p>
       </div>
 
       <figure class="figure" id="fig-tok">
@@ -141,6 +143,7 @@
       <div class="prose">
         <p>One token per value makes long histories and horizons expensive, and each forecast value fed back in as if it were data lets errors compound. TimesFM (Google) groups consecutive values into <strong>patches</strong>, say 32 per token, and writes its forecast in patches too. A 512-value history becomes 16 tokens, and a long horizon needs a handful of passes instead of hundreds.</p>
         <p>The trade is detail for speed and range: less position detail inside a patch, but cheaper attention, longer usable context and fewer chances for errors to feed on themselves.</p>
+        <p>TimesFM is a decoder-only transformer (the GPT family). The input patch length sets how much history one token summarises. The output patch length sets how many values are written per pass, and it is the main control on error compounding, because each pass feeds its forecast back as if it were data. It was pretrained on roughly 100 billion time points from sources such as Google Trends, Wikipedia page views, public datasets and synthetic series. The first release gave a point forecast; later releases add quantile heads. Moirai (Salesforce) is also patch-based, but accepts several related variables at once and outputs a mixture of distributions.</p>
       </div>
 
       <figure class="figure" id="fig-patch">
@@ -166,6 +169,8 @@
       <div class="prose">
         <p>"Good" means beating the cheapest strong method on your data, out of time. For daily banking series that is a seasonal average with drift: average each weekday over recent weeks and add the trend. It is free, needs no GPU and is hard to beat on clean, stable series. The simulation runs only the baselines you must beat.</p>
         <p>Score with quantile loss and interval coverage: do the 10-90% intervals contain about 80% of outcomes? Models that accept known-future covariates such as holiday calendars (Chronos-2, Moirai) matter for treasury, since salary days and Eid are known in advance.</p>
+        <p>The baseline is not a straw man. Zeng et al. (2023) showed a single linear layer beating several elaborate transformer forecasters, and benchmarks have since become more careful. Sharp but over-confident intervals are worse for liquidity planning than wider honest ones, so check coverage as well as accuracy.</p>
+        <p>Order of attack: zero-shot first, then light fine-tuning on your own data if a real gap to your baseline remains. Fine-tuning often closes the gap to a tuned local model. If it does not, the series probably depends on information the model cannot see.</p>
       </div>
 
       <figure class="figure" id="fig-base">
@@ -195,6 +200,7 @@
       <h3 class="sub" id="m-graph">Graphs that change over time</h3>
       <div class="prose">
         <p>A graph neural network updates each account's representation from its neighbours, like judging someone by the company they keep. It catches guilt by association that a flat table cannot, such as a fresh account whose first five counterparties were all flagged. Temporal versions (TGN, TGAT) process timestamped events and may use only events before the prediction time. Graph transformers let every node see every other, at higher cost; graph foundation models are still early on noisy bank data.</p>
+        <p>Banking adds three difficulties. First, <em>time on the edges</em>: temporal GNNs give each node a memory updated by its events, and time encodings let attention favour recent interactions. Prediction at time t may use only events before t, which is point-in-time correctness applied to a graph. Second, <em>limited reach</em>: message passing sees only nearby nodes, and stacking many layers blurs everything together (over-smoothing) or squeezes distant information through a few links (over-squashing). Graph transformers, with structural encodings such as distances or random-walk features, avoid this, but their quadratic cost means you run them on sampled neighbourhoods rather than a bank-wide graph. Third, <em>every graph is different</em>: a GNN trained on one bank's graph does not transfer to another's. Graph foundation models try to pretrain across many graphs, for example using relation structure alone. They are strongest on knowledge-graph link prediction and weakest on noisy, high-volume, heterogeneous payment graphs.</p>
         <p>The most useful temporal idea is the <strong>time-respecting path</strong>: A to B to C counts only if the payment into B came before the payment out, and soon enough for mule layering.</p>
       </div>
 
@@ -224,6 +230,43 @@
       <div class="prose">
         <p>The hard rule also makes a strong feature: count time-respecting paths into each account in the last 24 hours and feed the count to a gradient-boosted tree. That is a high bar for a deep temporal GNN, so try the cheap version first.</p>
       </div>
+
+      <h3 class="sub" id="m-when">Strengths, limits and when to use it</h3>
+      <div class="prose">
+        <h4>Strong at</h4>
+        <ul>
+          <li><strong>Cold starts.</strong> A new ATM or product has weeks of history, too little to fit a model. A pretrained forecaster has already seen many series with similar shapes, so it extrapolates trend and weekly seasonality from short context.</li>
+          <li><strong>Breadth with little effort.</strong> One model serves thousands of series with no per-series fitting or tuning. That saves engineering time when you have a long tail of small series.</li>
+          <li><strong>Honest uncertainty, for the better models.</strong> Chronos samples whole paths and Chronos-Bolt and recent TimesFM releases emit quantiles directly, so you get intervals and multimodal outcomes rather than a single line.</li>
+          <li><strong>Time-respecting graph features.</strong> Honouring order and hold limits cuts false leads in mule tracing, which saves investigator time.</li>
+        </ul>
+        <h4>Weak at, or do not use when</h4>
+        <ul>
+          <li><strong>Calendar-driven series.</strong> Salary days, Eid and Ramadan shift demand. A univariate model cannot see them, so it needs covariates or fine-tuning.</li>
+          <li><strong>Long, clean, stable histories.</strong> With years of data, a seasonal average with drift or a tuned local model usually matches or beats a pretrained one at a fraction of the cost.</li>
+          <li><strong>Regime breaks and outliers.</strong> A level shift is invisible in the history, and one data error can rescale a tokenised input. Clean inputs first.</li>
+          <li><strong>Heavy compute at scale.</strong> Running a transformer over millions of series every day costs far more than a seasonal average. Sampling-based Chronos is the slowest.</li>
+          <li><strong>Audit and explainability needs.</strong> Regulators and treasury teams prefer a model whose drivers they can read. A pretrained black box is harder to defend.</li>
+        </ul>
+        <h4>Alternatives and how to choose</h4>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Option</th><th>Pick it when</th><th>Avoid when</th></tr></thead>
+          <tbody>
+            <tr><td><b>Seasonal average + drift</b></td><td>Daily or weekly series with stable seasonality. Always the first benchmark.</td><td>Strong calendar effects or regime shifts it cannot see.</td></tr>
+            <tr><td><b>ETS / ARIMA (classical statistical)</b></td><td>Few series, long history, need for explainable components.</td><td>Thousands of short series that would each need fitting.</td></tr>
+            <tr><td><b>Gradient-boosted trees on lag features</b></td><td>Rich covariates (calendar, promotions, balances) and enough history to learn from.</td><td>Brand-new series with no history.</td></tr>
+            <tr><td><b>Pretrained forecaster (Chronos, TimesFM)</b></td><td>Cold starts, long tail of short series, quick strong baseline with intervals.</td><td>Calendar-driven data without covariates, or when a simple baseline already wins.</td></tr>
+            <tr><td><b>Fine-tuned or covariate-aware (Chronos-2, Moirai)</b></td><td>Pretrained is close but misses known-future effects such as holidays.</td><td>Very little data to tune on, or no capacity to maintain it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose">
+        <h4>In practice</h4>
+        <p>Start with seasonal average plus drift, then run one pretrained model zero-shot against it on held-out periods after the model's data cutoff, over many forecast origins, scoring MAE and 10-90% interval coverage. The knobs that matter most are context length (how much history you pass in), whether you supply calendar covariates, and whether you fine-tune.</p>
+        <p>In banking this shows up in ATM cash forecasting, branch and call-centre volumes, card-spend and liquidity planning, where the long tail of new machines or products is the real gain. In fraud and AML, the time-respecting-path feature, fed to a gradient-boosted tree, is the practical way to use graph structure. Deep temporal GNNs and graph foundation models are research-grade for payment networks today: use engineered graph features plus a tree now, and revisit when a graph model beats that on your data out of time.</p>
+      </div>
     </section>
 
     <!-- ============================== 3. FAILS ============================== -->
@@ -235,6 +278,8 @@
         <li><div class="t">Outliers and calendar blindness</div><p>One data error rescales a tokenised series, and a univariate model cannot see salary days, Eid or Ramadan.</p><div class="spot"><b>Spot it</b>Cap the outlier and see if the forecast changes. Plot errors by day-of-month and around holidays.</div></li>
         <li><div class="t">Over-confident intervals and regime breaks</div><p>Sharp 80% intervals that contain only 60% of outcomes, and level shifts no pretrained model can know about.</p><div class="spot"><b>Spot it</b>Count coverage on held-out data. Alert on a run of same-sign errors.</div></li>
         <li><div class="t">Graph leakage and label bias</div><p>Features built on the full graph include transfers made after the prediction date, and known mules are only those the old rules caught.</p><div class="spot"><b>Spot it</b>Check neighbours are filtered by timestamp, and hold out cases found by other means.</div></li>
+        <li><div class="t">Context too short or too stale</div><p>The model sees only the window you pass in. Too little misses the yearly cycle, and old history from before a product change misleads it.</p><div class="spot"><b>Spot it</b>Vary the context length and plot error against it. If error keeps falling as context grows, you are truncating a real pattern.</div></li>
+        <li><div class="t">Silent drift after deployment</div><p>The series changes after launch and no one retrains or rechecks, because zero-shot feels maintenance-free.</p><div class="spot"><b>Spot it</b>Track rolling error against the seasonal baseline and interval coverage each week, and alert when the gap closes.</div></li>
       </ul>
     </section>
 
@@ -247,6 +292,8 @@
         <details class="reveal"><summary>3. Why do patches help?</summary><div class="ans"><p>Fewer tokens make attention cheaper and fewer passes mean fewer chances for fed-back errors to compound.</p></div></details>
         <details class="reveal"><summary>4. A foundation model beats "repeat last week" on 14 ATMs. Should you adopt it?</summary><div class="ans"><p>Not yet. Compare with seasonal average and drift, over many origins and series, after the model's data cutoff, with interval coverage.</p></div></details>
         <details class="reveal"><summary>5. In Simulation 4, funds reach E at hour 5 and an edge E to F occurs at hour 1. Is F linked in each view?</summary><div class="ans"><p>Static: yes. Time-respecting: no, the transfer happened before the money arrived. This is the false lead the time-aware view removes.</p></div></details>
+        <details class="reveal"><summary>6. You forecast cash for 1,800 ATMs. 1,700 have two years of history, 100 are new. Which would you choose and why?</summary><div class="ans"><p>Seasonal average with drift, or a tuned local model, for the 1,700: it is cheap, explainable and hard to beat on stable series. A pretrained model for the 100 new machines, where there is too little history to fit anything. Check both out of time against the baseline, and review calendar effects such as salary days.</p></div></details>
+        <details class="reveal"><summary>7. For mule detection, would you start with a deep temporal GNN or time-respecting path counts into a gradient-boosted tree? Why?</summary><div class="ans"><p>Path counts into a tree. They are quick to build, easy to explain to investigators and often hard for a deep model to beat. Move to a temporal GNN only if it wins out of time on your data, with a point-in-time-correct pipeline.</p></div></details>
       </div>
     </section>
 
