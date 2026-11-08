@@ -67,26 +67,24 @@
         <span>About 40 minutes</span>
       </div>
       <h1>Superposition, Sparse Autoencoders and Attribution Graphs: Reading a Model's Internals</h1>
-      <p class="dek">Why a model's neurons are not its concepts, how sparse autoencoders pull the concepts back out, and how transcoders and attribution graphs trace a chain of internal steps from prompt to answer, with an honest account of what still goes wrong.</p>
+      <p class="dek">Why neurons are not concepts, how sparse autoencoders recover the concepts, and how attribution graphs trace prompt to answer.</p>
     </header>
 
     <div class="mobile-toc">
       <details class="reveal"><summary>Contents</summary><div class="ans"></div></details>
     </div>
 
-    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A network packs far more concepts than it has neurons by storing them as overlapping directions, which works only because few are active at once; sparse autoencoders unpack those directions into readable features, and transcoders with attribution graphs use them to trace the path from prompt to answer, so far for a minority of prompts and with a large unexplained remainder.</p>
+    <p class="oneline"><span class="k">The whole lesson in one sentence</span>A network packs more concepts than neurons by storing them as overlapping directions; sparse autoencoders unpack them into features, and attribution graphs trace the path to an answer, for few prompts so far and with a large unexplained remainder.</p>
 
     <!-- ============================== 1. INTUITION ============================== -->
     <section class="part" id="intuition">
       <div class="part-head"><span class="num">Part 1</span><h2>The intuition</h2></div>
       <div class="prose">
-        <p>Picture a hotel with 1,000 rooms and 10,000 guests, where only a few dozen are ever in at once. Guests share rooms by taking turns. A model does the same with concepts: it has far more concepts than neurons, so it shares.</p>
-        <p>The result is a <strong>polysemantic</strong> neuron: one neuron that fires for unrelated things, such as Arabic honorifics, DNA strings and a punctuation mark in code. The neuron is not the unit of meaning. Instead, the model gives each concept its own <em>direction</em> in the layer's activation space and lets directions overlap slightly. This is <strong>superposition</strong>.</p>
-        <p>It works only because of <strong>sparsity</strong>: few concepts are active at once. Sparsity also lets us undo the packing. If the true concepts are sparse, we can search for a dictionary of directions where each activation needs only a handful of entries. A <strong>sparse autoencoder</strong> (SAE) does that search.</p>
-        <p>An SAE shows which ingredients are present at one point. <strong>Transcoders</strong> and <strong>attribution graphs</strong> show how the model got from prompt to answer: they swap the dense layers for sparse, readable stand-ins and trace which features feed which. Asked for "the capital of the state containing Dallas", the model internally activates something like <em>Texas</em> before saying <em>Austin</em>. You can see and test that middle step.</p>
+        <p>A model has far more concepts than neurons, like a hotel with 1,000 rooms and 10,000 guests who are rarely all in at once. So it shares. Each concept gets its own <em>direction</em> in the layer's activation space, and the directions overlap slightly. This is <strong>superposition</strong>. One neuron then fires for unrelated things (a <strong>polysemantic</strong> neuron), so the neuron is not the unit of meaning; the direction is.</p>
+        <p>It works only because few concepts are active at once. That sparsity also lets us undo the packing: a <strong>sparse autoencoder</strong> (SAE) learns the directions, and <strong>transcoders</strong> with <strong>attribution graphs</strong> trace which features feed which, from prompt to answer.</p>
       </div>
 
-      <figure class="figure" id="fig-sup">
+<figure class="figure" id="fig-sup">
         <div class="fig-head"><span class="fig-title">Five concepts in a two-dimensional space</span><span class="fig-tag">Simulation 1 of 4</span></div>
         <p class="try"><b>Try:</b> switch on one concept. Its own readout is high, but two neighbours show a small false reading (red). Switch on a second and a third: the false readings grow and overlap. Then drag the bias down. It suppresses the phantoms, but at the cost of shrinking the real readings. Below, the curve shows why this still pays when concepts are rare.</p>
         <div class="toggles" role="group" aria-label="Active concepts" id="sup-toggles"></div>
@@ -103,34 +101,19 @@
         <p class="sim-note">Simulated: five concept directions at equal angles (72° apart) in 2D, each unit length. A concept that is on has amplitude 1 in the top panel; in the lower curve its amplitude is uniform on 0 to 1 and each concept is on independently with the stated probability (fixed random draws, 3,000 samples per point). The model reads concept <i>i</i> back as ReLU(sum of overlaps + bias). The bias is picked by grid search per point. Error is mean squared error per active concept. This is the simplest version of the toy model of Elhage et al. (2022); it is an illustration, not their full training experiment.</p>
       </figure>
 
-      <div class="prose">
-        <p>Three ideas to carry forward.</p>
-        <ul>
-          <li><strong>The unit of meaning is a direction, not a neuron.</strong> Read single neurons and you see a smear: the concepts are there, but rotated and overlapped.</li>
-          <li><strong>Sparsity buys capacity.</strong> <i>d</i> dimensions hold far more than <i>d</i> nearly-separate directions if few are used at a time. Part 2 gives numbers.</li>
-          <li><strong>A feature dictionary is a model of the model.</strong> It has its own reconstruction error and failure modes. Treat its outputs as evidence to test, not a readout of what the model "thinks".</li>
-        </ul>
-      </div>
-      <div class="callout key"><span class="k">Hold onto this</span>Neurons are the wrong basis; features (directions found by a sparse dictionary) are better. Attribution graphs chain features into a pathway. Each step is a hypothesis you check by intervening, not by looking.</div>
+      <div class="callout key"><span class="k">Hold onto this</span>Neurons are the wrong basis; features are better. Every step in an attribution graph is a hypothesis you test by intervening, not by looking.</div>
     </section>
 
     <!-- ============================== 2. MECHANICS ============================== -->
     <section class="part" id="mechanics">
       <div class="part-head"><span class="num">Part 2</span><h2>How it really works</h2></div>
 
-      <h3 class="sub" id="m-super">R5.1a · Superposition: why it is possible</h3>
+      <h3 class="sub" id="m-super">R5.1a · Superposition</h3>
       <div class="prose">
-        <p>In <i>d</i> dimensions you get exactly <i>d</i> perfectly perpendicular directions. Allow small overlaps and you fit many more, because random directions in high dimensions are almost perpendicular. The typical cosine between two random unit vectors is</p>
-      </div>
-      <div class="formula">
-        <math display="block"><mi>cos</mi><mi>θ</mi><mo>~</mo><mfrac><mn>1</mn><msqrt><mi>d</mi></msqrt></mfrac></math>
-        <p class="where">At <i>d</i> = 4 that is 0.5, a big overlap. At <i>d</i> = 1,000 it is 0.03. So a 1,000-dimension layer can hold many thousands of directions with pairwise overlaps around 3% (a relative of the Johnson–Lindenstrauss lemma, F1.1). Geometry makes the trick available.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>The cost is <strong>interference</strong>. Read concept <i>i</i> by projecting onto its direction and every other active concept leaks in a little, like several conversations bleeding into one in a café. With <i>k</i> concepts active, the leakage adds like a random walk, with typical size √((<i>k</i> − 1)/<i>d</i>) against a signal of 1. For <i>d</i> = 256 and <i>k</i> = 17 that is 0.25, a quarter of the signal. Readout stays clean while <i>k</i> stays well below <i>d</i>: <em>sparse use, dense storage</em>.</p>
+        <p>A layer with <i>d</i> dimensions has only <i>d</i> perfectly perpendicular directions, but random directions in high dimensions are almost perpendicular, so many more fit if you accept small overlaps. The cost is interference: reading one concept picks up a little leakage from every other active one, like conversations bleeding together in a café. Leakage stays small while few concepts are active. This is why single-neuron analysis is incomplete, and why a linear probe, which fits a direction, can find a concept no neuron shows.</p>
       </div>
 
-      <figure class="figure" id="fig-int">
+<figure class="figure" id="fig-int">
         <div class="fig-head"><span class="fig-title">How many concepts can share a space before the noise wins?</span><span class="fig-tag">Simulation 2 of 4</span></div>
         <p class="try"><b>Try:</b> set 64 dimensions. With 5 concepts active the readout noise is around 0.25, tolerable. With 30 active it is near 0.7, comparable to the signal itself. Now double the dimensions: the whole curve drops by a factor of √2. Sparsity (how few are active) matters as much as size.</p>
         <div class="chart-wrap" id="int-chart"></div>
@@ -150,27 +133,12 @@
         <p class="sim-note">Simulated: for each point, 300 trials. Each trial draws <i>k</i> random unit directions (Gaussian, normalised), sets all <i>k</i> concepts to amplitude 1, and reads the first concept back by projection. The plotted dots are the standard deviation of the leakage onto that readout across trials. Fixed random seed, so the picture is stable. Real model features are not random and are correlated, which changes the numbers.</p>
       </figure>
 
+      <h3 class="sub" id="m-sae">R5.1b · Sparse autoencoders</h3>
       <div class="prose">
-        <ul>
-          <li><strong>Importance and sparsity set what gets packed.</strong> In the toy models of Elhage et al. (2022), a small network trained on sparse inputs gives dedicated dimensions to the most important features, packs rarer ones into shared geometry (pairs, triangles, pentagons, as in Simulation 1) and drops the least valuable. The sparser the inputs, the more goes into superposition. Evidence for real models is indirect: we infer it from the success of the methods below.</li>
-          <li><strong>Neurons are still partly meaningful.</strong> ReLU and GELU act neuron by neuron, which biases models to align some features with neurons. So you sometimes find a clean neuron, and polysemantic ones look like a few clean features plus many odd ones.</li>
-        </ul>
-        <p>Superposition is why "one neuron, one idea" analyses, such as single-unit inspection or the attention-head studies of F5.5, are incomplete. It is also why a linear probe (R5.3, <a href="r5-linear-representations-probing-representation-engineering.html">the next lesson</a>) can find a concept no single neuron shows: a probe fits a direction.</p>
+        <p>An SAE is trained on a layer's activations to rebuild them from a very wide code in which only a few entries are non-zero. Each entry is a feature with its own direction. More sparsity gives cleaner features but worse reconstruction; less sparsity rebuilds well but lets features blur again. Two numbers to read: the unexplained share of the signal (lower is better, and it is not harmless noise) and L0, the features firing per input (smaller is more readable).</p>
       </div>
 
-      <h3 class="sub" id="m-sae">R5.1b · Sparse autoencoders: learning the dictionary</h3>
-      <div class="prose">
-        <p>If activations are sums of a few sparse feature directions, we can learn those directions from data. Collect hundreds of millions of tokens' activations from one place (say the residual stream after layer 12) and train a network to compress each into a <em>wide, sparse</em> code, then rebuild it. A standard SAE has one hidden layer wider than its input, by a factor of 8 up to hundreds (thousands to millions of latents):</p>
-      </div>
-      <div class="formula">
-        <math display="block"><mi>z</mi><mo>=</mo><mtext>ReLU</mtext><mo stretchy="false">(</mo><msub><mi>W</mi><mtext>enc</mtext></msub><mi>x</mi><mo>+</mo><mi>b</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"></mspace><mover><mi>x</mi><mo>^</mo></mover><mo>=</mo><msub><mi>W</mi><mtext>dec</mtext><mi>z</mi></msub></math>
-        <p class="where"><i>x</i> is the activation, <i>z</i> the code (one entry per feature), and each column of <i>W</i><sub>dec</sub> a feature's direction. The loss is reconstruction error plus λ times the L1 norm of <i>z</i>, which pushes most entries to exactly zero. An activation becomes "a bit of feature 4,201, a bit of feature 77,018…": a short list of directions with strengths. <strong>TopK</strong> SAEs keep only the <i>k</i> largest entries and <strong>JumpReLU</strong> SAEs use a learned threshold per feature; both avoid L1 shrinkage (below).</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>The trade-off is unavoidable. More sparsity gives cleaner features but worse reconstruction; less sparsity reconstructs well but lets features blur again. The simulation trains a real, tiny SAE in your browser on the Simulation 1 toy, so you can slide along it.</p>
-      </div>
-
-      <figure class="figure" id="fig-sae">
+<figure class="figure" id="fig-sae">
         <div class="fig-head"><span class="fig-title">Train a sparse autoencoder on packed concepts</span><span class="fig-tag">Simulation 3 of 4</span></div>
         <p class="try"><b>Try:</b> at sparsity penalty 0, the SAE reconstructs almost perfectly but typically recovers only three or so of the five true directions (dark dots), because it can use several overlapping latents to do the job. Raise the penalty to about 0.4: the latents snap onto the true directions (dots turn green), but the reconstruction error rises, because the penalty shrinks every strength. Press <b>Retrain with a new seed</b> a few times to see how much the outcome depends on luck.</p>
         <div class="btns" role="group" aria-label="Training">
@@ -197,38 +165,21 @@
       </figure>
 
       <div class="prose">
-        <p>The toy's effects appear at full scale as named problems.</p>
-        <ul>
-          <li><strong>Shrinkage.</strong> L1 drags strengths down, so the SAE under-reports how strongly a feature fires. TopK and JumpReLU reduce this.</li>
-          <li><strong>Feature splitting.</strong> A bigger dictionary splits a broad feature ("a city") into narrower ones ("Gulf cities", "Texan cities"). No size is "right"; it is a choice of resolution.</li>
-          <li><strong>Feature absorption.</strong> A general feature stops firing exactly where a more specific one does, so "starts with S" has holes. Sparsity pressure causes it, and it makes features unreliable detectors.</li>
-          <li><strong>Dead and dense latents.</strong> Dead ones never fire and waste capacity. Dense ones fire on a large share of tokens with no clear meaning and are partly artefacts.</li>
-          <li><strong>The unexplained remainder.</strong> The share of signal left unexplained is your first quality number: lower is better, and 0 is perfect. It is not harmless noise. Swapping the real activation for the SAE's reconstruction typically raises language-model loss noticeably, so some of what the model uses lives in the remainder. L0, the latents firing per input, shows how sparse the code is: smaller means a shorter, more readable explanation.</li>
-        </ul>
-        <p>How do you know a feature means something? Three kinds of evidence, in rising strength. <strong>Look</strong>: read the text where it fires most and see whether a human or model can name it. <strong>Predict</strong>: does the label forecast where it fires on new text? <strong>Intervene</strong>: push the feature up or down and check that behaviour changes as expected. The famous case is a "Golden Gate Bridge" feature in Claude 3 Sonnet: amplify it and the model brings the bridge into everything (Templeton et al., 2024). Intervention is the strongest test because it shows the model uses the feature, not that it merely correlates with something.</p>
+        <p>Four problems to know. <strong>Shrinkage</strong>: strengths are under-reported. <strong>Feature splitting</strong>: a bigger dictionary splits "city" into "Gulf cities" and "Texan cities", so size is a choice of resolution. <strong>Absorption</strong>: a general feature goes quiet where a specific one fires. <strong>Dead latents</strong>: some never fire at all.</p>
+        <p>To trust a feature's label, look at where it fires, check it predicts new text, then intervene by pushing it up or down. Only intervening shows the model uses it. The famous case is a "Golden Gate Bridge" feature: amplify it and the model brings the bridge into everything.</p>
       </div>
 
-      <h3 class="sub" id="m-trans">R5.2a · Transcoders: sparse stand-ins for the model's own layers</h3>
+      <h3 class="sub" id="m-trans">R5.2a · Transcoders</h3>
       <div class="prose">
-        <p>An SAE reads one snapshot. To explain computation, how one layer's features produce the next layer's, you must represent the <em>layers</em>. A <strong>transcoder</strong> looks like an SAE but does not rebuild its own input: it takes an MLP block's input and predicts that block's <em>output</em> through a wide sparse layer.</p>
-      </div>
-      <div class="formula">
-        <math display="block"><mtext>MLP</mtext><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>≈</mo><msub><mi>W</mi><mtext>dec</mtext></msub><mtext>ReLU</mtext><mo stretchy="false">(</mo><msub><mi>W</mi><mtext>enc</mtext></msub><mi>x</mi><mo>+</mo><mi>b</mi><mo stretchy="false">)</mo></math>
-        <p class="where">Same shape as an SAE, different target. The original MLP is dense and tangled; the replacement is a short list of active features, each with an input pattern (<em>when</em> it fires) and an output direction (<em>what it writes</em>). That split makes tracing possible (Dunefsky et al., 2024): feature A's effect on feature B is a clean product of A's output direction and B's input pattern.</p>
-      </div>
-      <div class="prose" style="margin-top:1.2em">
-        <p>Anthropic's circuit-tracing work (Ameisen et al., 2025) uses <strong>cross-layer transcoders</strong>: a feature reads the residual stream at one layer and writes to <em>all</em> later MLP outputs. Otherwise a concept computed once and used many times would be copied as one feature per layer, cluttering graphs. One set of these replaces all the MLPs, giving a <strong>replacement model</strong>: a stand-in that tries to match the original's outputs using sparse, nameable pieces.</p>
-        <p>It is imperfect. On any prompt its activations differ from the real model's by a leftover, kept as explicit <strong>error nodes</strong>. The share of the answer flowing through error nodes rather than features directly measures how much the explanation fails to explain: near 0% is a full account, most of it means the graph explains little.</p>
+        <p>An SAE rebuilds its own input at one snapshot. A transcoder instead predicts a layer's output from its input through a wide sparse layer, so each feature has a clear "when it fires" and "what it writes". That makes one feature's effect on another traceable. Together they form a <strong>replacement model</strong>, a sparse, nameable stand-in for the original. It is imperfect: the leftover is kept as <strong>error nodes</strong>, and the share of the answer flowing through them shows how much the explanation fails to explain.</p>
       </div>
 
-      <h3 class="sub" id="m-graph">R5.2b · Attribution graphs: tracing one prompt</h3>
+      <h3 class="sub" id="m-graph">R5.2b · Attribution graphs</h3>
       <div class="prose">
-        <p>An <strong>attribution graph</strong> is a wiring diagram for one prompt and one output token. Nodes are the active features, plus prompt tokens, the output and error nodes. An edge A to B says how much A directly pushed up B: A's activation times the linear effect of A's output on B's input. To make that linear, the method builds a <strong>local replacement model</strong> that freezes the prompt's attention patterns and normalisation scales as constants. Edge weights are then exact for that stand-in.</p>
-        <p>Raw graphs have thousands of nodes. Researchers prune to those that matter, hand-group similar features into labelled <strong>supernodes</strong>, and read the story off. Frozen attention is a real limit: the graph shows that a feature was <em>moved</em> between positions, not <em>why attention chose to</em>.</p>
-        <p>The headline example is two-step reasoning. For "Fact: the capital of the state containing Dallas is", <em>Dallas</em> features feed <em>Texas</em> features, which with <em>capital</em> features feed an output promoting <em>Austin</em>. A weaker direct Dallas-to-Austin path skips Texas. A tidy graph is only a hypothesis; the test is to intervene. Suppress the Texas features and the answer weakens. Swap in California features and the model should say Sacramento. Anthropic reported that it does (Lindsey et al., 2025). The simulation lets you do this on a schematic.</p>
+        <p>An attribution graph is a wiring diagram for one prompt and one output token. Nodes are active features, prompt tokens and error nodes; an edge says how much one directly pushed up another. For "the capital of the state containing Dallas is", Dallas features feed Texas features, which feed Austin.</p>
       </div>
 
-      <figure class="figure" id="fig-graph">
+<figure class="figure" id="fig-graph">
         <div class="fig-head"><span class="fig-title">A hand-built attribution graph you can intervene on</span><span class="fig-tag">Simulation 4 of 4</span></div>
         <p class="try"><b>Try:</b> leave everything on: Austin wins. Remove the middle step ("Dallas implies a Texas feature"): the direct path still gives Austin a little, but the answer collapses. Now keep the middle step but <b>replace</b> the state with California: the same circuit now answers Sacramento. Switch off "say a capital" and the model names the state instead of its capital.</p>
         <div class="toggles" role="group" aria-label="Interventions" id="g-toggles"></div>
@@ -239,46 +190,32 @@
       </figure>
 
       <div class="prose">
-        <p>Three habits for reading real graphs.</p>
-        <ul>
-          <li><strong>Check the error-node share</strong> (the replacement score). If most influence passes through error nodes, the picture does not explain the model.</li>
-          <li><strong>Validate by intervening on the real model</strong>, not the replacement. If perturbing a feature should change the output, do it.</li>
-          <li><strong>Remember a graph is one prompt.</strong> A pattern on a handful of hand-picked prompts can fail on the next thousand.</li>
-        </ul>
-        <p>Tooling is open. Anthropic published its circuit-tracing library in May 2025, with a viewer on Neuronpedia, supporting open-weight models such as Gemma-2-2B and Llama-3.2-1B. A bank team can run these methods on a small model it controls, which is the realistic way to learn them.</p>
+        <p>A tidy graph is only a hypothesis. Test it on the real model: suppress the Texas features and the answer should weaken; swap in California and it should say Sacramento. Graphs freeze attention, so they show that information moved, not why. Each graph covers one prompt, so check the pattern holds on many. Open tooling exists for small open-weight models, which is the realistic way for a bank team to learn it.</p>
       </div>
     </section>
 
     <!-- ============================== 5. FAILS ============================== -->
     <section class="part" id="fails">
       <div class="part-head"><span class="num">Part 3</span><h2>How it fails, and how to spot it</h2></div>
-      <div class="prose"><p>Each failure appears in papers, vendor demos and internal write-ups, with its quickest check.</p></div>
       <ul class="fails" style="margin-top:18px">
-        <li><div class="t">Taking a feature's name as its meaning</div><p>The label "deception" was written from the top ten examples. Beyond those, the feature may fire on something else entirely.</p><div class="spot"><b>Spot it</b>Ask how the label was validated on random activations, not just top ones, and whether anyone intervened on the feature.</div></li>
-        <li><div class="t">Ignoring the reconstruction error</div><p>An SAE that rebuilds the activation poorly makes any feature story partial. Splicing it into the model can raise loss a lot.</p><div class="spot"><b>Spot it</b>Ask for the loss recovered when the SAE is spliced in, and for the share of variance left unexplained.</div></li>
-        <li><div class="t">Cherry-picked examples</div><p>A beautiful graph for one prompt, with no sense of how many failed.</p><div class="spot"><b>Spot it</b>Ask how many prompts were tried and how many gave a usable account. Demos that never mention a failure rate are marketing.</div></li>
-        <li><div class="t">Mistaking correlation for use</div><p>A feature fires when the model handles fraud-related text, but the model's behaviour does not depend on it.</p><div class="spot"><b>Spot it</b>Ask for the intervention: suppress or amplify the feature and see if behaviour changes. No ablation, no claim of causal role.</div></li>
-        <li><div class="t">Explanations of the replacement, not the model</div><p>The graph is of a stand-in with frozen attention. Its edges can differ from what the real model does.</p><div class="spot"><b>Spot it</b>Check the share of the answer that flows through error nodes, and whether interventions were tested on the original model.</div></li>
-        <li><div class="t">Treating dictionary size as a fact</div><p>"The model has 34 million features." It has as many as the researchers chose to train, with splitting and absorption varying by size.</p><div class="spot"><b>Spot it</b>Ask whether results hold at two dictionary sizes, and with a different seed.</div></li>
-        <li><div class="t">Beating a baseline you never ran</div><p>An SAE-based detector for harmful requests is reported without comparing a linear probe or a fine-tuned classifier.</p><div class="spot"><b>Spot it</b>Ask for the best simple baseline and the numbers side by side.</div></li>
-        <li><div class="t">Claiming "we can see what the model is thinking"</div><p>Overclaim in a vendor deck or a risk paper. Interpretability gives partial, hypothesis-grade evidence about internal computation.</p><div class="spot"><b>Spot it</b>Look for the words "complete", "guarantee", "audit-ready". They are red flags in this field at the end of 2026.</div></li>
-        <li><div class="t">Confusing this with model explanation for customers</div><p>Proposing feature dictionaries as the answer to a regulator's request for credit-decision reasons.</p><div class="spot"><b>Spot it</b>Ask whether the model in question is a transformer language model or a scorecard or gradient-boosted model. For the latter, use F8 methods.</div></li>
+        <li><div class="t">Taking a feature's name as its meaning</div><p>The label came from the top ten examples; elsewhere the feature may fire on something else.</p><div class="spot"><b>Spot it</b>Ask how the label was validated on random activations.</div></li>
+        <li><div class="t">Ignoring the unexplained remainder</div><p>A poor SAE or a high error-node share makes any feature story partial.</p><div class="spot"><b>Spot it</b>Ask for the loss when the SAE is spliced in, and the error-node share.</div></li>
+        <li><div class="t">Cherry-picked graphs</div><p>One beautiful prompt, with no sense of how many failed.</p><div class="spot"><b>Spot it</b>Ask how many prompts were tried and how many gave a usable account.</div></li>
+        <li><div class="t">Mistaking correlation for use</div><p>A feature fires on fraud-related text, but behaviour does not depend on it.</p><div class="spot"><b>Spot it</b>Ask for the intervention. No ablation, no causal claim.</div></li>
+        <li><div class="t">Overclaiming</div><p>"We can see what the model is thinking", or offering feature dictionaries as customer-facing credit-decision reasons. This gives partial, hypothesis-grade evidence about transformer language models only.</p><div class="spot"><b>Spot it</b>Treat "complete", "guarantee" and "audit-ready" as red flags. For scorecards or boosted trees, use F8 methods.</div></li>
       </ul>
     </section>
 
     <!-- ============================== 7. CHECK ============================== -->
     <section class="part" id="check">
       <div class="part-head"><span class="num">Part 4</span><h2>Self-check</h2></div>
-      
+
       <div class="qa">
-        <details class="reveal"><summary>1. A layer has 256 dimensions. About how large is the typical overlap (cosine) between two random directions, and what is the typical interference when 17 concepts are active at once?</summary><div class="ans"><p>Cosine about 1/√256 = 1/16 ≈ 0.06. Interference ≈ √((17 − 1)/256) = √0.0625 = 0.25, a quarter of the signal. This is why packing works only when few concepts are active.</p></div></details>
-        <details class="reveal"><summary>2. Why does sparsity make superposition possible, and what happens if concepts are dense?</summary><div class="ans"><p>When few concepts are active at once, the interference between overlapping directions is small, so each can still be read back. If many are active together the leakage adds up and readouts become unreliable. The model would need dedicated dimensions for its most important concepts.</p></div></details>
-        <details class="reveal"><summary>3. In an SAE, what does raising the L1 penalty do, and what do you lose?</summary><div class="ans"><p>It forces more latents to zero, so each input is explained by fewer, usually cleaner features. You lose reconstruction accuracy, and the L1 term also shrinks strengths. TopK and JumpReLU designs address the shrinkage.</p></div></details>
-        <details class="reveal"><summary>4. Explain feature splitting and feature absorption in one sentence each.</summary><div class="ans"><p>Splitting: with a bigger dictionary a broad feature divides into narrower ones. Absorption: a general feature stops firing where a more specific feature already covers the case, leaving gaps in the general one.</p></div></details>
-        <details class="reveal"><summary>5. How is a transcoder different from an SAE, and why does that help trace computation?</summary><div class="ans"><p>An SAE rebuilds its own input at one point; a transcoder predicts an MLP block's output from its input through a sparse layer. That gives each feature an input pattern and an output direction, so the effect of one feature on a later one is a clean product, which is what attribution edges need.</p></div></details>
-        <details class="reveal"><summary>6. An attribution graph shows Dallas leading to Texas leading to Austin. What would count as evidence that the Texas step is really used?</summary><div class="ans"><p>An intervention on the real model: suppress the Texas features and the Austin probability should fall; substitute California features and the model should move to Sacramento. A tidy graph without intervention is only a story.</p></div></details>
-        <details class="reveal"><summary>7. What do error nodes measure, and why are they the first thing you check?</summary><div class="ans"><p>The part of the model's computation that the replacement model fails to capture on that prompt. If much of the influence on the answer flows through error nodes, the graph is explaining little.</p></div></details>
-        <details class="reveal"><summary>8. A vendor says its SAE-based detector finds harmful prompts better than anything else. What do you ask for?</summary><div class="ans"><p>A comparison against a linear probe and a fine-tuned classifier on the same held-out data, with intervals, performance in Arabic as well as English, and the false alarm rate at the operating point. Published evidence so far shows simple probes are strong baselines.</p></div></details>
+        <details class="reveal"><summary>1. Why does sparsity make superposition possible?</summary><div class="ans"><p>When few concepts are active, the interference between overlapping directions is small, so each can still be read back. If many are active together, leakage adds up and readouts become unreliable.</p></div></details>
+        <details class="reveal"><summary>2. In an SAE, what does raising the sparsity penalty do, and what do you lose?</summary><div class="ans"><p>Each input is explained by fewer, usually cleaner features. You lose reconstruction accuracy and strengths shrink.</p></div></details>
+        <details class="reveal"><summary>3. How is a transcoder different from an SAE?</summary><div class="ans"><p>An SAE rebuilds its own input; a transcoder predicts a layer's output through a sparse layer. That gives each feature an input pattern and an output direction, so one feature's effect on the next can be traced.</p></div></details>
+        <details class="reveal"><summary>4. A graph shows Dallas leading to Texas leading to Austin. What shows the Texas step is really used?</summary><div class="ans"><p>An intervention on the real model: suppress Texas and Austin should fall; substitute California and the model should say Sacramento. A tidy graph alone is only a story.</p></div></details>
+        <details class="reveal"><summary>5. What do error nodes measure, and why check them first?</summary><div class="ans"><p>The part of the computation the replacement model fails to capture. If much of the influence flows through them, the graph explains little.</p></div></details>
       </div>
     </section>
 
