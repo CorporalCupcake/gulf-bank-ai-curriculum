@@ -138,6 +138,11 @@ main { padding-block: 8px 64px; }
 .track-head h2 { font-size: 26px; font-weight: 600; line-height: 1.15; }
 .track-head p { margin: 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
 .module { padding-top: 18px; }
+summary.track-head, summary.module-head { list-style: none; cursor: pointer; position: relative; padding-right: 32px; }
+summary.track-head::-webkit-details-marker, summary.module-head::-webkit-details-marker { display: none; }
+summary.track-head::after, summary.module-head::after { content: "▸"; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 16px; transition: transform .15s; }
+details[open] > summary.track-head::after, details[open] > summary.module-head::after { transform: translateY(-50%) rotate(90deg); }
+summary.track-head:hover h2, summary.module-head:hover h3 { color: var(--accent); }
 .module-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 .module-head .code { font-family: var(--font-mono); font-size: 12px; color: var(--muted); min-width: 34px; }
 .module-head h3 { font-size: 18px; font-weight: 600; }
@@ -280,6 +285,8 @@ html { scroll-behavior: smooth; }
     <button class="chip" type="button" id="f-star" aria-pressed="false"><span class="star">★</span> Priority only</button>
     <button class="chip" type="button" id="f-fast" aria-pressed="false"><span class="fast">moves fast</span></button>
     <button class="chip" type="button" id="f-clear">Clear filters</button>
+    <button class="chip" type="button" id="x-open">Expand all</button>
+    <button class="chip" type="button" id="x-close">Collapse all</button>
     <span class="count" id="shown"></span>
   </div>
   <div class="wrap"><nav class="jump" id="jump" aria-label="Tracks"></nav></div>
@@ -785,6 +792,11 @@ CAT.forEach(x => x.codes.forEach(c => { LESSONS[c] = "lessons/" + x.file; }));
 const isDone = code => !!(P && LESSONS[code] && P.done(LESSONS[code].slice(8)));
 const TIER = { d: "Day one", n: "90 days", e: "Edge" };
 const state = { tier: null, star: false, fast: false, lesson: false, q: "" };
+// Collapsible list: tracks start closed, modules start open. Remember what the reader changed.
+const loadSet = k => { try { return new Set(JSON.parse(localStorage.getItem(k) || "[]")); } catch (e) { return new Set(); } };
+const OPEN_T = loadSet("list-open-tracks"), CLOSED_M = loadSet("list-closed-modules");
+const saveSets = () => { try { localStorage.setItem("list-open-tracks", JSON.stringify([...OPEN_T])); localStorage.setItem("list-closed-modules", JSON.stringify([...CLOSED_M])); } catch (e) {} };
+const filtering = () => !!(state.tier || state.star || state.fast || state.lesson || state.q);
 
 // Assign codes like F3.2 and flatten for counting.
 const ALL = [];
@@ -815,19 +827,25 @@ function render() {
     nav += `<a href="#track-${t.L}" data-empty="${items.length === 0}">${t.L} · ${esc(t.title.split(":")[0])} <span>${items.length}</span></a>`;
     if (!items.length) return;
     shown += items.length;
-    html += `<section class="track" id="track-${t.L}"><div class="track-head"><div class="track-letter">${t.L}</div><h2>${esc(t.title)}</h2><p>${esc(t.blurb)}</p></div>`;
+    html += `<details class="track" id="track-${t.L}" data-k="${t.L}"${filtering() || OPEN_T.has(t.L) ? " open" : ""}><summary class="track-head"><div class="track-letter">${t.L}</div><h2>${esc(t.title)}</h2><p>${esc(t.blurb)}</p></summary>`;
     t.modules.forEach((m, mi) => {
       const mItems = items.filter(x => x.mod === mi);
       if (!mItems.length) return;
-      html += `<div class="module"><div class="module-head"><span class="code">${t.L}${mi + 1}</span><h3>${esc(m[0])}</h3></div><ul class="topics">`;
+      html += `<details class="module" data-k="${t.L}${mi + 1}"${CLOSED_M.has(t.L + (mi + 1)) ? "" : " open"}><summary class="module-head"><span class="code">${t.L}${mi + 1}</span><h3>${esc(m[0])}</h3></summary><ul class="topics">`;
       mItems.forEach(x => {
         html += `<li class="topic"><span class="code">${x.code}</span><div><div class="name">${LESSONS[x.code] ? `<a href="${LESSONS[x.code]}">${esc(x.name)}</a>` : esc(x.name)}</div><div class="why">${esc(x.why)}</div></div><div class="tags">${LESSONS[x.code] ? (isDone(x.code) ? '<span class="done-tag">✓ Done</span>' : '<span class="lesson-tag">Lesson</span>') : ""}${x.star ? '<span class="star" title="Priority">★</span>' : ""}${x.fast ? '<span class="fast">moves fast</span>' : ""}<span class="pill ${x.tier}">${TIER[x.tier]}</span></div></li>`;
       });
-      html += `</ul></div>`;
+      html += `</ul></details>`;
     });
-    html += `</section>`;
+    html += `</details>`;
   });
   main.innerHTML = html || `<p class="empty">No topics match these filters. Try clearing the search or a filter.</p>`;
+  main.querySelectorAll("details").forEach(d => d.addEventListener("toggle", () => {
+    const k = d.dataset.k;
+    if (d.classList.contains("track")) { if (filtering()) return; d.open ? OPEN_T.add(k) : OPEN_T.delete(k); }
+    else d.open ? CLOSED_M.delete(k) : CLOSED_M.add(k);
+    saveSets();
+  }));
   jump.innerHTML = nav;
   document.getElementById("shown").textContent = `Showing ${shown} of ${ALL.length} topics`;
   ["d", "n", "e"].forEach(k => document.getElementById("stage-" + k).setAttribute("aria-pressed", String(state.tier === k)));
@@ -855,6 +873,10 @@ function renderMine() {
   else go.hidden = true;
 }
 renderMine();
+document.getElementById("jump").addEventListener("click", e => { const a = e.target.closest("a"); if (!a) return; const d = document.querySelector(a.getAttribute("href")); if (d && d.tagName === "DETAILS") d.open = true; });
+const setAll = open => { document.querySelectorAll("#main details").forEach(d => { d.open = open; }); };
+document.getElementById("x-open").addEventListener("click", () => setAll(true));
+document.getElementById("x-close").addEventListener("click", () => setAll(false));
 // Coming back from a lesson (including via the back button) should show fresh progress.
 addEventListener("pageshow", () => { renderMine(); render(); });
 
