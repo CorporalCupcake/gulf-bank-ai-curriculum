@@ -2,11 +2,11 @@
 // The hub uses it for lesson cards and topic links; lessons use it for previous/next and progress.
 // To add a lesson: add one entry here. `codes` are the hub topic codes the lesson covers.
 window.CATALOG = [
-  {file: "f1-vectors-matrices-geometry.html", module: "F1", title: "Vectors, Matrices and the Geometry of Meaning", codes: ["F1.1","F1.2"], label: "F1.1 – F1.2", tier: "d", star: true, minutes: 45},
+  {file: "f1-vectors-matrices-geometry.html", module: "F1", title: "Vectors and Matrices: Lists of Numbers as Arrows", codes: ["F1.1","F1.2"], label: "F1.1 – F1.2", tier: "d", star: true, minutes: 8},
   {file: "f1-gradients-optimisation.html", module: "F1", title: "Gradients, Backpropagation and Optimisation", codes: ["F1.3","F1.8"], label: "F1.3 · F1.8", tier: "d", minutes: 40},
   {file: "f1-probability-bayes-distributions.html", module: "F1", title: "Probability, Base Rates and the Shape of Data", codes: ["F1.4","F1.5"], label: "F1.4 – F1.5", tier: "d", star: true, minutes: 40},
   {file: "f1-likelihood-entropy.html", module: "F1", title: "Likelihood, Entropy and the Language of Training", codes: ["F1.6","F1.7"], label: "F1.6 – F1.7", tier: "n", minutes: 45},
-  {file: "f2-uncertainty-intervals-bootstrap.html", module: "F2", title: "How Wrong Might This Number Be? Standard Errors, Intervals and the Bootstrap", codes: ["F2.1","F2.2"], label: "F2.1 – F2.2", tier: "d", star: true, minutes: 40},
+  {file: "f2-uncertainty-intervals-bootstrap.html", module: "F2", title: "Standard Error and Confidence Intervals: How Wrong Might This Number Be?", codes: ["F2.1","F2.2"], label: "F2.1 – F2.2", tier: "d", star: true, minutes: 10},
   {file: "f2-tests-pvalues-power.html", module: "F2", title: "Hypothesis Tests, P-values, Many Comparisons and Power", codes: ["F2.3","F2.4","F2.7"], label: "F2.3 · F2.4 · F2.7", tier: "d", minutes: 50},
   {file: "f2-regression-glms.html", module: "F2", title: "Regression and Generalised Linear Models", codes: ["F2.5"], label: "F2.5", tier: "d", minutes: 50},
   {file: "f2-confounding-simpson-selection.html", module: "F2", title: "Confounding, Simpson's Paradox and Selection Bias", codes: ["F2.6"], label: "F2.6", tier: "d", star: true, minutes: 40},
@@ -18,7 +18,7 @@ window.CATALOG = [
   {file: "f3-imbalanced-data.html", module: "F3", title: "Imbalanced Data: When the Thing You Want Is Rare", codes: ["F3.5"], label: "F3.5", tier: "d", minutes: 35},
   {file: "f3-experiments-and-writeups.html", module: "F3", title: "Experiments, and Analyses That Survive Review", codes: ["F3.6","F3.7"], label: "F3.6 · F3.7", tier: "d", minutes: 45},
   {file: "f4-bias-variance-and-generalisation.html", module: "F4", title: "Bias, Variance and Generalisation, and the Regression Models That Keep Winning", codes: ["F4.1","F4.2"], label: "F4.1 · F4.2", tier: "d", minutes: 45},
-  {file: "f4-decision-trees-random-forests-and.html", module: "F4", title: "Trees, Forests, Boosting and the Art of Holding Them Back", codes: ["F4.3","F4.4"], label: "F4.3 · F4.4", tier: "d", minutes: 45, star: true},
+  {file: "f4-decision-trees-random-forests-and.html", module: "F4", title: "Decision Trees, Random Forests and Boosting", codes: ["F4.3","F4.4"], label: "F4.3 · F4.4", tier: "d", minutes: 15, star: true},
   {file: "f4-cross-validation-including-temporal-splits.html", module: "F4", title: "Honest Validation and Honest Segments: Cross-Validation, Time Splits and Clustering", codes: ["F4.5","F4.6"], label: "F4.5 · F4.6", tier: "d", minutes: 40},
   {file: "f4-anomaly-detection-isolation-forests-autoencoders.html", module: "F4", title: "Anomaly Detection and Dimensionality Reduction: Finding the Odd One Out", codes: ["F4.7","F4.8"], label: "F4.7 · F4.8", tier: "n", minutes: 40},
   {file: "f4-hyperparameter-tuning-grid-random-and.html", module: "F4", title: "Tuning Models Without Fooling Yourself: Search Strategies and the Classic Algorithms", codes: ["F4.9","F4.10"], label: "F4.9 · F4.10", tier: "d", minutes: 40},
